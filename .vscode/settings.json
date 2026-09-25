@@ -1,0 +1,11 @@
+{
+    "cmake.generator": "Ninja",
+    "cmake.buildDirectory": "${workspaceFolder}/Builds",
+    "cmake.configureSettings": {
+        "CMAKE_BUILD_TYPE": "Debug"
+    },
+    "files.readonlyInclude": {
+        "JUCE/**": true,
+        "modules/**": true
+    }
+}

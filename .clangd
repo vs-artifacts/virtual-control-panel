@@ -1,0 +1,9 @@
+CompileFlags:
+  CompilationDatabase: Builds
+---
+# JUCE module internals have no includes of their own (they only compile via the module's top-level file), so pre-include the module headers
+If:
+  PathMatch: JUCE/modules/.*\.(cpp|h)
+  PathExclude: JUCE/modules/[^/]+/[^/]+\.(cpp|h)
+CompileFlags:
+  Add: [/FIjuce_audio_utils/juce_audio_utils.h, /FIjuce_dsp/juce_dsp.h, /clang:-ferror-limit=0]

@@ -2,46 +2,48 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## First-Time Setup
-
-If the values below still say "Pamplejuce" or "Pamplejuce Demo", this project was freshly created from the template and hasn't been personalized yet. Ask the user:
-
-1. **What's your plugin called?** (display name for DAWs, e.g. "Super Synth")
-2. **What's your company name?** (e.g. "My Audio Co")
-3. **What type of plugin is this?** (synth, effect, utility, etc.)
-4. **What IDE do you use?** (CLion, VS Code, Xcode, other)
-5. **Do you want CI/CD via GitHub Actions?** Note: public repos get unlimited CI minutes, but private repos have a limited monthly allowance. If they're on a private repo and want to avoid burning minutes during active development, suggest commenting out matrix entries in the workflow to build on just one platform (e.g. only their dev OS) and running tests only — they can re-enable the full matrix when preparing a release.
-6. **If using CI, do you need Intel IPP?** (provides SIMD-optimized DSP functions — if not, comment out the IPP install steps in the workflow to avoid CI failures)
-7. **Are you code signing?** Code signing is essentially required to distribute to anyone (beta testers, friends, customers) — without it, macOS Gatekeeper and Windows SmartScreen will block or warn on the plugin. But it can be set up later; it's fine to skip during early development. Ask separately for macOS and Windows:
-   - **macOS**: codesigning + notarization requires an Apple Developer account ($99/year). If not signing yet, comment out the codesign/notarize steps in the CI workflow. Guide: [How to code sign and notarize macOS audio plugins in CI](https://melatonin.dev/blog/how-to-code-sign-and-notarize-macos-audio-plugins-in-ci/)
-   - **Windows**: Azure Trusted Signing is the recommended approach (free tier available). If not signing yet, comment out the Azure signing step. Guide: [Code signing on Windows with Azure Trusted Signing](https://melatonin.dev/blog/code-signing-on-windows-with-azure-trusted-signing/)
-
-Then:
-- Update `CMakeLists.txt`: set `PROJECT_NAME` (no spaces), `PRODUCT_NAME` (display name), `COMPANY_NAME`, `BUNDLE_ID`, `PLUGIN_MANUFACTURER_CODE` (4 chars), and `PLUGIN_CODE` (4 chars)
-- Let the user know: builds default to **Debug** mode for development (faster builds, better debugging). If they're making music with the plugin and experiencing performance issues (audio dropouts, high CPU), they should ask to build in **Release** mode instead.
-- Rewrite the **Build Commands** section below to match their IDE:
-  - **CLion**: use `cmake-build-debug` / `cmake-build-release` as build directories (CLion's defaults — sharing them avoids duplicate builds). Use `-G Ninja` with CLion's bundled ninja so the `.ninja_log` format stays compatible between CLI and IDE builds.
-  - **VS Code**: use `build` or `Builds` as the build directory. Recommend Ninja + the CMake Tools extension.
-  - **Xcode**: use `-G Xcode` and open the generated `.xcodeproj`. CLI builds can use `Builds` with Ninja.
-- If they don't want CI right now, comment out the platforms in the matrix they don't need
-- If they don't need IPP, comment out the IPP install steps in the workflow
-- If they're not code signing on a platform, comment out the relevant signing/notarization steps in the workflow
-- Remove this setup section from CLAUDE.md once complete
-
 ## About This Project
 
 This project is derived from the [Pamplejuce](https://github.com/sudara/pamplejuce) template — a JUCE audio plugin template using CMake, C++23, and modern CI/CD. It builds cross-platform (macOS, Windows, Linux) with support for multiple plugin formats (VST3, AU, AUv3, CLAP, Standalone).
 
 The template provides the build system, CI/CD, and project structure. The plugin-specific logic lives in `source/`.
 
+## Working Agreement (read first)
+
+- **Never make code or file changes without explicit confirmation from the user.** For discussion questions, answer and propose a plan (files touched, approach, rough size), then wait for a go-ahead.
+- **Ask clarifying questions whenever anything is ambiguous.** A cheap extra turn beats a wrong large implementation.
+- Work in small vertical slices. Each slice ends with: warning-free build, passing tests, and a visual check (see Visual Verification).
+- One chat session per feature. Keep this file and `docs/` current so a fresh session can pick up without the chat history: record decisions in `docs/decisions.md`, keep the index below accurate.
+- The user has professional technical writing/editing experience in software and knows the concepts, but has very limited hands-on dev experience in any language (including Svelte and C++). Explain code and concepts plainly when relevant.
+
+## Project Docs (source of truth)
+
+Read only the files relevant to the task at hand.
+
+- `docs/decisions.md` - Decisions made so far and why (platforms, performance targets, rendering approach, workflow). **Read this at the start of every session.**
+- `docs/architecture.md` - *(not yet written)* Signal flow, modules, parameter table (ID, range, default, visual mapping).
+- `docs/style/glass.md` - *(not yet written)* Glass material system: layering, blur modes, blend modes, light scatter model.
+- `docs/style/tokens.md` - *(not yet written)* Named visual constants; may be superseded by the live-reloading JSON token file.
+- `docs/components/<name>.md` - *(not yet written)* One file per UI component: geometry source, states, value-to-visual behaviour.
+
+SVG assets from the user go in `assets/` (auto-embedded as BinaryData). SVGs are geometry only (named layer ids, text outlined, no filters); all styling is done in code. JUCE's SVG support is partial.
+
 ## Build Commands
 
-```bash
+Windows + VS Code (CMake Tools, Ninja, MSVC from Visual Studio 18). Project lives at `C:\dev\virtual-control-panel`. Build dir is `Builds/`, Debug by default.
+
+In VS Code, select the "Visual Studio Community 18 - amd64" kit in CMake Tools so Ninja can find `cl.exe`. From a plain terminal, load the dev shell first:
+
+```powershell
+# Load MSVC + cmake + ninja into the shell (once per terminal)
+& "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+Set-Location C:\dev\virtual-control-panel
+
 # Configure (run once, or after CMakeLists.txt changes)
-cmake -B Builds -DCMAKE_BUILD_TYPE=Debug
+cmake -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Debug
 
 # Build
-cmake --build Builds --config Debug
+cmake --build Builds
 
 # Run tests (from project root)
 ctest --test-dir Builds --verbose --output-on-failure
@@ -56,18 +58,24 @@ ctest --test-dir Builds --verbose --output-on-failure
 ./Builds/Benchmarks
 ```
 
-For faster builds, add Ninja: `cmake -B Builds -G Ninja -DCMAKE_BUILD_TYPE=Debug`
+Build outputs land in `Builds/HeartseekerPanel_artefacts/<Config>/` (`Standalone/heartseeker panel.exe`, `VST3/heartseeker panel.vst3`, `CLAP/heartseeker panel.clap`). `COPY_PLUGIN_AFTER_BUILD` is off on Windows (the system VST3 folder needs admin rights). Instead, `C:\Program Files\Common Files\VST3\heartseeker panel.vst3` is a directory junction to the Debug VST3 artefact, so rebuilds are picked up by DAWs automatically (FL Studio only scans VST3s in the standard folders; custom search paths are treated as VST2). Close the DAW before rebuilding, or the linker can't overwrite the loaded binary.
+
+For performance testing or real use in a DAW, build Release in a separate dir: `cmake -B Builds-Release -G Ninja -DCMAKE_BUILD_TYPE=Release; cmake --build Builds-Release`.
+
+Intel IPP is optional and not installed locally; the "INTEL IPP NOT LOADED" configure message is expected.
 
 On macOS for universal binary: `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
 
 ## Project Structure
 
-- `source/` - Plugin source code (PluginProcessor, PluginEditor)
+- `source/` - Plugin source code (PluginProcessor, PluginEditor, GlassToggleButton prototype)
 - `tests/` - Catch2 test files
 - `benchmarks/` - Catch2 benchmark files
+- `docs/` - Project specs and decisions (see Project Docs above)
+- `ui/` - *(planned, slice 1b)* Svelte 5 + Vite + TypeScript web UI with WebGL2 shaders
 - `cmake/` - CMake modules (Tests.cmake, Benchmarks.cmake, Assets.cmake, etc.)
 - `modules/` - Git submodules: clap-juce-extensions, melatonin_inspector
-- `JUCE/` - JUCE framework (git submodule)
+- `JUCE/` - JUCE framework (git submodule, JUCE 9.0.1+ on master). Never edit files in `JUCE/` or `modules/`; they are marked read-only in VS Code.
 - `assets/` - Binary resources (auto-included via juce_add_binary_data)
 - `packaging/` - Installer resources and scripts
 
@@ -98,7 +106,7 @@ Edit `CMakeLists.txt` to customize:
 - `PRODUCT_NAME` - Display name in DAWs (can have spaces)
 - `COMPANY_NAME` - Used for bundle name
 - `BUNDLE_ID` - macOS bundle identifier
-- `FORMATS` - Plugin formats to build (Standalone AU VST3 AUv3)
+- `FORMATS` - Plugin formats to build (currently `Standalone VST3`; CLAP is added separately via `clap_juce_extensions_plugin`)
 - `PLUGIN_MANUFACTURER_CODE` / `PLUGIN_CODE` - 4-character plugin IDs
 
 Version is read from the `VERSION` file in project root.
@@ -107,7 +115,11 @@ Version is read from the `VERSION` file in project root.
 
 Always resolve any compile warnings encountered during builds. Warnings should be treated as errors and fixed before considering a task complete.
 
-Note: LSP/clangd often reports false positive diagnostic errors (like "undeclared identifier", "file not found") because it doesn't have full context of the JUCE module system. Ignore these unless the actual build fails.
+Note: clangd reads `Builds/compile_commands.json` (configured in `.clangd`), so diagnostics in `source/` and `tests/` should be accurate. JUCE module internals (files compiled via JUCE's unity `.cpp` wrappers) may still show false positives; ignore those unless the actual build fails.
+
+## Visual Verification
+
+The agent can view PNGs. To check UI changes without the user, render the editor to an image via `runWithinPluginEditor` in `tests/helpers/test_helpers.h`: call `editor->createComponentSnapshot (editor->getLocalBounds(), true, 2.0f)`, write it with `juce::PNGImageFormat` into `Builds/`, run `./Builds/Tests "[snapshot]"`, then view the PNG. Delete temporary snapshot tests and images afterwards.
 
 ## Includes
 
