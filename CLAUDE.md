@@ -64,11 +64,14 @@ For performance testing or real use in a DAW, build Release in a separate dir: `
 
 Intel IPP is optional and not installed locally; the "INTEL IPP NOT LOADED" configure message is expected.
 
+Test runs print `Thrift: ... TPipe::open ... errno = 2` lines: that's the hosted Kilohearts test plugin looking for its background service. Harmless.
+
 On macOS for universal binary: `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
 
 ## Project Structure
 
-- `source/` - Plugin source code (PluginProcessor, PluginEditor, GlassToggleButton prototype)
+- `source/` - Plugin shell code (PluginProcessor, PluginEditor)
+- `source/engine/` - Shell-independent engine code (`HostedPlugin`: loads and runs one hosted plugin)
 - `tests/` - Catch2 test files
 - `benchmarks/` - Catch2 benchmark files
 - `docs/` - Project specs and decisions (see Project Docs above)
@@ -107,6 +110,7 @@ Edit `CMakeLists.txt` to customize:
 - `COMPANY_NAME` - Used for bundle name
 - `BUNDLE_ID` - macOS bundle identifier
 - `FORMATS` - Plugin formats to build (currently `Standalone VST3`; CLAP is added separately via `clap_juce_extensions_plugin`)
+- `NEEDS_MIDI_INPUT` / `NEEDS_MIDI_OUTPUT` - on; `JUCE_PLUGINHOST_VST3=1` enables VST3 hosting
 - `PLUGIN_MANUFACTURER_CODE` / `PLUGIN_CODE` - 4-character plugin IDs
 
 Version is read from the `VERSION` file in project root.

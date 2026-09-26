@@ -30,7 +30,7 @@ Short log of settled decisions. Newest at the bottom. Update when something chan
 - **Signature effect: "edge-clamped convolution blooming".** A thin bright border, when overlapped by a blurred additive element, blooms massively because the blur samples outside the captured bounds as the duplicated edge row (clamp, not transparent). Implement it deliberately (exact capture bounds + clamped sampling + HDR additive compositing), with controllable parameters (bloom gain, extent, per-edge), rather than depending on a browser artifact.
 
 ## Rendering / blur (historical)
-- The JUCE-native `source/GlassToggleButton` prototype (parent snapshot + `applyGaussianBlurEffect`) was a workflow test only. It will be removed once the web UI exists; don't build on it.
+- The JUCE-native GlassToggleButton prototype (parent snapshot + `applyGaussianBlurEffect`) was a workflow test only. Deleted in 1a (recoverable from commit `3d7b75c`).
 
 ## Workflow
 - **Style tokens:** all visual constants live in one place, in the web UI (JSON/TS), with a debug tuning panel (sliders/colour pickers, copy/save). Vite hot reload gives live editing. (Replaces the earlier C++ JSON token plan.)
@@ -40,7 +40,20 @@ Short log of settled decisions. Newest at the bottom. Update when something chan
 - **Platforms in practice:** build and test on Windows first; keep platform-specific code isolated; test the web UI in Safari early; smoke-test on a Mac at milestones.
 
 ## Plan: thin vertical slice (each sub-slice needs the user's go, ideally its own chat session)
-1. **1a. Host inside the plugin:** our VST3 loads one VST3 from a fixed path (test plugin: `C:\Program Files\Common Files\VST3\Kilohearts\kHs 3-Band EQ.vst3`), passes audio and MIDI through, can open its editor window, lists its parameters. C++ only, no scanning.
+1. **1a. Host inside the plugin:** our VST3 loads one VST3 from a fixed path (test plugin: `C:\Program Files\Common Files\VST3\Kilohearts\kHs 3-Band EQ.vst3`), passes audio and MIDI through, can open its editor window, lists its parameters. C++ only, no scanning. **Built and FL-verified 2026-09-25** (audio, hosted editor, live values, state in projects and Fruity Wrapper presets). Open: no MIDI event input in Patcher (see Slice 1a notes).
 2. **1b. Bridge:** embedded HTTP + WebSocket server (C++ library via CPM, to be chosen), plugin editor shows a minimal Svelte page; one plain slider controls one hosted parameter two-way, including pushed updates when the hosted plugin's own UI changes it.
 3. **1c. Shader knob:** the slider becomes a WebGL2 glass/light-scatter knob with a frame-time readout, running inside FL.
 - Style work starts after 1c.
+
+## Slice 1a: hosting (2026-09-25)
+- **Web UI re-confirmed** after weighing JUCE-only: the Mac is headless, so the tablet is the real screen and a web UI is needed anyway; one Svelte app serves both. 1b/1c double as go/no-go tests for WebView2 inside FL. Fallback: plain JUCE editor in the DAW, web UI still serving tablets over the same protocol.
+- **Effect now, instrument soon.** FL only sends piano-roll notes to generators, and hosting synths is core. Switch to an instrument (or FX + instrument variants from the same code) as soon as 1a-1c are verified. Engine code doesn't change; only build flags and bus setup do.
+- **Engine code lives in `source/engine/`.** `HostedPlugin` owns one hosted plugin, loaded once on the message thread when our processor is created. No hot-swap yet; swapping while audio runs needs a realtime-safe handover later.
+- **Stereo only:** our buses and the hosted plugin's main buses; its sidechain/aux buses are disabled.
+- **MIDI:** ours goes into the hosted plugin and its MIDI output becomes ours. Plugins with no MIDI in or out (like the EQ) leave MIDI untouched, so it flows past them.
+- **Saved state:** every DAW's wrapper saves a plugin as an opaque blob it asks the plugin for, so we store the hosted plugin's state inside ours (XML, tagged with the plugin's identifier) and only restore it into the same plugin.
+- **Threading:** hosted VST3s require `prepareToPlay` and get/set state on the message thread (JUCE asserts). VST3 hosts call ours there, so we forward directly.
+- **VST3 parameter lists include MIDI CC slots** (16 channels x 130 controllers); the EQ reports 6 real + 2080 MIDI. `HostedPlugin::getControls()` returns only the real controls (flagged automatable), and the UI shows only those. Expand later for plugins that need longer lists.
+- **Our own plugin exposes the same 2080 MIDI CC slots:** JUCE turns on MIDI CC emulation whenever MIDI input is enabled. VST3 has no MIDI CC events; hosts deliver CC, pitch bend and aftertouch as these parameters, so keep it on.
+- **Patcher offers no MIDI event input pin** on our plugin (as an effect), though our VST3 declares a proper event input bus and MIDI out works. Likely FL's effect/generator split again; expected to be fixed by the instrument switch.
+- Test plugin path: `hostedPluginPath` in `source/PluginProcessor.h`. Loading it adds ~0.2 s to processor construction (visible in the "Boot performance" benchmark, which now takes ~1 min).

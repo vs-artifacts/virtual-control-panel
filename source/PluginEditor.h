@@ -1,13 +1,15 @@
 #pragma once
 
 #include "BinaryData.h"
-#include "GlassToggleButton.h"
 #include "PluginProcessor.h"
 #include "melatonin_inspector/melatonin_inspector.h"
 
+class HostedEditorWindow;
 
 //==============================================================================
-class PluginEditor : public juce::AudioProcessorEditor
+class PluginEditor : public juce::AudioProcessorEditor,
+                     private juce::ListBoxModel,
+                     private juce::Timer
 {
 public:
     explicit PluginEditor (PluginProcessor&);
@@ -18,11 +20,19 @@ public:
     void resized() override;
 
 private:
-    // This reference is provided as a quick way for your editor to
-    // access the processor object that created it.
-    PluginProcessor& processorRef;
+    int getNumRows() override;
+    void paintListBoxItem (int row, juce::Graphics&, int width, int height, bool rowIsSelected) override;
+    void timerCallback() override;
+    void openHostedEditor();
+
+    HostedPlugin& hostedPlugin;
     std::unique_ptr<melatonin::Inspector> inspector;
+    juce::Label statusLabel;
+    juce::TextButton openButton { "Open plugin window" };
     juce::TextButton inspectButton { "Inspect the UI" };
-    GlassToggleButton glassButton { "Glass" };
+    juce::ListBox parameterList;
+    std::vector<float> lastParameterValues;
+    std::unique_ptr<HostedEditorWindow> hostedEditorWindow;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)
 };
