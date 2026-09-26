@@ -12,7 +12,7 @@ PluginProcessor::PluginProcessor()
 #endif
       )
 {
-    hostedPlugin.load (juce::File (hostedPluginPath));
+    engine.build ({ juce::File (serum2Path), juce::File (sylenth1Path) }, { juce::File (eqPath) });
 }
 
 PluginProcessor::~PluginProcessor()
@@ -54,7 +54,7 @@ bool PluginProcessor::isMidiEffect() const
 
 double PluginProcessor::getTailLengthSeconds() const
 {
-    return hostedPlugin.getTailLengthSeconds();
+    return engine.getTailLengthSeconds();
 }
 
 int PluginProcessor::getNumPrograms()
@@ -88,13 +88,13 @@ void PluginProcessor::changeProgramName (int index, const juce::String& newName)
 //==============================================================================
 void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    hostedPlugin.prepare (sampleRate, samplesPerBlock, isNonRealtime());
-    setLatencySamples (hostedPlugin.getLatencySamples());
+    engine.prepare (sampleRate, samplesPerBlock, isNonRealtime());
+    setLatencySamples (engine.getLatencySamples());
 }
 
 void PluginProcessor::releaseResources()
 {
-    hostedPlugin.release();
+    engine.release();
 }
 
 bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -103,7 +103,7 @@ bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
     juce::ignoreUnused (layouts);
     return true;
 #else
-    // The hosted plugin is set up for stereo, so that's the only layout we offer
+    // Hosted plugins are set up for stereo, so that's the only layout we offer
     if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
 
@@ -124,11 +124,11 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     auto totalNumInputChannels = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 
-    // Output channels without matching input may contain garbage
+    // Output channels without matching input may contain garbage (as an instrument that's all of them)
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    hostedPlugin.process (buffer, midiMessages, getPlayHead());
+    engine.process (buffer, midiMessages, getPlayHead());
 }
 
 //==============================================================================
@@ -146,10 +146,7 @@ juce::AudioProcessorEditor* PluginProcessor::createEditor()
 void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::XmlElement state ("HeartseekerPanelState");
-
-    if (auto hostedState = hostedPlugin.createStateXml())
-        state.addChildElement (hostedState.release());
-
+    state.addChildElement (engine.createStateXml().release());
     copyXmlToBinary (state, destData);
 }
 
@@ -157,8 +154,8 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     // nullptr if the data isn't valid saved XML (e.g. a corrupt project file)
     if (auto state = getXmlFromBinary (data, sizeInBytes))
-        if (auto* hostedState = state->getChildByName (HostedPlugin::stateTag))
-            hostedPlugin.restoreStateFromXml (*hostedState);
+        if (auto* engineState = state->getChildByName (Engine::stateTag))
+            engine.restoreStateFromXml (*engineState);
 }
 
 //==============================================================================

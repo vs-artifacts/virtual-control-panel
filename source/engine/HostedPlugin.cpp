@@ -1,102 +1,73 @@
 #include "HostedPlugin.h"
 
-HostedPlugin::HostedPlugin()
+namespace
 {
-    juce::addDefaultFormatsToManager (formatManager);
+    bool configureStereoLayout (juce::AudioPluginInstance& plugin)
+    {
+        if (!plugin.disableNonMainBuses())
+            return false;
+
+        auto layout = plugin.getBusesLayout();
+
+        if (!layout.inputBuses.isEmpty())
+            layout.inputBuses.getReference (0) = juce::AudioChannelSet::stereo();
+
+        if (!layout.outputBuses.isEmpty())
+            layout.outputBuses.getReference (0) = juce::AudioChannelSet::stereo();
+
+        return plugin.setBusesLayout (layout);
+    }
 }
 
-bool HostedPlugin::load (const juce::File& pluginFile)
+HostedPlugin::HostedPlugin (const juce::File& pluginFile, Role roleIn, juce::AudioPluginFormatManager& formatManager, juce::AudioProcessorGraph& graph)
+    : file (pluginFile), role (roleIn)
 {
-    jassert (instance == nullptr);
-    loadError.clear();
+    auto loaded = load (formatManager);
 
-    juce::OwnedArray<juce::PluginDescription> types;
+    if (loaded == nullptr)
+        return;
 
-    for (auto* format : formatManager.getFormats())
-        if (format->fileMightContainThisPluginType (pluginFile.getFullPathName()))
-            format->findAllTypesForFile (types, pluginFile.getFullPathName());
-
-    if (types.isEmpty())
-    {
-        loadError = "No plugin found at " + pluginFile.getFullPathName();
-        return false;
-    }
-
-    // Placeholder rate and block size; the real ones arrive in prepare()
-    instance = formatManager.createPluginInstance (*types.getFirst(), 44100.0, 512, loadError);
-
-    if (instance == nullptr)
-        return false;
-
-    if (!configureStereoLayout())
-    {
-        loadError = instance->getName() + " doesn't support stereo";
-        instance.reset();
-        return false;
-    }
+    instance = loaded.get();
+    nodeID = graph.addNode (std::move (loaded))->nodeID;
 
     for (auto* param : instance->getParameters())
         if (param->isAutomatable())
             controls.push_back (param);
-
-    return true;
 }
 
-bool HostedPlugin::configureStereoLayout()
+std::unique_ptr<juce::AudioPluginInstance> HostedPlugin::load (juce::AudioPluginFormatManager& formatManager)
 {
-    if (!instance->disableNonMainBuses())
-        return false;
+    juce::OwnedArray<juce::PluginDescription> types;
 
-    auto layout = instance->getBusesLayout();
+    for (auto* format : formatManager.getFormats())
+        if (format->fileMightContainThisPluginType (file.getFullPathName()))
+            format->findAllTypesForFile (types, file.getFullPathName());
 
-    if (!layout.inputBuses.isEmpty())
-        layout.inputBuses.getReference (0) = juce::AudioChannelSet::stereo();
+    // One file can hold several plugins (Serum2.vst3 holds both Serum 2 and Serum 2 FX)
+    const auto wantInstrument = role == Role::generator;
+    const auto type = std::find_if (types.begin(), types.end(), [&] (const auto* t) { return t->isInstrument == wantInstrument; });
 
-    if (!layout.outputBuses.isEmpty())
-        layout.outputBuses.getReference (0) = juce::AudioChannelSet::stereo();
+    if (type == types.end())
+    {
+        loadError = juce::String ("No ") + (wantInstrument ? "instrument" : "effect") + " found at " + file.getFullPathName();
+        return nullptr;
+    }
 
-    return instance->setBusesLayout (layout);
+    // Placeholder rate and block size; the graph prepares it with the real ones
+    auto loaded = formatManager.createPluginInstance (**type, 44100.0, 512, loadError);
+
+    if (loaded != nullptr && !configureStereoLayout (*loaded))
+    {
+        loadError = loaded->getName() + " doesn't support stereo";
+        return nullptr;
+    }
+
+    return loaded;
 }
 
-void HostedPlugin::prepare (double sampleRate, int maxBlockSize, bool isNonRealtime)
+juce::String HostedPlugin::getName() const
 {
-    if (instance == nullptr)
-        return;
-
-    // Hosted VST3s must be prepared on the message thread; VST3 hosts call ours there
-    instance->setNonRealtime (isNonRealtime);
-    instance->setRateAndBufferSizeDetails (sampleRate, maxBlockSize);
-    instance->prepareToPlay (sampleRate, maxBlockSize);
-}
-
-void HostedPlugin::release()
-{
-    if (instance != nullptr)
-        instance->releaseResources();
-}
-
-void HostedPlugin::process (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi, juce::AudioPlayHead* playHead)
-{
-    if (instance == nullptr)
-        return;
-
-    instance->setPlayHead (playHead);
-
-    // Hosted plugins replace the MIDI with their own output, so an audio-only plugin would swallow it
-    if (instance->acceptsMidi() || instance->producesMidi())
-        instance->processBlock (buffer, midi);
-    else
-        instance->processBlock (buffer, emptyMidi);
-}
-
-int HostedPlugin::getLatencySamples() const
-{
-    return instance != nullptr ? instance->getLatencySamples() : 0;
-}
-
-double HostedPlugin::getTailLengthSeconds() const
-{
-    return instance != nullptr ? instance->getTailLengthSeconds() : 0.0;
+    return instance != nullptr ? instance->getName() : file.getFileNameWithoutExtension();
 }
 
 std::unique_ptr<juce::XmlElement> HostedPlugin::createStateXml() const

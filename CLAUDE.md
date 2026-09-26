@@ -8,6 +8,8 @@ This project is derived from the [Pamplejuce](https://github.com/sudara/pampleju
 
 The template provides the build system, CI/CD, and project structure. The plugin-specific logic lives in `source/`.
 
+**What we're building:** a live-performance plugin host (VST3 instrument now, standalone app later). It is essentially a patcher (any number of generators, buses and FX slots; any-to-any routing including sidechains) with the user's own glassmorphism UI on top. It exposes only chosen parameters of each hosted plugin and morphs between stored parameter sets. Full brief and its architectural implications: "Target production form" in `docs/decisions.md`.
+
 ## Working Agreement (read first)
 
 - **Never make code or file changes without explicit confirmation from the user.** For discussion questions, answer and propose a plan (files touched, approach, rough size), then wait for a go-ahead.
@@ -66,12 +68,14 @@ Intel IPP is optional and not installed locally; the "INTEL IPP NOT LOADED" conf
 
 Test runs print `Thrift: ... TPipe::open ... errno = 2` lines: that's the hosted Kilohearts test plugin looking for its background service. Harmless.
 
+Hosting tests load Serum 2, Sylenth1 and kHs 3-Band EQ from `C:\Program Files\Common Files\VST3` and skip if they're missing. A full test run takes ~20 s; the "Boot performance" benchmark ~90 s.
+
 On macOS for universal binary: `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
 
 ## Project Structure
 
 - `source/` - Plugin shell code (PluginProcessor, PluginEditor)
-- `source/engine/` - Shell-independent engine code (`HostedPlugin`: loads and runs one hosted plugin)
+- `source/engine/` - Shell-independent engine code: `Engine` (the routing graph that runs everything) and `HostedPlugin` (one plugin slot in it)
 - `tests/` - Catch2 test files
 - `benchmarks/` - Catch2 benchmark files
 - `docs/` - Project specs and decisions (see Project Docs above)
@@ -110,6 +114,7 @@ Edit `CMakeLists.txt` to customize:
 - `COMPANY_NAME` - Used for bundle name
 - `BUNDLE_ID` - macOS bundle identifier
 - `FORMATS` - Plugin formats to build (currently `Standalone VST3`; CLAP is added separately via `clap_juce_extensions_plugin`)
+- `IS_SYNTH` - on (instrument: FL only sends notes to generators)
 - `NEEDS_MIDI_INPUT` / `NEEDS_MIDI_OUTPUT` - on; `JUCE_PLUGINHOST_VST3=1` enables VST3 hosting
 - `PLUGIN_MANUFACTURER_CODE` / `PLUGIN_CODE` - 4-character plugin IDs
 

@@ -5,6 +5,7 @@
 #include "melatonin_inspector/melatonin_inspector.h"
 
 class HostedEditorWindow;
+struct SlotRow;
 
 //==============================================================================
 class PluginEditor : public juce::AudioProcessorEditor,
@@ -23,16 +24,17 @@ private:
     int getNumRows() override;
     void paintListBoxItem (int row, juce::Graphics&, int width, int height, bool rowIsSelected) override;
     void timerCallback() override;
-    void openHostedEditor();
+    void showControlsOf (const HostedPlugin*);
+    void openHostedEditor (SlotRow&);
 
-    HostedPlugin& hostedPlugin;
+    Engine& engine;
     std::unique_ptr<melatonin::Inspector> inspector;
-    juce::Label statusLabel;
-    juce::TextButton openButton { "Open plugin window" };
+    std::vector<std::unique_ptr<SlotRow>> slotRows;
+    juce::ComboBox controlsSelector;
     juce::TextButton inspectButton { "Inspect the UI" };
     juce::ListBox parameterList;
+    const HostedPlugin* shownPlugin = nullptr;
     std::vector<float> lastParameterValues;
-    std::unique_ptr<HostedEditorWindow> hostedEditorWindow;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)
 };

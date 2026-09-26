@@ -11,7 +11,12 @@ int main (int argc, char* argv[])
     // It's nicer DX when placed here vs. manually in Catch2 SECTIONs
     juce::ScopedJuceInitialiser_GUI gui;
 
-    const int result = Catch::Session().run (argc, argv);
+    Catch::Session session;
+
+    // Each sample constructs our plugin, which loads several hosted plugins (--benchmark-samples overrides)
+    session.configData().benchmarkSamples = 10;
+
+    const int result = session.run (argc, argv);
 
     return result;
 }

@@ -5,84 +5,112 @@
 namespace
 {
     constexpr int testBlockSize = 512;
+    constexpr double testSampleRate = 48000.0;
 
-    juce::AudioBuffer<float> makeSineBuffer()
+    bool isInstalled (const char* path)
     {
-        juce::AudioBuffer<float> buffer (2, testBlockSize);
-
-        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
-            for (int i = 0; i < testBlockSize; ++i)
-                buffer.setSample (channel, i, 0.5f * std::sin (0.05f * static_cast<float> (i)));
-
-        return buffer;
+        return juce::File (path).exists();
     }
 
-    bool buffersMatch (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
+    juce::MidiBuffer noteOn()
     {
-        for (int channel = 0; channel < a.getNumChannels(); ++channel)
-            for (int i = 0; i < a.getNumSamples(); ++i)
-                if (!juce::exactlyEqual (a.getSample (channel, i), b.getSample (channel, i)))
-                    return false;
-
-        return true;
+        juce::MidiBuffer midi;
+        midi.addEvent (juce::MidiMessage::noteOn (1, 60, 0.8f), 0);
+        return midi;
     }
 
-    bool allFinite (const juce::AudioBuffer<float>& buffer)
+    // Sends one note-on, renders about half a second, and returns the loudest sample
+    template <typename Render>
+    float loudestAfterNote (Render&& render)
     {
-        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
-            for (int i = 0; i < buffer.getNumSamples(); ++i)
-                if (!std::isfinite (buffer.getSample (channel, i)))
-                    return false;
+        auto loudest = 0.0f;
 
-        return true;
+        for (int block = 0; block < 48; ++block)
+        {
+            juce::AudioBuffer<float> buffer (2, testBlockSize);
+            buffer.clear();
+            auto midi = block == 0 ? noteOn() : juce::MidiBuffer();
+            render (buffer, midi);
+            loudest = std::max (loudest, buffer.getMagnitude (0, testBlockSize));
+        }
+
+        return loudest;
     }
 
-    bool testPluginInstalled()
+    void checkSynthPlaysANote (const char* path)
     {
-        return juce::File (hostedPluginPath).exists();
+        if (!isInstalled (path))
+            SKIP ("Not installed: " << path);
+
+        Engine engine;
+        engine.build ({ juce::File (path) }, {});
+        REQUIRE (engine.getPlugins()[0]->getInstance() != nullptr);
+
+        engine.prepare (testSampleRate, testBlockSize, false);
+        CHECK (loudestAfterNote ([&] (auto& buffer, auto& midi) { engine.process (buffer, midi, nullptr); }) > 0.001f);
+        engine.release();
     }
 }
 
-TEST_CASE ("Without a hosted plugin, audio and MIDI pass through unchanged", "[hosting]")
+TEST_CASE ("An empty engine outputs silence and passes MIDI through", "[engine]")
 {
-    HostedPlugin hosted;
-    hosted.prepare (48000.0, testBlockSize, false);
+    Engine engine;
+    engine.build ({}, {});
+    engine.prepare (testSampleRate, testBlockSize, false);
 
-    auto buffer = makeSineBuffer();
-    const auto original = buffer;
-    juce::MidiBuffer midi;
-    midi.addEvent (juce::MidiMessage::noteOn (1, 60, 0.8f), 10);
+    juce::AudioBuffer<float> buffer (2, testBlockSize);
 
-    hosted.process (buffer, midi, nullptr);
+    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+        juce::FloatVectorOperations::fill (buffer.getWritePointer (channel), 0.5f, testBlockSize);
 
-    CHECK (buffersMatch (buffer, original));
-    CHECK (midi.getNumEvents() == 1);
+    auto midi = noteOn();
+    engine.process (buffer, midi, nullptr);
+
+    CHECK (juce::exactlyEqual (buffer.getMagnitude (0, testBlockSize), 0.0f));
+    REQUIRE (midi.getNumEvents() == 1);
+    CHECK ((*midi.begin()).getMessage().isNoteOn());
 }
 
-TEST_CASE ("Loading a missing plugin fails with a message", "[hosting]")
+TEST_CASE ("A missing plugin leaves an empty slot with a message", "[engine]")
 {
-    HostedPlugin hosted;
+    Engine engine;
+    engine.build ({ juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("no-such-plugin.vst3") }, {});
 
-    CHECK_FALSE (hosted.load (juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("no-such-plugin.vst3")));
-    CHECK (hosted.getInstance() == nullptr);
-    CHECK (hosted.getLoadError().isNotEmpty());
+    REQUIRE (engine.getPlugins().size() == 1);
+    const auto& slot = *engine.getPlugins()[0];
+    CHECK (slot.getInstance() == nullptr);
+    CHECK (slot.getLoadError().isNotEmpty());
+    CHECK (slot.getName() == "no-such-plugin");
 }
 
-TEST_CASE ("Hosting the test VST3", "[hosting][vst3]")
+TEST_CASE ("Generator slots only accept instruments", "[engine][vst3]")
 {
-    if (!testPluginInstalled())
-        SKIP ("Test plugin not installed: " << hostedPluginPath);
+    if (!isInstalled (eqPath))
+        SKIP ("Not installed: " << eqPath);
 
-    HostedPlugin hosted;
-    REQUIRE (hosted.load (juce::File (hostedPluginPath)));
-    auto* instance = hosted.getInstance();
-    REQUIRE (instance != nullptr);
+    Engine engine;
+    engine.build ({ juce::File (eqPath) }, {});
+
+    const auto& slot = *engine.getPlugins()[0];
+    CHECK (slot.getInstance() == nullptr);
+    CHECK (slot.getLoadError().contains ("No instrument"));
+}
+
+TEST_CASE ("Hosting the test VST3 as FX", "[engine][vst3]")
+{
+    if (!isInstalled (eqPath))
+        SKIP ("Not installed: " << eqPath);
+
+    Engine engine;
+    engine.build ({}, { juce::File (eqPath) });
+    auto& eq = *engine.getPlugins()[0];
+    REQUIRE (eq.getInstance() != nullptr);
 
     SECTION ("lists its real controls, without the MIDI CC slots")
     {
-        const auto& controls = hosted.getControls();
+        const auto& controls = eq.getControls();
         REQUIRE (!controls.empty());
-        CHECK (controls.size() < static_cast<size_t> (instance->getParameters().size()));
+        CHECK (controls.size() < static_cast<size_t> (eq.getInstance()->getParameters().size()));
 
         for (const auto* param : controls)
         {
@@ -91,75 +119,119 @@ TEST_CASE ("Hosting the test VST3", "[hosting][vst3]")
         }
     }
 
-    SECTION ("processes audio, and MIDI flows past an audio-only plugin")
-    {
-        hosted.prepare (48000.0, testBlockSize, false);
-
-        auto buffer = makeSineBuffer();
-        juce::MidiBuffer midi;
-
-        for (int block = 0; block < 8; ++block)
-        {
-            buffer = makeSineBuffer();
-            midi.clear();
-            midi.addEvent (juce::MidiMessage::noteOn (1, 60, 0.8f), 10);
-            hosted.process (buffer, midi, nullptr);
-        }
-
-        CHECK (allFinite (buffer));
-        CHECK (buffer.getMagnitude (0, testBlockSize) > 0.01f);
-
-        if (!instance->acceptsMidi() && !instance->producesMidi())
-            CHECK (midi.getNumEvents() == 1);
-
-        hosted.release();
-    }
-
     SECTION ("restores saved state only into the same plugin")
     {
-        auto state = hosted.createStateXml();
+        auto state = eq.createStateXml();
         REQUIRE (state != nullptr);
-        CHECK (hosted.restoreStateFromXml (*state));
+        CHECK (eq.restoreStateFromXml (*state));
 
         state->setAttribute ("id", "VST3-Some Other Plugin-0-0");
-        CHECK_FALSE (hosted.restoreStateFromXml (*state));
+        CHECK_FALSE (eq.restoreStateFromXml (*state));
     }
 }
 
-TEST_CASE ("Hosted plugin settings survive a save and reload", "[hosting][vst3]")
+TEST_CASE ("Plugin settings survive a save and reload, slot by slot", "[engine][vst3]")
 {
-    if (!testPluginInstalled())
-        SKIP ("Test plugin not installed: " << hostedPluginPath);
+    if (!isInstalled (eqPath))
+        SKIP ("Not installed: " << eqPath);
 
-    juce::MemoryBlock saved;
-    float savedValue = 0.0f;
+    // Two copies of the same plugin, so each must get its own settings back
+    const std::vector<juce::File> twoEqs { juce::File (eqPath), juce::File (eqPath) };
+
+    std::unique_ptr<juce::XmlElement> saved;
+    float changedValue = 0.0f;
+    float untouchedValue = 0.0f;
 
     {
-        PluginProcessor original;
-        auto* param = original.getHostedPlugin().getInstance()->getParameters()[0];
+        Engine original;
+        original.build ({}, twoEqs);
+        auto* param = original.getPlugins()[1]->getControls()[0];
         param->setValueNotifyingHost (param->getValue() < 0.5f ? 0.8f : 0.2f);
 
-        // Parameter changes reach the plugin's audio side during processing
-        original.prepareToPlay (48000.0, testBlockSize);
-        auto buffer = makeSineBuffer();
+        // Parameter changes reach a plugin's audio side during processing
+        original.prepare (testSampleRate, testBlockSize, false);
+        juce::AudioBuffer<float> buffer (2, testBlockSize);
+        buffer.clear();
         juce::MidiBuffer midi;
-        original.processBlock (buffer, midi);
-        original.releaseResources();
+        original.process (buffer, midi, nullptr);
+        original.release();
 
-        savedValue = param->getValue();
-        original.getStateInformation (saved);
+        changedValue = param->getValue();
+        untouchedValue = original.getPlugins()[0]->getControls()[0]->getValue();
+        saved = original.createStateXml();
     }
 
-    PluginProcessor restored;
-    auto* param = restored.getHostedPlugin().getInstance()->getParameters()[0];
-    REQUIRE_FALSE (juce::exactlyEqual (param->getValue(), savedValue));
+    Engine restored;
+    restored.build ({}, twoEqs);
+    const auto* changed = restored.getPlugins()[1]->getControls()[0];
+    const auto* untouched = restored.getPlugins()[0]->getControls()[0];
+    REQUIRE_FALSE (juce::exactlyEqual (changed->getValue(), changedValue));
 
-    restored.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
-    CHECK_THAT (param->getValue(), Catch::Matchers::WithinAbs (savedValue, 0.001));
+    restored.restoreStateFromXml (*saved);
+    CHECK_THAT (changed->getValue(), Catch::Matchers::WithinAbs (changedValue, 0.001));
+    CHECK_THAT (untouched->getValue(), Catch::Matchers::WithinAbs (untouchedValue, 0.001));
+}
 
-    SECTION ("and garbage state is ignored")
+TEST_CASE ("Serum 2 plays a note from MIDI", "[engine][synths]")
+{
+    checkSynthPlaysANote (serum2Path);
+}
+
+TEST_CASE ("Sylenth1 plays a note from MIDI", "[engine][synths]")
+{
+    checkSynthPlaysANote (sylenth1Path);
+}
+
+TEST_CASE ("The fixed setup: both synths summed into the EQ", "[processor][synths]")
+{
+    for (auto* path : { serum2Path, sylenth1Path, eqPath })
+        if (!isInstalled (path))
+            SKIP ("Not installed: " << path);
+
+    PluginProcessor processor;
+    auto& engine = processor.getEngine();
+    const auto& plugins = engine.getPlugins();
+    REQUIRE (plugins.size() == 3);
+
+    for (const auto& plugin : plugins)
     {
-        restored.setStateInformation ("garbage", 7);
-        CHECK_THAT (param->getValue(), Catch::Matchers::WithinAbs (savedValue, 0.001));
+        INFO (plugin->getName() << ": " << plugin->getLoadError());
+        REQUIRE (plugin->getInstance() != nullptr);
     }
+
+    const auto& serum = *plugins[0];
+    const auto& sylenth = *plugins[1];
+    const auto& eq = *plugins[2];
+    CHECK (serum.getName() == "Serum 2");
+    CHECK (engine.isConnected (serum, eq));
+    CHECK (engine.isConnected (sylenth, eq));
+    CHECK_FALSE (engine.isConnected (serum, sylenth));
+
+    processor.prepareToPlay (testSampleRate, testBlockSize);
+    const auto render = [&] (auto& buffer, auto& midi) { processor.processBlock (buffer, midi); };
+
+    SECTION ("a note comes out of the EQ")
+    {
+        CHECK (loudestAfterNote (render) > 0.001f);
+    }
+
+    SECTION ("MIDI also passes straight through")
+    {
+        juce::AudioBuffer<float> buffer (2, testBlockSize);
+        buffer.clear();
+        auto midi = noteOn();
+        processor.processBlock (buffer, midi);
+        CHECK (midi.getNumEvents() == 1);
+    }
+
+    SECTION ("its saved state and garbage state both load without breaking playback")
+    {
+        juce::MemoryBlock saved;
+        processor.getStateInformation (saved);
+        processor.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+        processor.setStateInformation ("garbage", 7);
+        CHECK (loudestAfterNote (render) > 0.001f);
+    }
+
+    processor.releaseResources();
 }

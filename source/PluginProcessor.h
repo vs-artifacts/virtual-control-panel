@@ -2,14 +2,16 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
-#include "engine/HostedPlugin.h"
+#include "engine/Engine.h"
 
 #if (MSVC)
     #include "ipps.h"
 #endif
 
-// Slice 1a stand-in until plugin scanning and selection exist
-inline constexpr auto hostedPluginPath = R"(C:\Program Files\Common Files\VST3\Kilohearts\kHs 3-Band EQ.vst3)";
+// Stand-ins until plugin scanning and routing configuration exist
+inline constexpr auto serum2Path = R"(C:\Program Files\Common Files\VST3\Serum2.vst3)";
+inline constexpr auto sylenth1Path = R"(C:\Program Files\Common Files\VST3\Sylenth1.vst3)";
+inline constexpr auto eqPath = R"(C:\Program Files\Common Files\VST3\Kilohearts\kHs 3-Band EQ.vst3)";
 
 class PluginProcessor : public juce::AudioProcessor
 {
@@ -43,10 +45,10 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    HostedPlugin& getHostedPlugin() noexcept { return hostedPlugin; }
+    Engine& getEngine() noexcept { return engine; }
 
 private:
-    HostedPlugin hostedPlugin;
+    Engine engine;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

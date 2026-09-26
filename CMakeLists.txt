@@ -96,7 +96,10 @@ juce_add_plugin("${PROJECT_NAME}"
     PLUGIN_CODE Hsp1
     FORMATS "${FORMATS}"
 
-    # Receive MIDI from the DAW and send MIDI back out (via the hosted plugin)
+    # Instrument: FL only sends piano-roll notes to generators, and we host generators
+    IS_SYNTH TRUE
+
+    # Receive MIDI from the DAW and send MIDI back out (pass-through lane)
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT TRUE
 
@@ -112,7 +115,7 @@ add_library(SharedCode INTERFACE)
 
 clap_juce_extensions_plugin(TARGET "${PROJECT_NAME}"
     CLAP_ID "${BUNDLE_ID}"
-    CLAP_FEATURES audio-effect utility)
+    CLAP_FEATURES instrument synthesizer)
 
 # Enable fast math, C++23 and a few other target defaults
 pamplejuce_shared_code_defaults()
