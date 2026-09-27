@@ -1,16 +1,18 @@
 #pragma once
 
 #include "BinaryData.h"
+#include "KeyForwarder.h"
 #include "PluginProcessor.h"
+#include "PluginSettings.h"
+#include "WebUi.h"
+#include "WebViewKeepAlive.h"
 #include "melatonin_inspector/melatonin_inspector.h"
 
 class HostedEditorWindow;
 struct SlotRow;
 
 //==============================================================================
-class PluginEditor : public juce::AudioProcessorEditor,
-                     private juce::ListBoxModel,
-                     private juce::Timer
+class PluginEditor : public juce::AudioProcessorEditor
 {
 public:
     explicit PluginEditor (PluginProcessor&);
@@ -21,20 +23,18 @@ public:
     void resized() override;
 
 private:
-    int getNumRows() override;
-    void paintListBoxItem (int row, juce::Graphics&, int width, int height, bool rowIsSelected) override;
-    void timerCallback() override;
-    void showControlsOf (const HostedPlugin*);
     void openHostedEditor (SlotRow&);
 
     Engine& engine;
+    juce::SharedResourcePointer<PluginSettings> settings;
+    juce::SharedResourcePointer<WebViewKeepAlive> webViewKeepAlive;
     std::unique_ptr<melatonin::Inspector> inspector;
     std::vector<std::unique_ptr<SlotRow>> slotRows;
-    juce::ComboBox controlsSelector;
+    juce::ToggleButton keepWarmToggle { "Keep web UI warm (reopens instantly, uses more memory)" };
     juce::TextButton inspectButton { "Inspect the UI" };
-    juce::ListBox parameterList;
-    const HostedPlugin* shownPlugin = nullptr;
-    std::vector<float> lastParameterValues;
+    KeyForwarder keyForwarder;
+    std::unique_ptr<WebUi> webUi;
+    juce::Label webUiUnavailable;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)
 };

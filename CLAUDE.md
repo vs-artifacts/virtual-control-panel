@@ -18,6 +18,13 @@ The template provides the build system, CI/CD, and project structure. The plugin
 - One chat session per feature. Keep this file and `docs/` current so a fresh session can pick up without the chat history: record decisions in `docs/decisions.md`, keep the index below accurate.
 - The user has professional technical writing/editing experience in software and knows the concepts, but has very limited hands-on dev experience in any language (including Svelte and C++). Explain code and concepts plainly when relevant.
 
+## Security (networked surfaces)
+
+- **Be scrupulous, even a little paranoid, about anything networked.** The risk that matters is remote code execution and lateral movement onto the user's machine and network (assume attackers with LLM-assisted bug hunting), not someone changing the sound or crashing the DAW. Unoptimised UI code is acceptable; an unnecessary or unhardened attack surface is not.
+- **No network exposure by default.** The plugin editor talks to the engine through JUCE's native web bridge; the WebSocket server runs only when remote control is explicitly switched on.
+- Keep code reachable before authentication to a minimum, use third-party network libraries minimally and pinned to patched versions, and validate every incoming message (size and nesting depth before parsing).
+- Raise security concerns proactively, even when not asked. Concrete rules are recorded in `docs/decisions.md`.
+
 ## Project Docs (source of truth)
 
 Read only the files relevant to the task at hand.
@@ -66,6 +73,8 @@ For performance testing or real use in a DAW, build Release in a separate dir: `
 
 Intel IPP is optional and not installed locally; the "INTEL IPP NOT LOADED" configure message is expected.
 
+The build also builds the web UI, so Node.js and npm must be on the PATH. The first build in a build dir runs `npm install` in `ui/` (install scripts are disabled in `ui/.npmrc`); every build that touches `ui/` runs `npm run check` (type check, warnings fail) and `npm run build` into `Builds/ui/`. On Windows, configure downloads the pinned WebView2 SDK into the build dir (`cmake-local/WebView2Sdk.cmake`). To work on the page alone: `cd ui; npm run dev` (it shows "Bridge unavailable" outside the plugin).
+
 Test runs print `Thrift: ... TPipe::open ... errno = 2` lines: that's the hosted Kilohearts test plugin looking for its background service. Harmless.
 
 Hosting tests load Serum 2, Sylenth1 and kHs 3-Band EQ from `C:\Program Files\Common Files\VST3` and skip if they're missing. A full test run takes ~20 s; the "Boot performance" benchmark ~90 s.
@@ -74,13 +83,15 @@ On macOS for universal binary: `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
 
 ## Project Structure
 
-- `source/` - Plugin shell code (PluginProcessor, PluginEditor)
+- `source/` - Plugin shell code (PluginProcessor, PluginEditor, `WebUi`: the editor's locked-down web view and its native bridge, `WebViewKeepAlive`, `KeyForwarder`: typing keys from the page to the host, `PluginSettings`: plugin-wide preferences file)
 - `source/engine/` - Shell-independent engine code: `Engine` (the routing graph that runs everything) and `HostedPlugin` (one plugin slot in it)
+- `source/bridge/` - Shell-independent web UI plumbing: `UiFiles` (the embedded page files, looked up by exact path)
 - `tests/` - Catch2 test files
 - `benchmarks/` - Catch2 benchmark files
 - `docs/` - Project specs and decisions (see Project Docs above)
-- `ui/` - *(planned, slice 1b)* Svelte 5 + Vite + TypeScript web UI with WebGL2 shaders
-- `cmake/` - CMake modules (Tests.cmake, Benchmarks.cmake, Assets.cmake, etc.)
+- `ui/` - Svelte 5 + Vite + TypeScript web UI (WebGL2 shaders later). Built by CMake and embedded as the `UiBundle` target
+- `cmake/` - Pamplejuce CMake modules (Tests.cmake, Benchmarks.cmake, Assets.cmake, etc.); a git submodule, never edit
+- `cmake-local/` - Our own CMake modules (WebView2 SDK, web UI build)
 - `modules/` - Git submodules: clap-juce-extensions, melatonin_inspector
 - `JUCE/` - JUCE framework (git submodule, JUCE 9.0.1+ on master). Never edit files in `JUCE/` or `modules/`; they are marked read-only in VS Code.
 - `assets/` - Binary resources (auto-included via juce_add_binary_data)
@@ -90,10 +101,14 @@ On macOS for universal binary: `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
 
 **SharedCode Library**: The `SharedCode` INTERFACE library links plugin source code to both the main plugin target and the Tests target, avoiding ODR violations.
 
-**CMake Modules**:
+**CMake Modules** (`cmake/` is the upstream Pamplejuce submodule; never edit it):
 - `PamplejuceVersion.cmake` - Reads VERSION file, optional auto-bump patch level
 - `PamplejuceFunctions.cmake` - One include that defines the `pamplejuce_*` functions below (and turns off their legacy include-time behavior)
 - `PamplejuceIPP.cmake` - Intel IPP integration (optional)
+
+Our own modules live in `cmake-local/`:
+- `WebView2Sdk.cmake` - Windows: downloads and checksum-verifies the WebView2 SDK that JUCE links statically
+- `Ui.cmake` - Builds `ui/` with npm and embeds the result as `UiBundle` (its file list must match what Vite produces)
 
 Target setup happens via explicit function calls in `CMakeLists.txt`, not at include time:
 - `pamplejuce_add_assets()` - Includes all files in assets/ as binary data (from `Assets.cmake`)
@@ -129,6 +144,8 @@ Note: clangd reads `Builds/compile_commands.json` (configured in `.clangd`), so 
 ## Visual Verification
 
 The agent can view PNGs. To check UI changes without the user, render the editor to an image via `runWithinPluginEditor` in `tests/helpers/test_helpers.h`: call `editor->createComponentSnapshot (editor->getLocalBounds(), true, 2.0f)`, write it with `juce::PNGImageFormat` into `Builds/`, run `./Builds/Tests "[snapshot]"`, then view the PNG. Delete temporary snapshot tests and images afterwards.
+
+Snapshots can't capture the web view (it's a separate native window; it shows as a white box). To see the page, serve the built copy on loopback with `cd ui; npx vite preview --outDir ../Builds/ui --host 127.0.0.1 --port 4173 --strictPort`, open it in VS Code's browser, and stop the server afterwards. The real bridge is covered by the `[webview]` test, which loads the page in an off-screen web view.
 
 ## Includes
 

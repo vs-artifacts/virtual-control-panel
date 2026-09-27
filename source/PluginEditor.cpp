@@ -50,36 +50,21 @@ namespace
 
 //==============================================================================
 PluginEditor::PluginEditor (PluginProcessor& p)
-    : AudioProcessorEditor (&p), engine (p.getEngine())
+    : AudioProcessorEditor (&p),
+      engine (p.getEngine()),
+      keyForwarder (settings->getForwardedKeys(), KeyForwarder::postToHostOf (*this), KeyForwarder::readPhysicalModifiers)
 {
-    parameterList.setModel (this);
-    addAndMakeVisible (parameterList);
-
-    const auto& plugins = engine.getPlugins();
-
-    for (size_t i = 0; i < plugins.size(); ++i)
+    for (const auto& plugin : engine.getPlugins())
     {
-        const auto& plugin = *plugins[i];
-        auto& row = *slotRows.emplace_back (std::make_unique<SlotRow> (plugin));
+        auto& row = *slotRows.emplace_back (std::make_unique<SlotRow> (*plugin));
 
-        row.status.setText (describe (plugin), juce::dontSendNotification);
+        row.status.setText (describe (*plugin), juce::dontSendNotification);
         addAndMakeVisible (row.status);
 
-        row.openButton.setEnabled (plugin.getInstance() != nullptr && plugin.getInstance()->hasEditor());
+        row.openButton.setEnabled (plugin->getInstance() != nullptr && plugin->getInstance()->hasEditor());
         row.openButton.onClick = [this, &row] { openHostedEditor (row); };
         addAndMakeVisible (row.openButton);
-
-        if (plugin.getInstance() != nullptr)
-            controlsSelector.addItem ("Controls: " + plugin.getName(), static_cast<int> (i) + 1);
     }
-
-    controlsSelector.onChange = [this] {
-        const auto index = controlsSelector.getSelectedId() - 1;
-        const auto& all = engine.getPlugins();
-        showControlsOf (juce::isPositiveAndBelow (index, static_cast<int> (all.size())) ? all[static_cast<size_t> (index)].get() : nullptr);
-    };
-    controlsSelector.setSelectedItemIndex (0, juce::sendNotificationSync);
-    addAndMakeVisible (controlsSelector);
 
     // this chunk of code instantiates and opens the melatonin inspector
     inspectButton.onClick = [&] {
@@ -93,7 +78,38 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     };
     addAndMakeVisible (inspectButton);
 
-    startTimerHz (10);
+    if (WebUi::isSupported())
+    {
+        webUi = std::make_unique<WebUi> (p.getName() + " v" VERSION, keyForwarder);
+
+        // Started after our own page, so it never delays the first editor open
+        webUi->onPageLoaded = [this] {
+            if (settings->getKeepWebViewWarm())
+                webViewKeepAlive->start();
+        };
+
+        addAndMakeVisible (*webUi);
+    }
+    else
+    {
+        webUiUnavailable.setText ("Web UI unavailable: this system has no supported web view (on Windows, install the Microsoft Edge WebView2 Runtime).", juce::dontSendNotification);
+        webUiUnavailable.setJustificationType (juce::Justification::centred);
+        addAndMakeVisible (webUiUnavailable);
+    }
+
+    keepWarmToggle.setToggleState (settings->getKeepWebViewWarm(), juce::dontSendNotification);
+    keepWarmToggle.setEnabled (webUi != nullptr);
+    keepWarmToggle.onClick = [this] {
+        const auto keepWarm = keepWarmToggle.getToggleState();
+        settings->setKeepWebViewWarm (keepWarm);
+
+        if (keepWarm)
+            webViewKeepAlive->start();
+        else
+            webViewKeepAlive->stop();
+    };
+    addAndMakeVisible (keepWarmToggle);
+
     setSize (560, 560);
 }
 
@@ -122,66 +138,15 @@ void PluginEditor::resized()
     }
 
     area.removeFromTop (8);
-    auto selectorRow = area.removeFromTop (30);
-    inspectButton.setBounds (selectorRow.removeFromRight (130));
-    selectorRow.removeFromRight (10);
-    controlsSelector.setBounds (selectorRow);
+    auto settingsRow = area.removeFromTop (30);
+    inspectButton.setBounds (settingsRow.removeFromRight (130));
+    keepWarmToggle.setBounds (settingsRow);
     area.removeFromTop (10);
 
-    parameterList.setBounds (area);
-}
-
-void PluginEditor::showControlsOf (const HostedPlugin* plugin)
-{
-    shownPlugin = plugin;
-    lastParameterValues.assign (plugin != nullptr ? plugin->getControls().size() : 0, 0.0f);
-    parameterList.updateContent();
-    parameterList.repaint();
-}
-
-int PluginEditor::getNumRows()
-{
-    return shownPlugin != nullptr ? static_cast<int> (shownPlugin->getControls().size()) : 0;
-}
-
-void PluginEditor::paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool)
-{
-    if (shownPlugin == nullptr || !juce::isPositiveAndBelow (row, getNumRows()))
-        return;
-
-    const auto* param = shownPlugin->getControls()[static_cast<size_t> (row)];
-
-    if (row % 2 == 0)
-        g.fillAll (juce::Colours::white.withAlpha (0.04f));
-
-    auto area = juce::Rectangle<int> (width, height).reduced (8, 0);
-
-    g.setColour (juce::Colours::grey);
-    g.drawText (juce::String (param->getParameterIndex()), area.removeFromLeft (40), juce::Justification::centredLeft);
-
-    g.setColour (juce::Colours::white);
-    g.drawText (param->getName (64), area.removeFromLeft (area.getWidth() / 2), juce::Justification::centredLeft);
-    g.drawText ((param->getCurrentValueAsText() + " " + param->getLabel()).trim(), area, juce::Justification::centredRight);
-}
-
-void PluginEditor::timerCallback()
-{
-    if (shownPlugin == nullptr)
-        return;
-
-    const auto& controls = shownPlugin->getControls();
-
-    // Only repaint rows whose value changed since the last tick
-    for (size_t i = 0; i < controls.size(); ++i)
-    {
-        const auto value = controls[i]->getValue();
-
-        if (!juce::exactlyEqual (value, lastParameterValues[i]))
-        {
-            lastParameterValues[i] = value;
-            parameterList.repaintRow (static_cast<int> (i));
-        }
-    }
+    if (webUi != nullptr)
+        webUi->setBounds (area);
+    else
+        webUiUnavailable.setBounds (area);
 }
 
 void PluginEditor::openHostedEditor (SlotRow& row)

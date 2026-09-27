@@ -2,7 +2,9 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "WebViewKeepAlive.h"
 #include "engine/Engine.h"
+
 
 #if (MSVC)
     #include "ipps.h"
@@ -49,6 +51,9 @@ public:
 
 private:
     Engine engine;
+
+    // Keeps the editors' hidden web view (once an editor starts it) for as long as any instance exists
+    juce::SharedResourcePointer<WebViewKeepAlive> webViewKeepAlive;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

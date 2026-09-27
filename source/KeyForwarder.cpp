@@ -1,0 +1,177 @@
+#include "KeyForwarder.h"
+
+#if JUCE_WINDOWS
+    #define NOMINMAX
+    #define WIN32_LEAN_AND_MEAN
+    #include <windows.h>
+#endif
+
+namespace
+{
+    // Physical key positions (KeyboardEvent.code) and their PC scan codes: the main-block keys only
+    constexpr std::pair<const char*, std::uint32_t> knownKeys[] {
+        { "Digit1", 0x02 },
+        { "Digit2", 0x03 },
+        { "Digit3", 0x04 },
+        { "Digit4", 0x05 },
+        { "Digit5", 0x06 },
+        { "Digit6", 0x07 },
+        { "Digit7", 0x08 },
+        { "Digit8", 0x09 },
+        { "Digit9", 0x0A },
+        { "Digit0", 0x0B },
+        { "KeyQ", 0x10 },
+        { "KeyW", 0x11 },
+        { "KeyE", 0x12 },
+        { "KeyR", 0x13 },
+        { "KeyT", 0x14 },
+        { "KeyY", 0x15 },
+        { "KeyU", 0x16 },
+        { "KeyI", 0x17 },
+        { "KeyO", 0x18 },
+        { "KeyP", 0x19 },
+        { "BracketLeft", 0x1A },
+        { "BracketRight", 0x1B },
+        { "KeyA", 0x1E },
+        { "KeyS", 0x1F },
+        { "KeyD", 0x20 },
+        { "KeyF", 0x21 },
+        { "KeyG", 0x22 },
+        { "KeyH", 0x23 },
+        { "KeyJ", 0x24 },
+        { "KeyK", 0x25 },
+        { "KeyL", 0x26 },
+        { "Semicolon", 0x27 },
+        { "Quote", 0x28 },
+        { "KeyZ", 0x2C },
+        { "KeyX", 0x2D },
+        { "KeyC", 0x2E },
+        { "KeyV", 0x2F },
+        { "KeyB", 0x30 },
+        { "KeyN", 0x31 },
+        { "KeyM", 0x32 },
+        { "Comma", 0x33 },
+        { "Period", 0x34 },
+        { "Slash", 0x35 },
+        { "Space", 0x39 },
+    };
+
+    std::optional<std::uint32_t> findScanCode (const juce::String& code)
+    {
+        for (const auto& [name, scanCode] : knownKeys)
+            if (code == name)
+                return scanCode;
+
+        return std::nullopt;
+    }
+
+    constexpr auto ctrlPrefix = "Ctrl+";
+}
+
+KeyForwarder::KeyForwarder (const juce::String& chords, Post postIn, ReadModifiers readModifiersIn)
+    : post (std::move (postIn)), readModifiers (std::move (readModifiersIn))
+{
+    for (const auto& token : juce::StringArray::fromTokens (chords, ",", ""))
+    {
+        const auto chord = token.trim();
+        const auto code = chord.startsWith (ctrlPrefix) ? chord.substring (juce::String (ctrlPrefix).length()) : chord;
+
+        if (findScanCode (code).has_value())
+            allowedChords.addIfNotAlreadyThere (chord);
+    }
+}
+
+KeyForwarder::~KeyForwarder()
+{
+    releaseAll();
+}
+
+void KeyForwarder::handleKeyEvent (const juce::var& event)
+{
+    const auto& code = event["code"];
+    const auto& down = event["down"];
+
+    if (!code.isString() || !down.isBool())
+        return;
+
+    const auto codeName = code.toString();
+
+    if (!static_cast<bool> (down))
+    {
+        if (const auto held = heldKeys.find (codeName); held != heldKeys.end())
+        {
+            post (held->second, false, false);
+            heldKeys.erase (held);
+        }
+
+        return;
+    }
+
+    const auto scanCode = findScanCode (codeName);
+
+    if (!scanCode.has_value())
+        return;
+
+    const auto modifiers = readModifiers();
+
+    if (modifiers.alt || modifiers.shift || modifiers.os)
+        return;
+
+    if (!allowedChords.contains ((modifiers.ctrl ? juce::String (ctrlPrefix) : juce::String()) + codeName))
+        return;
+
+    const auto& repeat = event["repeat"];
+    const auto isRepeat = heldKeys.contains (codeName) || (repeat.isBool() && static_cast<bool> (repeat));
+
+    post (*scanCode, true, isRepeat);
+    heldKeys[codeName] = *scanCode;
+}
+
+void KeyForwarder::releaseAll()
+{
+    for (const auto& [code, scanCode] : heldKeys)
+        post (scanCode, false, false);
+
+    heldKeys.clear();
+}
+
+KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor)
+{
+#if JUCE_WINDOWS
+    // Remembered, so key releases still arrive after the editor's own window has gone
+    auto host = std::make_shared<HWND> (nullptr);
+
+    return [&editor, host] (std::uint32_t scanCode, bool down, bool isRepeat) {
+        if (down)
+            if (auto* peer = editor.getPeer())
+                *host = GetParent (static_cast<HWND> (peer->getNativeHandle()));
+
+        if (*host == nullptr)
+            return;
+
+        // The same messages JUCE passes to the host window for keys the editor doesn't use
+        auto flags = 1u | (scanCode << 16);
+
+        if (!down)
+            flags |= 0xC0000000u;
+        else if (isRepeat)
+            flags |= 0x40000000u;
+
+        PostMessageW (*host, down ? WM_KEYDOWN : WM_KEYUP, MapVirtualKeyW (scanCode, MAPVK_VSC_TO_VK), static_cast<LPARAM> (flags));
+    };
+#else
+    juce::ignoreUnused (editor);
+    return [] (std::uint32_t, bool, bool) {};
+#endif
+}
+
+KeyForwarder::Modifiers KeyForwarder::readPhysicalModifiers()
+{
+#if JUCE_WINDOWS
+    const auto isDown = [] (int key) { return (GetAsyncKeyState (key) & 0x8000) != 0; };
+    return { isDown (VK_CONTROL), isDown (VK_MENU), isDown (VK_SHIFT), isDown (VK_LWIN) || isDown (VK_RWIN) };
+#else
+    const auto mods = juce::ModifierKeys::getCurrentModifiersRealtime();
+    return { mods.isCtrlDown(), mods.isAltDown(), mods.isShiftDown(), mods.isCommandDown() };
+#endif
+}

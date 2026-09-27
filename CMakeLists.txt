@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.25)
 
 # This tells cmake we have goodies in the /cmake folder
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+# Our own modules (cmake/ is the upstream Pamplejuce submodule)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake-local")
 include (PamplejuceVersion)
 
 # Modern concise way to add dependencies to your project
@@ -72,6 +75,9 @@ else ()
     set(COPY_PLUGIN_AFTER_BUILD FALSE)
 endif ()
 
+# Windows only: the WebView2 SDK that JUCE's web browser component links against
+include(WebView2Sdk)
+
 # See `docs/CMake API.md` in the JUCE repo for all config options
 juce_add_plugin("${PROJECT_NAME}"
     # Icons for the standalone app
@@ -103,6 +109,10 @@ juce_add_plugin("${PROJECT_NAME}"
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT TRUE
 
+    # The editor shows the web UI: WebView2 on Windows (linked statically), WebKit on Linux
+    NEEDS_WEBVIEW2 TRUE
+    NEEDS_WEB_BROWSER TRUE
+
     # The name of your final executable
     # This is how it's listed in the DAW
     # This can be different from PROJECT_NAME and can have spaces!
@@ -132,6 +142,9 @@ target_sources(SharedCode INTERFACE ${SourceFiles})
 # Adds a BinaryData target for embedding assets into the binary
 pamplejuce_add_assets()
 
+# Builds the web UI with npm and embeds it as the UiBundle target
+include(Ui)
+
 # MacOS only: Cleans up folder and target organization on Xcode.
 pamplejuce_xcode_prettify()
 
@@ -139,8 +152,9 @@ pamplejuce_xcode_prettify()
 target_compile_definitions(SharedCode
     INTERFACE
 
-    # JUCE_WEB_BROWSER and JUCE_USE_CURL off by default
-    JUCE_WEB_BROWSER=0  # If you set this to 1, add `NEEDS_WEB_BROWSER TRUE` to the `juce_add_plugin` call
+    # The editor's web UI; on Windows it uses WebView2 (never the old IE engine), linked statically
+    JUCE_WEB_BROWSER=1
+    JUCE_USE_WIN_WEBVIEW2_WITH_STATIC_LINKING=1
     JUCE_USE_CURL=0     # If you set this to 1, add `NEEDS_CURL TRUE` to the `juce_add_plugin` call
     JUCE_VST3_CAN_REPLACE_VST2=0
 
@@ -166,6 +180,7 @@ target_compile_definitions(SharedCode
 target_link_libraries(SharedCode
     INTERFACE
     Assets
+    UiBundle
     melatonin_inspector
     juce_audio_utils
     juce_audio_processors
@@ -175,6 +190,11 @@ target_link_libraries(SharedCode
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
+
+# juce_add_plugin links WebView2 into the plugin only; Tests and Benchmarks need it too
+if (WIN32)
+    target_link_libraries(SharedCode INTERFACE juce::juce_webview2)
+endif ()
 
 # Link the JUCE plugin targets our SharedCode target
 target_link_libraries("${PROJECT_NAME}" PRIVATE SharedCode)
