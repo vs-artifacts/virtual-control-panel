@@ -69,7 +69,7 @@ ctest --test-dir Builds --verbose --output-on-failure
 
 Build outputs land in `Builds/HeartseekerPanel_artefacts/<Config>/` (`Standalone/heartseeker panel.exe`, `VST3/heartseeker panel.vst3`, `CLAP/heartseeker panel.clap`). `COPY_PLUGIN_AFTER_BUILD` is off on Windows (the system VST3 folder needs admin rights). Instead, `C:\Program Files\Common Files\VST3\heartseeker panel.vst3` is a directory junction to the Debug VST3 artefact, so rebuilds are picked up by DAWs automatically (FL Studio only scans VST3s in the standard folders; custom search paths are treated as VST2). Close the DAW before rebuilding, or the linker can't overwrite the loaded binary.
 
-For performance testing or real use in a DAW, build Release in a separate dir: `cmake -B Builds-Release -G Ninja -DCMAKE_BUILD_TYPE=Release; cmake --build Builds-Release`.
+For performance testing or real use in a DAW, build Release in a separate dir: `cmake -B Builds-Release -G Ninja -DCMAKE_BUILD_TYPE=Release; cmake --build Builds-Release`. Parameter sync and morph cost: `./Builds-Release/Benchmarks "[sync]"` (needs Serum 2).
 
 Intel IPP is optional and not installed locally; the "INTEL IPP NOT LOADED" configure message is expected.
 
@@ -83,11 +83,11 @@ On macOS for universal binary: `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
 
 ## Project Structure
 
-- `source/` - Plugin shell code (PluginProcessor, PluginEditor, `WebUi`: the editor's locked-down web view and its native bridge, `WebViewKeepAlive`, `KeyForwarder`: typing keys from the page to the host, `PluginSettings`: plugin-wide preferences file)
-- `source/engine/` - Shell-independent engine code: `Engine` (the routing graph that runs everything) and `HostedPlugin` (one plugin slot in it)
-- `source/bridge/` - Shell-independent web UI plumbing: `UiFiles` (the embedded page files, looked up by exact path)
-- `tests/` - Catch2 test files
-- `benchmarks/` - Catch2 benchmark files
+- `source/` - Plugin shell code (PluginProcessor, PluginEditor: tabs, whole-UI scaling and corner resizing, `EditorPages`: the Plugins and Settings tabs, `EditorScale`: design size, limits and sharp steps, `WebUi`: the editor's locked-down web view and its native bridge, `WebViewKeepAlive`, `KeyForwarder`: typing keys from the page to the host, `KeyDiagnostics`: Debug-only temporary key log, `PluginSettings`: plugin-wide preferences file, `HostControls`: the fixed pool of parameters the host sees, bound to exposed parameters, `HostMenus`: the host's right-click options for a parameter, `EditorPlacement`: centres the editor's window on first open)
+- `source/engine/` - Shell-independent engine code: `Engine` (the routing graph that runs everything, plus which hosted parameters are exposed) and `HostedPlugin` (one plugin slot in it)
+- `source/bridge/` - Shell-independent web UI plumbing: `UiFiles` (the embedded page files, looked up by exact path), `ControlSession` (one page's view of the exposed parameters: catalog, updates, validated sets and gestures)
+- `tests/` - Catch2 test files (`tests/helpers/ParameterHost.h`: a bare processor with parameters, plus a log of what a host would hear)
+- `benchmarks/` - Catch2 benchmark files (each `.cpp` is included from `Catch2Main.cpp`)
 - `docs/` - Project specs and decisions (see Project Docs above)
 - `ui/` - Svelte 5 + Vite + TypeScript web UI (WebGL2 shaders later). Built by CMake and embedded as the `UiBundle` target
 - `cmake/` - Pamplejuce CMake modules (Tests.cmake, Benchmarks.cmake, Assets.cmake, etc.); a git submodule, never edit
@@ -143,9 +143,9 @@ Note: clangd reads `Builds/compile_commands.json` (configured in `.clangd`), so 
 
 ## Visual Verification
 
-The agent can view PNGs. To check UI changes without the user, render the editor to an image via `runWithinPluginEditor` in `tests/helpers/test_helpers.h`: call `editor->createComponentSnapshot (editor->getLocalBounds(), true, 2.0f)`, write it with `juce::PNGImageFormat` into `Builds/`, run `./Builds/Tests "[snapshot]"`, then view the PNG. Delete temporary snapshot tests and images afterwards.
+The agent can view PNGs. To check UI changes without the user, render the editor to an image via `runWithinPluginEditor` in `tests/helpers/test_helpers.h`: call `editor->createComponentSnapshot (editor->getLocalBounds(), true, 2.0f)`, write it with `juce::PNGImageFormat` into `Builds/`, run `./Builds/Tests "[snapshot]"`, then view the PNG. Delete temporary snapshot tests and images afterwards. Pick the tab with `PluginProcessor::setEditorTab` before opening the editor. Opening an editor records its size in the user's real settings file (`lastEditorScale`), so tests that change the size must restore it.
 
-Snapshots can't capture the web view (it's a separate native window; it shows as a white box). To see the page, serve the built copy on loopback with `cd ui; npx vite preview --outDir ../Builds/ui --host 127.0.0.1 --port 4173 --strictPort`, open it in VS Code's browser, and stop the server afterwards. The real bridge is covered by the `[webview]` test, which loads the page in an off-screen web view.
+Snapshots can't capture the web view (it's a separate native window; it shows as a white box). To see the page, serve the built copy on loopback with `cd ui; npx vite preview --outDir ../Builds/ui --host 127.0.0.1 --port 4173 --strictPort`, open it in VS Code's browser, and stop the server afterwards. Outside the plugin the page shows "Bridge unavailable"; to see it with data, fake the bridge with a Playwright init script that defines `window.__JUCE__` (`initialisationData.__juce__functions` plus a `postMessage` that answers `__juce__invoke` via `backend.emitByBackend('__juce__complete', …)`). That browser doesn't raise `contextmenu` from real right-clicks, and Playwright's hit testing is off under the page's CSS zoom: dispatch such events from script. The real bridge is covered by the `[webview]` tests, which load the page in an off-screen web view.
 
 ## Includes
 

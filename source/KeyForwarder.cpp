@@ -102,7 +102,12 @@ void KeyForwarder::handleKeyEvent (const juce::var& event)
         {
             post (held->second, false, false);
             heldKeys.erase (held);
+            return;
         }
+
+        // Held since before the page had focus: the host saw it go down, so it must see it come up
+        if (const auto scanCode = findScanCode (codeName); scanCode.has_value() && (allowedChords.contains (codeName) || allowedChords.contains (ctrlPrefix + codeName)))
+            post (*scanCode, false, false);
 
         return;
     }
@@ -162,6 +167,17 @@ KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor)
 #else
     juce::ignoreUnused (editor);
     return [] (std::uint32_t, bool, bool) {};
+#endif
+}
+
+void KeyForwarder::giveFocusToHostOf (juce::Component& editor)
+{
+#if JUCE_WINDOWS
+    if (auto* peer = editor.getPeer())
+        if (const auto host = GetParent (static_cast<HWND> (peer->getNativeHandle())))
+            SetFocus (host);
+#else
+    juce::ignoreUnused (editor);
 #endif
 }
 

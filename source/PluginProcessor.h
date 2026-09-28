@@ -2,9 +2,11 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "EditorScale.h"
+#include "HostControls.h"
 #include "WebViewKeepAlive.h"
+#include "bridge/ControlSession.h"
 #include "engine/Engine.h"
-
 
 #if (MSVC)
     #include "ipps.h"
@@ -14,6 +16,9 @@
 inline constexpr auto serum2Path = R"(C:\Program Files\Common Files\VST3\Serum2.vst3)";
 inline constexpr auto sylenth1Path = R"(C:\Program Files\Common Files\VST3\Sylenth1.vst3)";
 inline constexpr auto eqPath = R"(C:\Program Files\Common Files\VST3\Kilohearts\kHs 3-Band EQ.vst3)";
+
+// The EQ's low band gain (named "Low"), the one parameter exposed until the user can choose
+inline constexpr auto eqLowGainID = "0";
 
 class PluginProcessor : public juce::AudioProcessor
 {
@@ -48,9 +53,28 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     Engine& getEngine() noexcept { return engine; }
+    HostControls& getHostControls() noexcept { return hostControls; }
+
+    // Every exposed parameter, for a page to control through its host control
+    std::vector<ControlSession::Parameter> createSessionParameters();
+
+    // Whether this instance's editor has had its first-open placement; saved with the instance
+    bool isEditorPlaced() const noexcept { return editorPlaced; }
+    void setEditorPlaced() noexcept { editorPlaced = true; }
+
+    // The editor's last tab and size (see EditorScale), saved with the instance; no size until it has had one
+    static constexpr int numEditorTabs = 3;
+    int getEditorTab() const noexcept { return editorTab; }
+    void setEditorTab (int tab) noexcept { editorTab = tab; }
+    std::optional<double> getEditorScale() const noexcept { return editorScale; }
+    void setEditorScale (double scale) noexcept { editorScale = scale; }
 
 private:
     Engine engine;
+    HostControls hostControls { *this };
+    bool editorPlaced = false;
+    int editorTab = 0;
+    std::optional<double> editorScale;
 
     // Keeps the editors' hidden web view (once an editor starts it) for as long as any instance exists
     juce::SharedResourcePointer<WebViewKeepAlive> webViewKeepAlive;

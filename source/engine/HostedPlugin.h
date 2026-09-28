@@ -25,6 +25,9 @@ public:
     // Automatable parameters only; VST3 plugins also expose ~2000 MIDI CC slots as parameters
     const std::vector<juce::AudioProcessorParameter*>& getControls() const noexcept { return controls; }
 
+    // The control with this plugin-given ID, or nullptr
+    juce::AudioProcessorParameter* findControl (const juce::String& parameterID) const;
+
     std::unique_ptr<juce::XmlElement> createStateXml() const;
     bool restoreStateFromXml (const juce::XmlElement& xml);
 

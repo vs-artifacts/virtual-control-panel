@@ -81,6 +81,8 @@ TEST_CASE ("A missing plugin leaves an empty slot with a message", "[engine]")
     CHECK (slot.getInstance() == nullptr);
     CHECK (slot.getLoadError().isNotEmpty());
     CHECK (slot.getName() == "no-such-plugin");
+    CHECK (engine.getSlotLabel (0) == "Generator 1");
+    CHECK_FALSE (engine.expose (0, "0"));
 }
 
 TEST_CASE ("Generator slots only accept instruments", "[engine][vst3]")
@@ -127,6 +129,19 @@ TEST_CASE ("Hosting the test VST3 as FX", "[engine][vst3]")
 
         state->setAttribute ("id", "VST3-Some Other Plugin-0-0");
         CHECK_FALSE (eq.restoreStateFromXml (*state));
+    }
+
+    SECTION ("exposes its controls by their plugin-given IDs")
+    {
+        CHECK (engine.getSlotLabel (0) == "FX 1");
+        CHECK_FALSE (engine.expose (0, "no such ID"));
+        CHECK_FALSE (engine.expose (1, eqLowGainID));
+        CHECK (engine.getExposedParameters().empty());
+
+        REQUIRE (engine.expose (0, eqLowGainID));
+        REQUIRE (engine.getExposedParameters().size() == 1);
+        CHECK (engine.getExposedParameters()[0].slot == 0);
+        CHECK (engine.getExposedParameters()[0].parameter->getName (64) == "Low");
     }
 }
 
@@ -232,6 +247,73 @@ TEST_CASE ("The fixed setup: both synths summed into the EQ", "[processor][synth
         processor.setStateInformation ("garbage", 7);
         CHECK (loudestAfterNote (render) > 0.001f);
     }
+
+    processor.releaseResources();
+}
+
+// One run through, because every processor loads all three plugins
+TEST_CASE ("The EQ's low band gain is exposed to the host as Param 1", "[processor][vst3]")
+{
+    if (!isInstalled (eqPath))
+        SKIP ("Not installed: " << eqPath);
+
+    using Catch::Matchers::WithinAbs;
+
+    PluginProcessor processor;
+    CHECK (processor.getParameters().size() == HostControls::count);
+
+    const auto& exposed = processor.getEngine().getExposedParameters();
+    REQUIRE (exposed.size() == 1);
+    auto& eqLow = *exposed[0].parameter;
+    auto& param1 = *processor.getParameters()[0];
+    CHECK (eqLow.getName (64) == "Low");
+    CHECK (param1.getName (64) == "Param 1");
+    CHECK (juce::exactlyEqual (param1.getValue(), eqLow.getValue()));
+    CHECK (param1.getCurrentValueAsText() == eqLow.getCurrentValueAsText());
+
+    // The host's changes (automation, controllers) reach the EQ
+    param1.setValue (0.8f);
+    CHECK_THAT (eqLow.getValue(), WithinAbs (0.8, 1e-6));
+
+    // Changes in the EQ's own window reach the host
+    eqLow.setValue (0.3f);
+    processor.getHostControls().reportTargetChanges();
+    CHECK_THAT (param1.getValue(), WithinAbs (0.3, 1e-6));
+
+    // The page's changes go through Param 1, so the host sees them
+    {
+        ControlSession session (processor.createSessionParameters());
+        const auto catalog = session.catalog();
+        REQUIRE (catalog.size() == 1);
+        CHECK (catalog[0]["slot"] == "FX 1");
+        CHECK (catalog[0]["plugin"] == processor.getEngine().getPlugins()[2]->getName());
+        CHECK (catalog[0]["name"] == "Low");
+        CHECK (catalog[0]["host"] == "Param 1");
+
+        session.applySet (juce::JSON::parse (R"([{ "h": 0, "v": 0.25 }])"));
+        CHECK_THAT (param1.getValue(), WithinAbs (0.25, 1e-6));
+        CHECK_THAT (eqLow.getValue(), WithinAbs (0.25, 1e-6));
+    }
+
+    // Restored state reaches Param 1 before the host reads it back
+    processor.prepareToPlay (testSampleRate, testBlockSize);
+    juce::AudioBuffer<float> buffer (2, testBlockSize);
+    juce::MidiBuffer midi;
+    const auto processOneBlock = [&] {
+        buffer.clear();
+        processor.processBlock (buffer, midi);
+    };
+
+    param1.setValue (0.7f);
+    processOneBlock();
+    juce::MemoryBlock saved;
+    processor.getStateInformation (saved);
+
+    param1.setValue (0.2f);
+    processOneBlock();
+    processor.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    CHECK_THAT (eqLow.getValue(), WithinAbs (0.7, 0.001));
+    CHECK_THAT (param1.getValue(), WithinAbs (eqLow.getValue(), 1e-6));
 
     processor.releaseResources();
 }

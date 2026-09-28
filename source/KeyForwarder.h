@@ -38,6 +38,9 @@ public:
     static Post postToHostOf (juce::Component& editor);
     static Modifiers readPhysicalModifiers();
 
+    // Moves keyboard focus to the window that hosts the editor, so the host gets keys directly (Windows only for now)
+    static void giveFocusToHostOf (juce::Component& editor);
+
 private:
     juce::StringArray allowedChords;
     Post post;

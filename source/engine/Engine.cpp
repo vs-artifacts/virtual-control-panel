@@ -116,6 +116,28 @@ bool Engine::isConnected (const HostedPlugin& source, const HostedPlugin& destin
            && graph.isConnected (source.getNodeID(), destination.getNodeID());
 }
 
+juce::String Engine::getSlotLabel (size_t slot) const
+{
+    const auto role = plugins[slot]->getRole();
+    const auto sameRoleBefore = std::count_if (plugins.begin(), plugins.begin() + static_cast<std::ptrdiff_t> (slot), [role] (const auto& p) { return p->getRole() == role; });
+
+    return juce::String (role == HostedPlugin::Role::generator ? "Generator " : "FX ") + juce::String (sameRoleBefore + 1);
+}
+
+bool Engine::expose (size_t slot, const juce::String& parameterID)
+{
+    if (slot >= plugins.size())
+        return false;
+
+    auto* parameter = plugins[slot]->findControl (parameterID);
+
+    if (parameter == nullptr)
+        return false;
+
+    exposed.push_back ({ slot, parameter });
+    return true;
+}
+
 void Engine::connectAudio (NodeID source, NodeID destination)
 {
     for (int channel = 0; channel < 2; ++channel)

@@ -1,10 +1,22 @@
 #include "WebUi.h"
 #include "bridge/UiFiles.h"
 
-WebUi::WebUi (const juce::String& helloReply, KeyForwarder& keys)
-    : WebBrowserComponent (createOptions (helloReply, keys))
+namespace
+{
+    juce::var describeDisplay (double scale)
+    {
+        auto* display = new juce::DynamicObject();
+        display->setProperty ("scale", scale);
+        return display;
+    }
+}
+
+WebUi::WebUi (const juce::String& helloReply, KeyForwarder& keys, ControlSession& sessionIn, Handlers handlers)
+    : WebBrowserComponent (createOptions (helloReply, keys, sessionIn, handlers, *this)),
+      session (sessionIn)
 {
     goToURL (getResourceProviderRoot());
+    startTimerHz (ControlSession::updateRateHz);
 }
 
 bool WebUi::isSupported()
@@ -77,7 +89,34 @@ bool WebUi::pageLoadHadNetworkError (const juce::String&)
     return false;
 }
 
-juce::WebBrowserComponent::Options WebUi::createOptions (const juce::String& helloReply, KeyForwarder& keys)
+void WebUi::timerCallback()
+{
+    // Skipped while hidden, so the page catches up on everything it missed once it's shown again
+    if (!isShowing())
+        return;
+
+    if (const auto scale = getDisplayScale(); !juce::approximatelyEqual (scale, sentDisplayScale))
+    {
+        sentDisplayScale = scale;
+        emitEventIfBrowserIsVisible ("display", describeDisplay (scale));
+    }
+
+    if (const auto changes = session.poll(); !changes.isVoid())
+        emitEventIfBrowserIsVisible ("params", changes);
+}
+
+double WebUi::getDisplayScale() const
+{
+    auto scale = static_cast<double> (getApproximateScaleFactorForComponent (this));
+
+    // The same factor JUCE applies when it positions the web view
+    if (auto* peer = getPeer())
+        scale *= peer->getPlatformScaleFactor();
+
+    return scale;
+}
+
+juce::WebBrowserComponent::Options WebUi::createOptions (const juce::String& helloReply, KeyForwarder& keys, ControlSession& session, const Handlers& handlers, WebUi& self)
 {
     auto options = createPlatformOptions()
                        .withKeepPageLoadedWhenBrowserIsHidden()
@@ -86,6 +125,33 @@ juce::WebBrowserComponent::Options WebUi::createOptions (const juce::String& hel
                        .withNativeFunction ("hello", [helloReply] (const juce::Array<juce::var>&, NativeFunctionCompletion complete) {
                            complete (helloReply);
                        })
+                       .withNativeFunction ("display", [&self] (const juce::Array<juce::var>&, NativeFunctionCompletion complete) {
+                           complete (describeDisplay (self.getDisplayScale()));
+                       })
+                       .withNativeFunction ("catalog", [&session] (const juce::Array<juce::var>&, NativeFunctionCompletion complete) {
+                           complete (session.catalog());
+                       })
+                       .withNativeFunction ("parameterMenu", [open = handlers.openParameterMenu] (const juce::Array<juce::var>& arguments, NativeFunctionCompletion complete) {
+                           complete (open != nullptr && arguments.size() == 1 ? open (arguments[0]) : juce::var());
+                       })
+                       .withEventListener ("menuChoice", [choose = handlers.chooseMenuItem] (const juce::var& choice) {
+                           if (choose != nullptr)
+                               choose (choice);
+                       })
+                       .withEventListener ("menuClosed", [close = handlers.closeMenu] (const juce::var&) {
+                           if (close != nullptr)
+                               close();
+                       })
+                       .withEventListener ("resize", [resize = handlers.resize] (const juce::var& drag) {
+                           if (resize != nullptr)
+                               resize (drag);
+                       })
+                       .withEventListener ("pointerDown", [pointerDown = handlers.pointerDown] (const juce::var& press) {
+                           if (pointerDown != nullptr)
+                               pointerDown (press);
+                       })
+                       .withEventListener ("set", [&session] (const juce::var& batch) { session.applySet (batch); })
+                       .withEventListener ("gesture", [&session] (const juce::var& gesture) { session.applyGesture (gesture); })
                        .withEventListener ("key", [&keys] (const juce::var& event) { keys.handleKeyEvent (event); })
                        .withEventListener ("releaseKeys", [&keys] (const juce::var&) { keys.releaseAll(); });
 

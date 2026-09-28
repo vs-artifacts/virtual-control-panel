@@ -1,3 +1,4 @@
+#include "helpers/ParameterHost.h"
 #include <WebUi.h>
 #include <WebViewKeepAlive.h>
 #include <bridge/UiFiles.h>
@@ -16,7 +17,7 @@ namespace
     // The web view only exists while it's on the desktop; far off screen keeps it out of the way
     struct OffscreenWebUi
     {
-        explicit OffscreenWebUi (KeyForwarder& keys) : webUi ("test reply", keys)
+        OffscreenWebUi (KeyForwarder& keys, ControlSession& session, WebUi::Handlers handlers = {}) : webUi ("test reply", keys, session, std::move (handlers))
         {
             window.setBounds (-10000, -10000, 400, 300);
             webUi.setBounds (window.getLocalBounds());
@@ -147,7 +148,8 @@ TEST_CASE ("The page loads in a real web view and reaches C++ through the bridge
         SKIP ("No supported web view on this system");
 
     KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
-    OffscreenWebUi page (keys);
+    ControlSession noParameters ({});
+    OffscreenWebUi page (keys, noParameters);
     CHECK (page.waitFor (bridgeStatus, connected) == connected);
 }
 
@@ -158,7 +160,8 @@ TEST_CASE ("Keys pressed on the page reach the key forwarder", "[webui][webview]
 
     std::vector<std::pair<std::uint32_t, bool>> posts;
     KeyForwarder keys ("KeyZ,Space", [&posts] (std::uint32_t scanCode, bool down, bool) { posts.emplace_back (scanCode, down); }, [] { return KeyForwarder::Modifiers {}; });
-    OffscreenWebUi page (keys);
+    ControlSession noParameters ({});
+    OffscreenWebUi page (keys, noParameters);
     REQUIRE (page.waitFor (bridgeStatus, connected) == connected);
     CHECK (page.evaluate ("window.__JUCE__.initialisationData.forwardedKeys.join()") == "KeyZ,Space");
 
@@ -174,10 +177,11 @@ TEST_CASE ("With the keep-alive running, the page reopens quickly", "[webui][web
         SKIP ("No supported web view on this system");
 
     KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
+    ControlSession noParameters ({});
     WebViewKeepAlive keepAlive;
 
     {
-        OffscreenWebUi first (keys);
+        OffscreenWebUi first (keys, noParameters);
         REQUIRE (first.waitFor (bridgeStatus, connected) == connected);
         keepAlive.start();
 
@@ -186,7 +190,117 @@ TEST_CASE ("With the keep-alive running, the page reopens quickly", "[webui][web
     }
 
     const auto started = juce::Time::getMillisecondCounterHiRes();
-    OffscreenWebUi second (keys);
+    OffscreenWebUi second (keys, noParameters);
     REQUIRE (second.waitFor (bridgeStatus, connected) == connected);
     CHECK (juce::Time::getMillisecondCounterHiRes() - started < 2000.0);
+}
+
+TEST_CASE ("The page's slider controls a parameter both ways", "[webui][webview]")
+{
+    if (!WebUi::isSupported())
+        SKIP ("No supported web view on this system");
+
+    HostLog log;
+    ParameterHost plugin;
+    plugin.addListener (&log);
+    auto& gain = plugin.addFloat ("gain");
+
+    {
+        KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
+        ControlSession session ({ { "FX 1", "Test plugin", "Gain", "Param 1", &gain, &gain } });
+        OffscreenWebUi page (keys, session);
+        REQUIRE (page.waitFor ("document.querySelectorAll('input[type=range]').length", "1") == "1");
+        CHECK (page.evaluate ("document.querySelector('.value-text').textContent") == gain.getCurrentValueAsText());
+
+        // A drag on the page: press, move, release (anywhere)
+        page.evaluate ("{ const slider = document.querySelector('input[type=range]');"
+                       "  slider.dispatchEvent (new PointerEvent ('pointerdown', { bubbles: true }));"
+                       "  slider.value = '0.75';"
+                       "  slider.dispatchEvent (new Event ('input', { bubbles: true }));"
+                       "  window.dispatchEvent (new PointerEvent ('pointerup')); }");
+        page.pumpUntil ([&log] { return log.gestures.size() >= 2; });
+
+        CHECK (juce::exactlyEqual (gain.getValue(), 0.75f));
+        CHECK (log.gestures == std::vector<std::pair<int, bool>> { { 0, true }, { 0, false } });
+
+        // A change from elsewhere (the plugin's own window, automation) shows on the page
+        gain.setValueNotifyingHost (0.25f);
+        CHECK (page.waitFor ("document.querySelector('input[type=range]').value", "0.25") == "0.25");
+        CHECK (page.waitFor ("document.querySelector('.value-text').textContent", gain.getCurrentValueAsText()) == gain.getCurrentValueAsText());
+    }
+
+    plugin.removeListener (&log);
+}
+
+TEST_CASE ("The page matches the plugin's scale, whatever the web view's own", "[webui][webview]")
+{
+    if (!WebUi::isSupported())
+        SKIP ("No supported web view on this system");
+
+    KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
+    ControlSession noParameters ({});
+    OffscreenWebUi page (keys, noParameters);
+    REQUIRE (page.waitFor (bridgeStatus, connected) == connected);
+
+    const auto pixelRatio = page.evaluate ("window.devicePixelRatio").getDoubleValue();
+    REQUIRE (pixelRatio > 0.0);
+
+    const auto expectedZoom = juce::String (page.webUi.getDisplayScale() / pixelRatio, 4);
+    CHECK (page.waitFor ("Number (document.documentElement.style.zoom).toFixed (4)", expectedZoom) == expectedZoom);
+}
+
+TEST_CASE ("Right-clicking a slider shows the host's options for its parameter", "[webui][webview]")
+{
+    if (!WebUi::isSupported())
+        SKIP ("No supported web view on this system");
+
+    ParameterHost plugin;
+    auto& gain = plugin.addFloat ("gain");
+    juce::var askedFor;
+    juce::var chosen;
+
+    WebUi::Handlers handlers;
+    handlers.openParameterMenu = [&askedFor] (const juce::var& handle) {
+        askedFor = handle;
+        return juce::JSON::parse (R"({ "native": false, "items": [{ "header": "Param 1" }, { "id": 0, "text": "Create automation clip", "enabled": true, "checked": false }] })");
+    };
+    handlers.chooseMenuItem = [&chosen] (const juce::var& choice) { chosen = choice; };
+
+    KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
+    ControlSession session ({ { "FX 1", "Test plugin", "Gain", "Param 1", &gain, &gain } });
+    OffscreenWebUi page (keys, session, std::move (handlers));
+    REQUIRE (page.waitFor ("document.querySelectorAll('input[type=range]').length", "1") == "1");
+
+    page.evaluate ("document.querySelector('input[type=range]').dispatchEvent (new MouseEvent ('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 60 }))");
+    CHECK (page.waitFor ("document.querySelector('.context-menu button')?.textContent.trim() ?? ''", "Create automation clip") == "Create automation clip");
+    CHECK (static_cast<int> (askedFor) == 0);
+
+    page.evaluate ("document.querySelector('.context-menu button').click()");
+    page.pumpUntil ([&chosen] { return !chosen.isVoid(); });
+    CHECK (static_cast<int> (chosen["id"]) == 0);
+    CHECK (page.waitFor ("String (document.querySelector('.context-menu') === null)", "true") == "true");
+}
+
+TEST_CASE ("The page's corner grips resize the plugin", "[webui][webview]")
+{
+    if (!WebUi::isSupported())
+        SKIP ("No supported web view on this system");
+
+    juce::StringArray messages;
+
+    WebUi::Handlers handlers;
+    handlers.resize = [&messages] (const juce::var& drag) { messages.add (drag["corner"].toString() + " " + drag["phase"].toString()); };
+    handlers.pointerDown = [&messages] (const juce::var& press) { messages.add (press["textEntry"].isBool() && !static_cast<bool> (press["textEntry"]) ? "pointer down, not in a text field" : "pointer down, other"); };
+
+    KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
+    ControlSession noParameters ({});
+    OffscreenWebUi page (keys, noParameters, std::move (handlers));
+    REQUIRE (page.waitFor ("document.querySelectorAll('.grip').length", "2") == "2");
+
+    page.evaluate ("{ const grip = document.querySelector('.grip.bottomRight');"
+                   "  grip.dispatchEvent (new PointerEvent ('pointerdown', { bubbles: true, cancelable: true, button: 0 }));"
+                   "  grip.dispatchEvent (new PointerEvent ('pointerup', { bubbles: true })); }");
+    page.pumpUntil ([&messages] { return messages.size() >= 3; });
+
+    CHECK (messages == juce::StringArray { "pointer down, not in a text field", "bottomRight start", "bottomRight end" });
 }

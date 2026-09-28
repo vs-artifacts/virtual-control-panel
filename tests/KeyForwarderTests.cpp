@@ -89,9 +89,17 @@ TEST_CASE ("Forwarded keys", "[keys]")
         CHECK (host.posts == std::vector<Post> { { scanZ, true, false }, { scanZ, true, true } });
     }
 
+    SECTION ("releases pass even for keys held since before the page had focus")
+    {
+        keys.handleKeyEvent (keyEvent ("Space", false));
+        host.modifiers.shift = true;
+        keys.handleKeyEvent (keyEvent ("KeyZ", false));
+        CHECK (host.posts == std::vector<Post> { { scanSpace, false, false }, { scanZ, false, false } });
+    }
+
     SECTION ("everything else is ignored")
     {
-        for (const auto& event : { juce::var(), juce::var ("KeyZ"), keyEvent (5, true), keyEvent ("KeyZ", {}), keyEvent ("KeyZ", "yes"), keyEvent ("Escape", true), keyEvent ("F4", true), keyEvent ("Ctrl+Space", true), keyEvent ("KeyZ ", true), keyEvent (juce::String::repeatedString ("KeyZ", 10000), true), keyEvent ("Space", false) })
+        for (const auto& event : { juce::var(), juce::var ("KeyZ"), keyEvent (5, true), keyEvent ("KeyZ", {}), keyEvent ("KeyZ", "yes"), keyEvent ("Escape", true), keyEvent ("Escape", false), keyEvent ("F4", true), keyEvent ("Ctrl+Space", true), keyEvent ("Ctrl+Space", false), keyEvent ("KeyZ ", true), keyEvent (juce::String::repeatedString ("KeyZ", 10000), true), keyEvent (juce::String::repeatedString ("KeyZ", 10000), false) })
             keys.handleKeyEvent (event);
 
         CHECK (host.posts.empty());
@@ -135,6 +143,14 @@ TEST_CASE ("Forwarded key chords come from a list", "[keys]")
         CHECK (chords == juce::StringArray { "KeyA", "Ctrl+KeyB" });
     }
 
+    SECTION ("releases pass only for keys on the list")
+    {
+        auto keys = host.makeForwarder ("Ctrl+KeyB");
+        keys.handleKeyEvent (keyEvent ("KeyA", false));
+        keys.handleKeyEvent (keyEvent ("KeyB", false));
+        CHECK (host.posts == std::vector<Post> { { 0x30, false, false } });
+    }
+
     SECTION ("keys still held when the forwarder goes away are released")
     {
         {
@@ -154,9 +170,19 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
         PluginSettings settings (file);
         CHECK (settings.getKeepWebViewWarm());
         CHECK (settings.getForwardedKeys() == KeyForwarder::defaultChords);
+        CHECK (settings.getResizing() == EditorScale::Resizing::smooth);
+        CHECK (juce::exactlyEqual (settings.getLastEditorScale(), 1.0));
+        CHECK_FALSE (settings.getUseHostMenus());
+        CHECK_FALSE (settings.getKeepKeyboardFocusInHost());
+
         settings.setKeepWebViewWarm (false);
+        settings.setResizing (EditorScale::Resizing::sharp);
+        settings.setLastEditorScale (99.0);
     }
 
-    CHECK_FALSE (PluginSettings (file).getKeepWebViewWarm());
+    PluginSettings reloaded (file);
+    CHECK_FALSE (reloaded.getKeepWebViewWarm());
+    CHECK (reloaded.getResizing() == EditorScale::Resizing::sharp);
+    CHECK (juce::exactlyEqual (reloaded.getLastEditorScale(), EditorScale::maximum));
     file.deleteFile();
 }

@@ -70,6 +70,15 @@ juce::String HostedPlugin::getName() const
     return instance != nullptr ? instance->getName() : file.getFileNameWithoutExtension();
 }
 
+juce::AudioProcessorParameter* HostedPlugin::findControl (const juce::String& parameterID) const
+{
+    for (auto* control : controls)
+        if (auto* withID = dynamic_cast<juce::HostedAudioProcessorParameter*> (control); withID != nullptr && withID->getParameterID() == parameterID)
+            return control;
+
+    return nullptr;
+}
+
 std::unique_ptr<juce::XmlElement> HostedPlugin::createStateXml() const
 {
     if (instance == nullptr)

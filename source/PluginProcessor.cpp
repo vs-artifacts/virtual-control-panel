@@ -13,6 +13,14 @@ PluginProcessor::PluginProcessor()
       )
 {
     engine.build ({ juce::File (serum2Path), juce::File (sylenth1Path) }, { juce::File (eqPath) });
+    engine.expose (2, eqLowGainID); // slot 2: the EQ, after the two generators
+
+    // Exposed parameter i is bound to host control i
+    const auto& exposed = engine.getExposedParameters();
+    jassert (exposed.size() <= HostControls::count);
+
+    for (size_t i = 0; i < exposed.size(); ++i)
+        hostControls.bind (static_cast<int> (i), *exposed[i].parameter);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -146,6 +154,12 @@ juce::AudioProcessorEditor* PluginProcessor::createEditor()
 void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::XmlElement state ("HeartseekerPanelState");
+    state.setAttribute ("editorPlaced", editorPlaced);
+    state.setAttribute ("editorTab", editorTab);
+
+    if (editorScale.has_value())
+        state.setAttribute ("editorScale", *editorScale);
+
     state.addChildElement (engine.createStateXml().release());
     copyXmlToBinary (state, destData);
 }
@@ -154,8 +168,40 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     // nullptr if the data isn't valid saved XML (e.g. a corrupt project file)
     if (auto state = getXmlFromBinary (data, sizeInBytes))
+    {
+        editorPlaced = state->getBoolAttribute ("editorPlaced");
+        editorTab = juce::jlimit (0, numEditorTabs - 1, state->getIntAttribute ("editorTab"));
+
+        if (state->hasAttribute ("editorScale"))
+            editorScale = EditorScale::constrain (state->getDoubleAttribute ("editorScale"), EditorScale::Resizing::smooth, 1.0);
+
         if (auto* engineState = state->getChildByName (Engine::stateTag))
             engine.restoreStateFromXml (*engineState);
+
+        // The host reads our controls' values after this, so they must already match the restored plugins
+        hostControls.syncWithoutNotifying();
+    }
+}
+
+std::vector<ControlSession::Parameter> PluginProcessor::createSessionParameters()
+{
+    std::vector<ControlSession::Parameter> parameters;
+    const auto& exposed = engine.getExposedParameters();
+
+    for (size_t i = 0; i < exposed.size(); ++i)
+    {
+        const auto& [slot, parameter] = exposed[i];
+        auto& hostControl = hostControls[static_cast<int> (i)];
+
+        parameters.push_back ({ engine.getSlotLabel (slot),
+            engine.getPlugins()[slot]->getName(),
+            parameter->getName (ControlSession::maxTextLength),
+            hostControl.getName (ControlSession::maxTextLength),
+            parameter,
+            &hostControl });
+    }
+
+    return parameters;
 }
 
 //==============================================================================
