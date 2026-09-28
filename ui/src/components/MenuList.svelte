@@ -1,39 +1,88 @@
 <script lang="ts">
+    import { viewportSize } from "../lib/display.svelte";
     import { chooseMenuItem, type MenuItem } from "../lib/menu.svelte";
     import MenuList from "./MenuList.svelte";
 
-    let { items }: { items: MenuItem[] } = $props();
+    // In page pixels: x is where the left edge goes; if the list doesn't fit there, its right edge goes at flipX
+    let {
+        items,
+        x,
+        y,
+        flipX,
+    }: { items: MenuItem[]; x: number; y: number; flipX: number } = $props();
+
+    // Each list is its own panel on top of the page, kept inside the page; a tall one scrolls
+    const maxHeight = viewportSize().height;
+
+    let panel: HTMLElement | undefined = $state();
+    let left = $state(0);
+    let top = $state(0);
+    let submenu: { index: number; x: number; y: number; flipX: number } | null =
+        $state(null);
+
+    $effect(() => {
+        if (panel === undefined) return;
+
+        const viewport = viewportSize();
+        const width = panel.offsetWidth;
+        const placed = x + width <= viewport.width ? x : flipX - width;
+
+        left = Math.max(0, Math.min(placed, viewport.width - width));
+        top = Math.max(0, Math.min(y, viewport.height - panel.offsetHeight));
+    });
+
+    // Next to its item, with its first item level with it (4px padding and 1px border)
+    function openSubmenu(index: number, button: HTMLElement) {
+        if (panel === undefined) return;
+
+        submenu = {
+            index,
+            x: left + panel.offsetWidth - 2,
+            y: top + button.offsetTop - panel.scrollTop - 5,
+            flipX: left + 2,
+        };
+    }
+
+    function closeSubmenu() {
+        submenu = null;
+    }
 </script>
 
-<div class="menu-list" role="menu">
+<div
+    class="menu-list"
+    role="menu"
+    bind:this={panel}
+    style:left="{left}px"
+    style:top="{top}px"
+    style:max-height="{maxHeight}px"
+>
     {#each items as item, index (index)}
         {#if item.kind === "separator"}
             <div class="separator" role="separator"></div>
         {:else if item.kind === "header"}
             <div class="header">{item.text}</div>
         {:else if item.kind === "submenu"}
-            <div class="submenu">
-                <button
-                    type="button"
-                    role="menuitem"
-                    aria-haspopup="menu"
-                    disabled={!item.enabled}
+            <button
+                type="button"
+                role="menuitem"
+                aria-haspopup="menu"
+                aria-expanded={submenu?.index === index}
+                class:open={submenu?.index === index}
+                disabled={!item.enabled}
+                onpointerenter={(event) =>
+                    openSubmenu(index, event.currentTarget)}
+                onclick={(event) => openSubmenu(index, event.currentTarget)}
+            >
+                <span class="check"></span>{item.text}<span class="arrow"
+                    >▸</span
                 >
-                    <span class="check"></span>{item.text}<span class="arrow"
-                        >▸</span
-                    >
-                </button>
-                {#if item.enabled}
-                    <div class="child">
-                        <MenuList items={item.items} />
-                    </div>
-                {/if}
-            </div>
+            </button>
         {:else}
             <button
                 type="button"
                 role="menuitem"
                 disabled={!item.enabled}
+                onpointerenter={closeSubmenu}
                 onclick={() => chooseMenuItem(item.id)}
             >
                 <span class="check">{item.checked ? "✓" : ""}</span>{item.text}
@@ -42,11 +91,29 @@
     {/each}
 </div>
 
+{#if submenu !== null}
+    {@const child = items[submenu.index]}
+    {#if child?.kind === "submenu"}
+        {#key submenu.index}
+            <MenuList
+                items={child.items}
+                x={submenu.x}
+                y={submenu.y}
+                flipX={submenu.flipX}
+            />
+        {/key}
+    {/if}
+{/if}
+
 <style>
     .menu-list {
+        position: fixed;
+        z-index: 100;
+        box-sizing: border-box;
+        overflow-y: auto;
         min-width: 180px;
         padding: 4px 0;
-        background: rgba(30, 34, 64, 0.92);
+        background: rgba(30, 34, 64, 0.96);
         border: 1px solid rgba(255, 255, 255, 0.18);
         border-radius: 6px;
         box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
@@ -66,7 +133,7 @@
     }
 
     button:not(:disabled):hover,
-    .submenu:hover > button:not(:disabled) {
+    button.open {
         background: rgba(255, 255, 255, 0.12);
     }
 
@@ -95,21 +162,5 @@
         height: 1px;
         margin: 4px 0;
         background: rgba(255, 255, 255, 0.15);
-    }
-
-    .submenu {
-        position: relative;
-    }
-
-    .child {
-        display: none;
-        position: absolute;
-        top: -5px;
-        left: 100%;
-    }
-
-    .submenu:hover > .child,
-    .submenu:focus-within > .child {
-        display: block;
     }
 </style>

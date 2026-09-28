@@ -1,4 +1,5 @@
 #include "KeyForwarder.h"
+#include <juce_audio_processors/juce_audio_processors.h>
 
 #if JUCE_WINDOWS
     #define NOMINMAX
@@ -145,8 +146,9 @@ KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor)
 #if JUCE_WINDOWS
     // Remembered, so key releases still arrive after the editor's own window has gone
     auto host = std::make_shared<HWND> (nullptr);
+    const auto isFlStudio = juce::PluginHostType().isFruityLoops();
 
-    return [&editor, host] (std::uint32_t scanCode, bool down, bool isRepeat) {
+    return [&editor, host, isFlStudio] (std::uint32_t scanCode, bool down, bool isRepeat) {
         if (down)
             if (auto* peer = editor.getPeer())
                 *host = GetParent (static_cast<HWND> (peer->getNativeHandle()));
@@ -155,6 +157,8 @@ KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor)
             return;
 
         // The same messages JUCE passes to the host window for keys the editor doesn't use
+        const auto message = static_cast<UINT> (down ? WM_KEYDOWN : WM_KEYUP);
+        const auto virtualKey = MapVirtualKeyW (scanCode, MAPVK_VSC_TO_VK);
         auto flags = 1u | (scanCode << 16);
 
         if (!down)
@@ -162,22 +166,21 @@ KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor)
         else if (isRepeat)
             flags |= 0x40000000u;
 
-        PostMessageW (*host, down ? WM_KEYDOWN : WM_KEYUP, MapVirtualKeyW (scanCode, MAPVK_VSC_TO_VK), static_cast<LPARAM> (flags));
+        // FL Studio's Delphi message loop hands keys to FL's own controls (as VCL "control notifications", CN_BASE + message)
+        // unless a window has captured the mouse, as ours does during a drag. Then only direct delivery reaches them.
+        if (isFlStudio && GetCapture() != nullptr)
+        {
+            constexpr UINT vclControlNotificationBase = 0xBC00;
+
+            if (SendMessageW (*host, vclControlNotificationBase + message, virtualKey, static_cast<LPARAM> (flags)) != 0)
+                return;
+        }
+
+        PostMessageW (*host, message, virtualKey, static_cast<LPARAM> (flags));
     };
 #else
     juce::ignoreUnused (editor);
     return [] (std::uint32_t, bool, bool) {};
-#endif
-}
-
-void KeyForwarder::giveFocusToHostOf (juce::Component& editor)
-{
-#if JUCE_WINDOWS
-    if (auto* peer = editor.getPeer())
-        if (const auto host = GetParent (static_cast<HWND> (peer->getNativeHandle())))
-            SetFocus (host);
-#else
-    juce::ignoreUnused (editor);
 #endif
 }
 

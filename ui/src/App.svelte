@@ -1,10 +1,18 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import ContextMenu from "./components/ContextMenu.svelte";
+  import PluginsTab from "./components/PluginsTab.svelte";
   import ResizeGrips from "./components/ResizeGrips.svelte";
+  import SettingsTab from "./components/SettingsTab.svelte";
   import Slider from "./components/Slider.svelte";
   import { fetchCatalog, hello, isInsidePlugin } from "./lib/bridge";
-  import { followDisplayScale } from "./lib/display";
+  import { followDisplayScale } from "./lib/display.svelte";
+  import {
+    editor,
+    loadEditorState,
+    showTab,
+    tabNames,
+  } from "./lib/editor.svelte";
   import { controls, listenForChanges, loadCatalog } from "./lib/params.svelte";
 
   const insidePlugin = isInsidePlugin();
@@ -12,11 +20,13 @@
 
   onMount(async () => {
     if (!insidePlugin) {
+      editor.ready = true;
       status = "Bridge unavailable (not running inside the plugin)";
       return;
     }
 
     void followDisplayScale();
+    void loadEditorState();
 
     try {
       status = `Bridge connected: ${await hello()}`;
@@ -36,14 +46,36 @@
   });
 </script>
 
-<main>
-  <h1>heartseeker panel</h1>
-  <p id="bridge-status">{status}</p>
+<div class="editor">
+  <div class="tab-bar" role="tablist">
+    {#each tabNames as name, index (name)}
+      <button
+        type="button"
+        role="tab"
+        aria-selected={editor.tab === index}
+        class:selected={editor.tab === index}
+        onclick={() => showTab(index)}>{name}</button
+      >
+    {/each}
+  </div>
 
-  {#each controls.params as param (param.h)}
-    <Slider {param} />
-  {/each}
-</main>
+  <main>
+    {#if editor.ready}
+      {#if editor.tab === 1}
+        <PluginsTab />
+      {:else if editor.tab === 2}
+        <SettingsTab />
+      {:else}
+        <h1>heartseeker panel</h1>
+        <p id="bridge-status">{status}</p>
+
+        {#each controls.params as param (param.h)}
+          <Slider {param} />
+        {/each}
+      {/if}
+    {/if}
+  </main>
+</div>
 
 <ContextMenu />
 
@@ -52,7 +84,43 @@
 {/if}
 
 <style>
+  .editor {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Leaves room for the top corner grips */
+  .tab-bar {
+    display: flex;
+    gap: 2px;
+    padding: 0 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  }
+
+  .tab-bar button {
+    padding: 6px 14px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: none;
+    color: inherit;
+    font: inherit;
+    opacity: 0.7;
+  }
+
+  .tab-bar button:hover {
+    opacity: 1;
+  }
+
+  .tab-bar button.selected {
+    border-bottom-color: #8fa2ff;
+    opacity: 1;
+  }
+
   main {
+    flex: 1;
+    overflow-y: auto;
     padding: 12px 16px;
   }
 

@@ -1,17 +1,16 @@
 #pragma once
 
-#include "PluginSettings.h"
 #include "bridge/ControlSession.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 
-// Right-click menus for exposed parameters, listing the host's own options for them (e.g. FL Studio's
-// "Create automation clip"): drawn by our page in our style, or shown by the host itself if the user prefers
+// Right-click menus for exposed parameters, drawn by our page in our style. For now they hold one submenu,
+// "Host menu": the host's own options for that parameter (e.g. FL Studio's "Create automation clip").
 class HostMenus
 {
 public:
-    HostMenus (juce::AudioProcessorEditor&, ControlSession&, PluginSettings&);
+    HostMenus (juce::AudioProcessorEditor&, ControlSession&);
 
-    // The page's "parameterMenu" call with a handle: { native, items }, where native means the host showed its own menu
+    // The page's "parameterMenu" call with a handle: { items }
     juce::var open (const juce::var& handle);
 
     // The page's "menuChoice" message: { id }. Runs that item, then forgets the menu.
@@ -28,7 +27,6 @@ public:
 private:
     juce::AudioProcessorEditor& editor;
     ControlSession& session;
-    PluginSettings& settings;
     std::vector<std::function<void()>> actions;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HostMenus)

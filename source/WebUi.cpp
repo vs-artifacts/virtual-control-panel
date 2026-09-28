@@ -1,16 +1,6 @@
 #include "WebUi.h"
 #include "bridge/UiFiles.h"
 
-namespace
-{
-    juce::var describeDisplay (double scale)
-    {
-        auto* display = new juce::DynamicObject();
-        display->setProperty ("scale", scale);
-        return display;
-    }
-}
-
 WebUi::WebUi (const juce::String& helloReply, KeyForwarder& keys, ControlSession& sessionIn, Handlers handlers)
     : WebBrowserComponent (createOptions (helloReply, keys, sessionIn, handlers, *this)),
       session (sessionIn)
@@ -95,10 +85,10 @@ void WebUi::timerCallback()
     if (!isShowing())
         return;
 
-    if (const auto scale = getDisplayScale(); !juce::approximatelyEqual (scale, sentDisplayScale))
+    if (const auto display = describeDisplay(); juce::JSON::toString (display) != sentDisplay)
     {
-        sentDisplayScale = scale;
-        emitEventIfBrowserIsVisible ("display", describeDisplay (scale));
+        sentDisplay = juce::JSON::toString (display);
+        emitEventIfBrowserIsVisible ("display", display);
     }
 
     if (const auto changes = session.poll(); !changes.isVoid())
@@ -107,13 +97,28 @@ void WebUi::timerCallback()
 
 double WebUi::getDisplayScale() const
 {
-    auto scale = static_cast<double> (getApproximateScaleFactorForComponent (this));
+    auto scale = uiScale * getApproximateScaleFactorForComponent (this);
 
     // The same factor JUCE applies when it positions the web view
     if (auto* peer = getPeer())
         scale *= peer->getPlatformScaleFactor();
 
     return scale;
+}
+
+void WebUi::setUiScale (double scale)
+{
+    uiScale = scale;
+}
+
+juce::var WebUi::describeDisplay() const
+{
+    auto* display = new juce::DynamicObject();
+    display->setProperty ("scale", getDisplayScale());
+    display->setProperty ("uiScale", uiScale);
+    display->setProperty ("width", getWidth());
+    display->setProperty ("height", getHeight());
+    return display;
 }
 
 juce::WebBrowserComponent::Options WebUi::createOptions (const juce::String& helloReply, KeyForwarder& keys, ControlSession& session, const Handlers& handlers, WebUi& self)
@@ -126,29 +131,16 @@ juce::WebBrowserComponent::Options WebUi::createOptions (const juce::String& hel
                            complete (helloReply);
                        })
                        .withNativeFunction ("display", [&self] (const juce::Array<juce::var>&, NativeFunctionCompletion complete) {
-                           complete (describeDisplay (self.getDisplayScale()));
+                           complete (self.describeDisplay());
                        })
                        .withNativeFunction ("catalog", [&session] (const juce::Array<juce::var>&, NativeFunctionCompletion complete) {
                            complete (session.catalog());
                        })
+                       .withNativeFunction ("editorState", [describe = handlers.describeEditor] (const juce::Array<juce::var>&, NativeFunctionCompletion complete) {
+                           complete (describe != nullptr ? describe() : juce::var());
+                       })
                        .withNativeFunction ("parameterMenu", [open = handlers.openParameterMenu] (const juce::Array<juce::var>& arguments, NativeFunctionCompletion complete) {
                            complete (open != nullptr && arguments.size() == 1 ? open (arguments[0]) : juce::var());
-                       })
-                       .withEventListener ("menuChoice", [choose = handlers.chooseMenuItem] (const juce::var& choice) {
-                           if (choose != nullptr)
-                               choose (choice);
-                       })
-                       .withEventListener ("menuClosed", [close = handlers.closeMenu] (const juce::var&) {
-                           if (close != nullptr)
-                               close();
-                       })
-                       .withEventListener ("resize", [resize = handlers.resize] (const juce::var& drag) {
-                           if (resize != nullptr)
-                               resize (drag);
-                       })
-                       .withEventListener ("pointerDown", [pointerDown = handlers.pointerDown] (const juce::var& press) {
-                           if (pointerDown != nullptr)
-                               pointerDown (press);
                        })
                        .withEventListener ("set", [&session] (const juce::var& batch) { session.applySet (batch); })
                        .withEventListener ("gesture", [&session] (const juce::var& gesture) { session.applyGesture (gesture); })
@@ -157,6 +149,10 @@ juce::WebBrowserComponent::Options WebUi::createOptions (const juce::String& hel
 
     for (const auto& chord : keys.getAllowedChords())
         options = options.withInitialisationData ("forwardedKeys", chord);
+
+    for (const auto& [name, handler] : handlers.events)
+        if (handler != nullptr)
+            options = options.withEventListener (name, handler);
 
     return options;
 }

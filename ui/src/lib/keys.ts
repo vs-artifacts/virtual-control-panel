@@ -1,5 +1,4 @@
 import '@juce-framework/webview'
-import { sendPointerDown } from './bridge'
 
 // Keys the host should get (e.g. FL Studio's typing keyboard) go to C++, which decides what actually passes;
 // this list only stops those keys also acting on the page
@@ -17,11 +16,6 @@ export function isTextEntry(target: EventTarget | null): boolean {
     if (target instanceof HTMLInputElement) return !nonTextInputTypes.has(target.type)
 
     return target.isContentEditable || target.matches('textarea, select')
-}
-
-// Lets the plugin hand keyboard focus back to the host after clicks outside text fields (an experimental setting)
-export function reportPointerDowns(): void {
-    window.addEventListener('pointerdown', (event) => sendPointerDown(isTextEntry(event.target)), { capture: true })
 }
 
 export function forwardHostKeys(): void {

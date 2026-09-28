@@ -165,11 +165,11 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
 
 ### Keys on focused controls
 - Sliders, checkboxes and buttons don't count as text entry, so forwarded keys still reach the host while they have focus. Text fields and selects keep their keys.
-- **"FL default"** (the user's name for how other plugins behave in FL; match it, maybe make it configurable later): keys pass through while the mouse is pressed anywhere in the plugin. A key held when a text field gains focus keeps sounding in the host until released, while new keys go into the field; once it's released, no keys pass while a text field has focus. Our editor currently passes no keys during a mouse press anywhere in it (first pass: "1b.2 wrap-up").
+- **"FL default"** (the user's name for how other plugins behave in FL; match it, maybe make it configurable later): keys pass through while the mouse is pressed anywhere in the plugin. A key held when a text field gains focus keeps sounding in the host until released, while new keys go into the field; once it's released, no keys pass while a text field has focus. Keys now pass during a mouse press in FL ("1b.2 wrap-up", Keys); the text-field part is still to do.
 
 ### Editor placement
 - **First open only,** per instance (a flag in the instance's saved state), so windows stay where the user puts them.
-- **Plugin-wide setting** (`editorPlacement`, combo box in the editor): off / the monitor the host opened it on (default; safe for attached windows) / the monitor under the mouse / the monitor with the host's main window. Centres in the monitor's work area; a window bigger than the monitor keeps its top-left corner on screen.
+- **Plugin-wide setting** (`editorPlacement`, on the Settings tab): off / the monitor the host opened it on (default; safe for attached windows) / the monitor under the mouse / the monitor with the host's main window. Centres in the monitor's work area; a window bigger than the monitor keeps its top-left corner on screen.
 - **Detection, not host settings:** FL's detach setting isn't read (undocumented, version-specific). Only an *owned* top-level window moves (a floating window, such as FL's detached plugin windows). An unowned top-level window is the host's main window with the editor attached inside it, or our standalone window; it stays put. Windows only; macOS later.
 
 ### Benchmarks (Release, `Builds-Release/Benchmarks "[sync]"`, Serum 2 with all 541 controls exposed)
@@ -188,40 +188,50 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
 - Not testable yet: a hardware controller link (none at hand), and what happens to automation when a plugin is swapped (no swap UI: 1b.3).
 - Findings, handled in the wrap-up below: the web view scaled to the monitor (200%) while the JUCE part followed FL (100%); right-click showed the browser's menu instead of the host's options; no keys pass while the mouse is pressed anywhere in our editor.
 
-## 1b.2 wrap-up (2026-09-27)
+## 1b.2 wrap-up (2026-09-27; second round 2026-09-28)
+
+### Whole UI in the web view (second round)
+- **The editor is only the web view,** filling it; tabs, plugin list, settings, corner grips and menus are all page code. JUCE draws nothing but a placeholder colour (and a message if no web view is available). Reason: the JUCE content was scaled with a transform, which doesn't move the native web view, so it stayed at its first size.
+- **Page messages:** `editorState` (native function: title, tab, settings, plugin rows); events `tab {index}`, `setting {name, value}`, `resetSize`, `openPlugin {slot}`, `resize {corner, phase}`. C++ validates each (tab index in range, known setting names and values only, slot in range); the page validates every reply. Before `editorState` replies the page shows no tab content, so it doesn't flash the wrong tab.
+- **Hosted plugin editors** open in separate always-on-top windows (`HostedEditorWindows`), one per slot; opening again brings it to the front.
+- **Dropped:** the "Inspect the UI" button (Melatonin inspects JUCE components, and there are none left to inspect), the key log, and the "keep keyboard focus in the host" experiment (both solved by the keys fix below; the log is recoverable from commit `fb37620`).
 
 ### Tabs
-- **Panel** (the web view only), **Plugins** (the temporary plugin list and "Open window" buttons; the swap buttons come in 1b.3), **Settings** (every setting, the title and version, "Inspect the UI", and in Debug builds the key log).
+- **Panel** (sliders), **Plugins** (the temporary plugin list and "Open window" buttons; the swap buttons come in 1b.3), **Settings** (every setting, the title and version).
 - Each instance reopens on the tab it was closed at (saved with the instance); new instances open on Panel.
-- The whole Plugins tab is temporary: it becomes part of the web UI on the Panel tab later, in our own style.
+- The whole Plugins tab is temporary: it becomes part of the panel later, in our own style.
 
 ### Scaling and resizing
-- **The page follows the plugin's scale, not the monitor's.** The web view renders at the monitor's scale; the host decides the plugin window's (FL keeps plugins at 100% on a 200% monitor). C++ sends the page its scale in physical pixels per pixel (`display`), and the page zooms its root by that ÷ its own pixel ratio. Anything that measures pixels in the page (WebGL canvases later) must allow for that zoom.
-- **The whole UI scales; nothing rearranges.** The editor's content is laid out at the design size (560 × 600) and scaled as a whole; the web view zooms to match. Fixed aspect ratio for now, until the full UI's aspect ratio is decided.
-- **Resize from any corner.** JUCE handles in all four corners; the page draws its own bottom two, because the web view covers the JUCE ones there. Dragging a top or left corner also moves a floating window so the corner stays under the pointer (same "owned window" rule as placement); attached windows grow down and right. The host's own window frame may also resize the plugin; JUCE's VST3 wrapper then applies only the limits and aspect ratio, so those resizes are always smooth.
+- **The page follows the plugin's scale, not the monitor's.** The web view renders at the monitor's scale; the host decides the plugin window's (FL keeps plugins at 100% on a 200% monitor). C++ sends the page its scale in physical pixels per page pixel (`display`: host scale × our UI scale), and the page zooms its root by that ÷ its own pixel ratio. Anything that measures pixels in the page (WebGL canvases later) must allow for that zoom.
+- **The whole UI scales; nothing rearranges.** The page is always laid out at the design size (560 × 600) and zoomed to fill the window. Fixed aspect ratio for now, until the full UI's aspect ratio is decided.
+- **Only our own corner grips resize** (all four, drawn by the page; C++ follows the pointer). The host's window frame no longer resizes the plugin: the editor isn't marked resizable, because the wrapper's own resizing ignores our sharp steps and window moves.
+- **"Resize from" setting** (`resizeAnchor`): the opposite corner stays put (default), or the window's center does. Hosts grow windows from their top-left corner, so for either anchor we move the window to compensate; only floating windows can move (same "owned window" rule as placement), attached ones always grow down and right.
 - **Limits:** 50% to 500% of the design size (500% should fill a 16k screen once the full panel is built and larger by default; windows stranded off screen can be recovered by any visible corner or FL's "bring windows back").
-- **Resizing setting** (`resizing`): smooth, or sharp steps. Sharp keeps 1-pixel lines crisp, which needs a whole number of physical pixels per design pixel (monitor × host × ours), so the steps are 100%, 200%, … on a 100% monitor (133%, 200%, … on 150%). Other step options can be added later if needed.
+- **Resizing setting** (`resizing`): smooth, or sharp steps. Sharp keeps 1-pixel lines crisp, which needs a whole number of physical pixels per design pixel (monitor × host × ours), so the steps are 100%, 200%, … on a 100% monitor (133%, 200%, … on 150%).
 - **Size memory:** saved per instance with the project, like the tab; new instances open at the last size used (`lastEditorScale`). "Reset size" returns to the design size.
 - **Browser zoom is blocked** (Ctrl+wheel, Ctrl+plus/minus/0): it would fight the page's own scaling.
 
 ### Right-click menus
-- **Our menu by default, listing the host's own options** for that parameter (FL's "Create automation clip", "Link to controller", …). JUCE fetches the host's menu for the parameter's host control (VST3 `IComponentHandler3`); C++ turns it into items the page draws in our style (`parameterMenu`), keeps each item's action, and runs it when the page reports a choice (`menuChoice`). Host-supplied text is shown through Svelte's escaping only; ids are checked against the current menu. It will carry our glass style later.
-- **Setting "Use the host's UI for menus"** (`useHostMenus`, off by default): the host shows its own native menu instead.
+- **Our menu only,** with the host's options for that parameter in a "Host menu" submenu (greyed out when the host offers none). Our own items join it later. JUCE fetches the host's menu for the parameter's host control (VST3 `IComponentHandler3`); C++ turns it into items the page draws (`parameterMenu`), keeps each item's action, and runs it when the page reports a choice (`menuChoice`). Host-supplied text is shown through Svelte's escaping only; ids are checked against the current menu.
+- **FL's section items** ("-Remote control" and the like) become non-clickable headings, with a divider before each.
+- **The "Use the host's UI for menus" setting is gone:** a native host menu can't be combined with our own items, and FL's positioned it badly.
+- **Each submenu is its own panel** kept inside the page: it opens beside its item, flips to the other side if it doesn't fit, and moves up if it would run off the bottom; a list taller than the page scrolls. Menus close on a click elsewhere, Escape, the window losing focus, or a resize.
 - **Right-clicking anywhere else shows nothing** for now; the browser's own menu is always blocked.
 - **Risk to check in FL:** if a host offers VST3 context menus but returns none for a parameter, JUCE dereferences a null menu (crash). Not guardable without changing JUCE.
 - **Browser shortcuts blocked:** print, find, reload, save, view source, history navigation. Dev tools are already off in every non-Debug build (JUCE switches them off).
 
-### Keys (first pass: diagnosis)
-- **Releases always pass:** the page and C++ now pass on releases of forwarded keys even when the page never saw them go down (a note held since before the page had focus, FL default).
-- **Experimental setting "Keep keyboard focus in the host"** (`keepKeyboardFocusInHost`, off by default): clicks in our editor no longer take keyboard focus (JUCE part), and clicks in the page outside text fields hand focus straight back to the host window. Hypothesis being tested: other plugins pass keys during a mouse press because clicking them never takes focus away from FL.
-- **Key log** (Debug builds only; deleted once the fix is in): a thread-local message hook on the host's UI thread only (never system-wide) that records key and mouse-button messages, which window they went to, and which had focus and capture. It records **no key identities**, keeps its log in memory only (Settings tab, with Copy), and stops after two minutes or when the editor closes. Accepted with care because a key logger is exactly the kind of code that shouldn't linger.
+### Keys
+- **Cause found (key log):** FL is a Delphi (VCL) program. VCL doesn't handle a key message where it arrives: its message loop reflects it to the window that should handle it as `CN_KEYDOWN`/`CN_KEYUP` (`0xBC00` + the message). While our window holds the mouse capture (a button held in it), that path is skipped, so FL's typing keyboard never sees the keys we post.
+- **Fix:** in FL only, when some window has the capture, the forwarder sends the host window the CN message itself (`SendMessage`), falling back to the plain key message if it isn't handled. Other hosts and other cases are unchanged.
+- **Releases always pass:** releases of forwarded keys pass even when the page never saw them go down (a note held since before the page had focus, FL default).
 - **Drags no longer end on blur** (focus moving away mid-drag would otherwise split one drag into many gestures); a new press ends any drag whose release never arrived.
 
 ### FL's own plugins can't be hosted
 - It's the format, not their location: FL's own plugins (e.g. `Plugins\Fruity\Generators\FLEX\FLEX_x64.dll`) use FL's private plugin format, which only FL can host; Image-Line's kit is for writing plugins for FL, not hosting them. "FL Studio VSTi" (FL running as a VST2) can't be hosted either: JUCE hosts VST2 only with Steinberg's VST2 SDK, which is no longer licensed. Hence external module bays (1b.4).
 
-### FL check (to do)
-- **Scaling:** at 200% Windows scaling, the page and the JUCE part now match. Each corner resizes at a fixed ratio; top and left corners keep the corner under the pointer (detached windows); sharp steps; size remembered per instance and for new instances; "Reset size".
-- **Tabs:** reopen on the last tab; new instances on Panel; switching tabs keeps the page loaded (no reload).
-- **Right-click on the slider:** our menu lists FL's options and they work (e.g. "Create automation clip"); with "Use the host's UI for menus" on, FL's own menu appears. Right-click elsewhere: nothing.
-- **Keys:** with the key log running (Settings → Start), follow the steps given in chat, first with "Keep keyboard focus in the host" off, then on; also compare with Serum 2 loaded directly in FL. Copy the log into the chat.
+### FL check (2026-09-27): passed, minor bugs and tweaks left for the next session
+- **Next:** a small test of parameters as outputs (FL's Patcher "controls" list): a meter-category parameter (JUCE marks those read-only in VST3) that moves by itself, plus MIDI CC out. Param 1 already shows that a plugin-driven ordinary parameter appears only as an input.
+- **Keys:** FL's typing keyboard plays while the mouse is held on the slider, on a grip, on a tab and on empty page space; releases arrive (no stuck notes), including when the mouse is released first.
+- **Scaling:** at 200% Windows scaling the page fills the window at every size. All four grips resize at a fixed ratio; with "Opposite corner" the opposite corner stays put, with "Window center" the center does (detached windows); attached windows grow down and right. Sharp steps; size remembered per instance and for new instances; "Reset size". FL's window frame no longer resizes the plugin.
+- **Tabs:** reopen on the last tab (no flash of Panel first); new instances on Panel; all three tabs work; "Open window" on the Plugins tab opens the hosted plugin's editor.
+- **Right-click on the slider:** our menu shows "Host menu"; its submenu lists FL's options with headings and dividers, stays inside the window at any position, and its items work (e.g. "Create automation clip"). The menu closes on a click elsewhere, Escape, and clicking into FL.

@@ -172,17 +172,18 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
         CHECK (settings.getForwardedKeys() == KeyForwarder::defaultChords);
         CHECK (settings.getResizing() == EditorScale::Resizing::smooth);
         CHECK (juce::exactlyEqual (settings.getLastEditorScale(), 1.0));
-        CHECK_FALSE (settings.getUseHostMenus());
-        CHECK_FALSE (settings.getKeepKeyboardFocusInHost());
+        CHECK (settings.getResizeAnchor() == EditorScale::Anchor::oppositeCorner);
 
         settings.setKeepWebViewWarm (false);
         settings.setResizing (EditorScale::Resizing::sharp);
+        settings.setResizeAnchor (EditorScale::Anchor::windowCenter);
         settings.setLastEditorScale (99.0);
     }
 
     PluginSettings reloaded (file);
     CHECK_FALSE (reloaded.getKeepWebViewWarm());
     CHECK (reloaded.getResizing() == EditorScale::Resizing::sharp);
+    CHECK (reloaded.getResizeAnchor() == EditorScale::Anchor::windowCenter);
     CHECK (juce::exactlyEqual (reloaded.getLastEditorScale(), EditorScale::maximum));
     file.deleteFile();
 }

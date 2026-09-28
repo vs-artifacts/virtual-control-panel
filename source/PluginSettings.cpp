@@ -7,9 +7,8 @@ namespace
     constexpr auto forwardedKeysKey = "forwardedKeys";
     constexpr auto editorPlacementKey = "editorPlacement";
     constexpr auto resizingKey = "resizing";
+    constexpr auto resizeAnchorKey = "resizeAnchor";
     constexpr auto lastEditorScaleKey = "lastEditorScale";
-    constexpr auto useHostMenusKey = "useHostMenus";
-    constexpr auto keepKeyboardFocusInHostKey = "keepKeyboardFocusInHost";
 }
 
 PluginSettings::PluginSettings()
@@ -49,12 +48,22 @@ void PluginSettings::setEditorPlacement (EditorPlacement::Monitor monitor)
 
 EditorScale::Resizing PluginSettings::getResizing() const
 {
-    return file.getValue (resizingKey) == "sharp" ? EditorScale::Resizing::sharp : EditorScale::Resizing::smooth;
+    return EditorScale::resizingFromSettingsValue (file.getValue (resizingKey)).value_or (EditorScale::Resizing::smooth);
 }
 
 void PluginSettings::setResizing (EditorScale::Resizing resizing)
 {
-    file.setValue (resizingKey, resizing == EditorScale::Resizing::sharp ? "sharp" : "smooth");
+    file.setValue (resizingKey, EditorScale::toSettingsValue (resizing));
+}
+
+EditorScale::Anchor PluginSettings::getResizeAnchor() const
+{
+    return EditorScale::anchorFromSettingsValue (file.getValue (resizeAnchorKey)).value_or (EditorScale::Anchor::oppositeCorner);
+}
+
+void PluginSettings::setResizeAnchor (EditorScale::Anchor anchor)
+{
+    file.setValue (resizeAnchorKey, EditorScale::toSettingsValue (anchor));
 }
 
 double PluginSettings::getLastEditorScale() const
@@ -65,26 +74,6 @@ double PluginSettings::getLastEditorScale() const
 void PluginSettings::setLastEditorScale (double scale)
 {
     file.setValue (lastEditorScaleKey, scale);
-}
-
-bool PluginSettings::getUseHostMenus() const
-{
-    return file.getBoolValue (useHostMenusKey, false);
-}
-
-void PluginSettings::setUseHostMenus (bool useHostMenus)
-{
-    file.setValue (useHostMenusKey, useHostMenus);
-}
-
-bool PluginSettings::getKeepKeyboardFocusInHost() const
-{
-    return file.getBoolValue (keepKeyboardFocusInHostKey, false);
-}
-
-void PluginSettings::setKeepKeyboardFocusInHost (bool keepInHost)
-{
-    file.setValue (keepKeyboardFocusInHostKey, keepInHost);
 }
 
 juce::PropertiesFile::Options PluginSettings::createOptions()

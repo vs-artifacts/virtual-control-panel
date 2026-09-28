@@ -1,8 +1,13 @@
 <script lang="ts">
     import { sendResize, type Corner } from "../lib/bridge";
 
-    // The web view covers the plugin's own handles at the bottom corners, so the page provides those
-    const corners: Corner[] = ["bottomLeft", "bottomRight"];
+    // The web view covers the whole editor, so the page provides its corner handles
+    const corners: Corner[] = [
+        "topLeft",
+        "topRight",
+        "bottomLeft",
+        "bottomRight",
+    ];
 
     function grip(node: HTMLElement, corner: Corner) {
         let dragging = false;
@@ -74,21 +79,42 @@
 <style>
     .grip {
         position: fixed;
-        bottom: 0;
         width: 16px;
         height: 16px;
         z-index: 50;
         touch-action: none;
     }
 
+    .topLeft {
+        top: 0;
+        left: 0;
+        cursor: nwse-resize;
+    }
+
+    .topRight {
+        top: 0;
+        right: 0;
+        cursor: nesw-resize;
+    }
+
     .bottomLeft {
+        bottom: 0;
         left: 0;
         cursor: nesw-resize;
     }
 
     .bottomRight {
+        bottom: 0;
         right: 0;
         cursor: nwse-resize;
+    }
+
+    .topLeft svg {
+        transform: scaleY(-1);
+    }
+
+    .topRight svg {
+        transform: scale(-1, -1);
     }
 
     .bottomRight svg {

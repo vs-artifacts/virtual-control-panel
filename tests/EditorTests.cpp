@@ -6,24 +6,6 @@
 
 using Catch::Matchers::WithinAbs;
 
-namespace
-{
-    template <typename Type>
-    Type* findChild (juce::Component& parent)
-    {
-        for (auto* child : parent.getChildren())
-        {
-            if (auto* match = dynamic_cast<Type*> (child))
-                return match;
-
-            if (auto* match = findChild<Type> (*child))
-                return match;
-        }
-
-        return nullptr;
-    }
-}
-
 // One run through, because every processor loads all three plugins
 TEST_CASE ("The editor reopens on its instance's tab, at its size", "[editor][processor]")
 {
@@ -51,14 +33,7 @@ TEST_CASE ("The editor reopens on its instance's tab, at its size", "[editor][pr
         std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
         CHECK (editor->getWidth() == juce::roundToInt (EditorScale::designWidth * 1.5));
         CHECK (editor->getHeight() == juce::roundToInt (EditorScale::designHeight * 1.5));
-
-        auto* tabs = findChild<EditorTabs> (*editor);
-        REQUIRE (tabs != nullptr);
-        CHECK (tabs->getCurrentTabIndex() == 2);
-        CHECK (tabs->getCurrentTabName() == "Settings");
-
-        tabs->setCurrentTabIndex (0);
-        CHECK (processor.getEditorTab() == 0);
+        CHECK_FALSE (editor->isResizable());
 
         auto& pluginEditor = dynamic_cast<PluginEditor&> (*editor);
         pluginEditor.setScale (0.1);
@@ -133,4 +108,24 @@ TEST_CASE ("Host menus become items the page can draw", "[editor]")
     REQUIRE (actions.size() == 3);
     actions[2]();
     CHECK (chosen == 3);
+}
+
+TEST_CASE ("FL Studio's section items become headings after a divider", "[editor]")
+{
+    juce::PopupMenu menu;
+    menu.addItem ("-Remote control", [] {});
+    menu.addItem ("Link to controller", [] {});
+    menu.addItem ("-Automation", [] {});
+    menu.addItem ("Create automation clip", [] {});
+
+    std::vector<std::function<void()>> actions;
+    const auto items = HostMenus::describe (menu, actions);
+
+    REQUIRE (items.size() == 5);
+    CHECK (items[0]["header"] == "Remote control");
+    CHECK (items[1]["text"] == "Link to controller");
+    CHECK (static_cast<bool> (items[2]["separator"]));
+    CHECK (items[3]["header"] == "Automation");
+    CHECK (items[4]["text"] == "Create automation clip");
+    CHECK (actions.size() == 2);
 }

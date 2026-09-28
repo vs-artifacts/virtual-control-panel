@@ -20,8 +20,9 @@ public:
     // onDone runs once the window has been handled (placed, or left alone because it can't or shouldn't move)
     EditorPlacement (juce::Component& editor, Monitor, std::function<void()> onDone);
 
-    // Moves the editor's window if it's a separate floating one; false if it isn't (or can't be moved here)
-    static bool moveFloatingWindowBy (const juce::Component& editor, juce::Point<int> physicalPixels);
+    // The editor's window in physical screen pixels, if it's a separate floating one we may move
+    static std::optional<juce::Rectangle<int>> getFloatingWindowBounds (const juce::Component& editor);
+    static void moveFloatingWindowTo (const juce::Component& editor, juce::Point<int> physicalTopLeft);
 
 private:
     void timerCallback() override;

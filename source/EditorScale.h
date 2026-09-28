@@ -15,6 +15,38 @@ namespace EditorScale
         sharp, // the scale on screen (physical pixels per design pixel) stays a whole number, so 1-pixel lines stay crisp
     };
 
+    // What stays put while a corner is dragged
+    enum class Anchor {
+        oppositeCorner,
+        windowCenter,
+    };
+
+    // Values in the settings file and in messages from the page
+    inline juce::String toSettingsValue (Resizing resizing) { return resizing == Resizing::sharp ? "sharp" : "smooth"; }
+    inline juce::String toSettingsValue (Anchor anchor) { return anchor == Anchor::windowCenter ? "windowCenter" : "oppositeCorner"; }
+
+    inline std::optional<Resizing> resizingFromSettingsValue (const juce::String& value)
+    {
+        if (value == "smooth")
+            return Resizing::smooth;
+
+        if (value == "sharp")
+            return Resizing::sharp;
+
+        return std::nullopt;
+    }
+
+    inline std::optional<Anchor> anchorFromSettingsValue (const juce::String& value)
+    {
+        if (value == "oppositeCorner")
+            return Anchor::oppositeCorner;
+
+        if (value == "windowCenter")
+            return Anchor::windowCenter;
+
+        return std::nullopt;
+    }
+
     inline double constrain (double scale, Resizing resizing, double physicalPixelsPerPixel)
     {
         if (!std::isfinite (scale))

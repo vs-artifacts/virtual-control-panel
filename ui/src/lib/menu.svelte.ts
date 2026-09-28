@@ -1,5 +1,5 @@
 import { fetchParameterMenu, sendMenuChoice, sendMenuClosed } from './bridge'
-import { currentZoom } from './display'
+import { currentZoom } from './display.svelte'
 
 export type MenuItem =
     | { kind: 'action'; id: number; text: string; enabled: boolean; checked: boolean }
@@ -7,10 +7,13 @@ export type MenuItem =
     | { kind: 'header'; text: string }
     | { kind: 'submenu'; text: string; enabled: boolean; items: MenuItem[] }
 
-// Position in page pixels (before the page's zoom)
+// Where the pointer was, in page pixels (before the page's zoom)
 export const menu = $state({ open: false, x: 0, y: 0, items: [] as MenuItem[] })
 
 const maxDepth = 8
+
+// Only the latest right-click gets its menu, however long the replies take
+let latestRequest = 0
 
 function parseItems(raw: unknown, depth: number): MenuItem[] {
     if (!Array.isArray(raw) || depth > maxDepth) return []
@@ -31,10 +34,11 @@ function parseItems(raw: unknown, depth: number): MenuItem[] {
     return items
 }
 
-// Asks the plugin for the host's options for this parameter, then shows them where the pointer is
+// Asks the plugin for the options for this parameter, then shows them where the pointer is
 export async function openParameterMenu(h: number, clientX: number, clientY: number): Promise<void> {
     closeMenu()
 
+    const request = ++latestRequest
     let reply: unknown
 
     try {
@@ -43,7 +47,7 @@ export async function openParameterMenu(h: number, clientX: number, clientY: num
         return
     }
 
-    if (typeof reply !== 'object' || reply === null || (reply as Record<string, unknown>).native === true) return
+    if (request !== latestRequest || typeof reply !== 'object' || reply === null) return
 
     const items = parseItems((reply as Record<string, unknown>).items, 0)
     const zoom = currentZoom()

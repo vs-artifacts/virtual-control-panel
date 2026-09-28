@@ -136,18 +136,28 @@ bool EditorPlacement::tryToPlace()
 #endif
 }
 
-bool EditorPlacement::moveFloatingWindowBy (const juce::Component& editor, juce::Point<int> physicalPixels)
+std::optional<juce::Rectangle<int>> EditorPlacement::getFloatingWindowBounds (const juce::Component& editor)
 {
 #if JUCE_WINDOWS
     const auto [state, window] = findFloatingWindow (editor);
     RECT bounds {};
 
     if (state != WindowState::floating || !GetWindowRect (window, &bounds))
-        return false;
+        return std::nullopt;
 
-    return SetWindowPos (window, nullptr, bounds.left + physicalPixels.x, bounds.top + physicalPixels.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) != 0;
+    return juce::Rectangle<int>::leftTopRightBottom (bounds.left, bounds.top, bounds.right, bounds.bottom);
 #else
-    juce::ignoreUnused (editor, physicalPixels);
-    return false;
+    juce::ignoreUnused (editor);
+    return std::nullopt;
+#endif
+}
+
+void EditorPlacement::moveFloatingWindowTo (const juce::Component& editor, juce::Point<int> physicalTopLeft)
+{
+#if JUCE_WINDOWS
+    if (const auto [state, window] = findFloatingWindow (editor); state == WindowState::floating)
+        SetWindowPos (window, nullptr, physicalTopLeft.x, physicalTopLeft.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+#else
+    juce::ignoreUnused (editor, physicalTopLeft);
 #endif
 }

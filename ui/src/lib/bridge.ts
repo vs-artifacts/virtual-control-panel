@@ -28,16 +28,38 @@ export function fetchCatalog(timeoutMs = 2000): Promise<unknown> {
     return callNative(catalogFunction, timeoutMs)
 }
 
-// { scale }: physical pixels per pixel of the plugin's own UI, which the page matches
+// { scale, uiScale, width, height }: physical pixels per page pixel, and the editor's size
 export function fetchDisplay(timeoutMs = 2000): Promise<unknown> {
     return callNative('display', timeoutMs)
+}
+
+// { title, tab, settings, plugins }: what the Plugins and Settings tabs show, and which tab was showing
+export function fetchEditorState(timeoutMs = 2000): Promise<unknown> {
+    return callNative('editorState', timeoutMs)
+}
+
+export function sendTab(index: number): void {
+    window.__JUCE__.backend.emitEvent('tab', { index })
+}
+
+export function sendSetting(name: string, value: string | boolean): void {
+    window.__JUCE__.backend.emitEvent('setting', { name, value })
+}
+
+export function sendResetSize(): void {
+    window.__JUCE__.backend.emitEvent('resetSize', {})
+}
+
+// Opens a hosted plugin's own editor in a separate window
+export function sendOpenPlugin(slot: number): void {
+    window.__JUCE__.backend.emitEvent('openPlugin', { slot })
 }
 
 export function onDisplay(listener: (display: unknown) => void): void {
     window.__JUCE__.backend.addEventListener('display', listener)
 }
 
-// { native, items }: the host's options for a parameter; native means the host showed its own menu instead
+// { items }: our menu for a parameter, with the host's options in a submenu
 export function fetchParameterMenu(h: number, timeoutMs = 10000): Promise<unknown> {
     return callNative('parameterMenu', timeoutMs, h)
 }
@@ -55,10 +77,6 @@ export type Corner = 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight'
 // The plugin follows the pointer itself; these only say when a corner drag starts, moves and ends
 export function sendResize(corner: Corner, phase: 'start' | 'move' | 'end'): void {
     window.__JUCE__.backend.emitEvent('resize', { corner, phase })
-}
-
-export function sendPointerDown(textEntry: boolean): void {
-    window.__JUCE__.backend.emitEvent('pointerDown', { textEntry })
 }
 
 export interface ValueChange {

@@ -27,17 +27,13 @@ public:
     EditorScale::Resizing getResizing() const;
     void setResizing (EditorScale::Resizing);
 
+    // Whether the opposite corner or the window's center stays put while a corner is dragged
+    EditorScale::Anchor getResizeAnchor() const;
+    void setResizeAnchor (EditorScale::Anchor);
+
     // The size new instances' editors open at: the last one used
     double getLastEditorScale() const;
     void setLastEditorScale (double);
-
-    // Right-click menus shown by the host itself instead of drawn by our page
-    bool getUseHostMenus() const;
-    void setUseHostMenus (bool);
-
-    // Experimental: clicks leave keyboard focus with the host, except in text fields
-    bool getKeepKeyboardFocusInHost() const;
-    void setKeepKeyboardFocusInHost (bool);
 
 private:
     static juce::PropertiesFile::Options createOptions();

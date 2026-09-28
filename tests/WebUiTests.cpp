@@ -262,9 +262,9 @@ TEST_CASE ("Right-clicking a slider shows the host's options for its parameter",
     WebUi::Handlers handlers;
     handlers.openParameterMenu = [&askedFor] (const juce::var& handle) {
         askedFor = handle;
-        return juce::JSON::parse (R"({ "native": false, "items": [{ "header": "Param 1" }, { "id": 0, "text": "Create automation clip", "enabled": true, "checked": false }] })");
+        return juce::JSON::parse (R"({ "items": [{ "text": "Host menu", "enabled": true, "items": [{ "header": "Param 1" }, { "id": 0, "text": "Create automation clip", "enabled": true, "checked": false }] }] })");
     };
-    handlers.chooseMenuItem = [&chosen] (const juce::var& choice) { chosen = choice; };
+    handlers.events["menuChoice"] = [&chosen] (const juce::var& choice) { chosen = choice; };
 
     KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
     ControlSession session ({ { "FX 1", "Test plugin", "Gain", "Param 1", &gain, &gain } });
@@ -272,10 +272,15 @@ TEST_CASE ("Right-clicking a slider shows the host's options for its parameter",
     REQUIRE (page.waitFor ("document.querySelectorAll('input[type=range]').length", "1") == "1");
 
     page.evaluate ("document.querySelector('input[type=range]').dispatchEvent (new MouseEvent ('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 60 }))");
-    CHECK (page.waitFor ("document.querySelector('.context-menu button')?.textContent.trim() ?? ''", "Create automation clip") == "Create automation clip");
+    CHECK (page.waitFor ("String (document.querySelector('.context-menu button')?.textContent.startsWith ('Host menu'))", "true") == "true");
     CHECK (static_cast<int> (askedFor) == 0);
 
+    // The host's options are in a submenu, a separate list next to the first
     page.evaluate ("document.querySelector('.context-menu button').click()");
+    const auto hostItem = "document.querySelectorAll('.context-menu .menu-list')[1]?.querySelector('button')";
+    CHECK (page.waitFor (juce::String (hostItem) + "?.textContent.trim() ?? ''", "Create automation clip") == "Create automation clip");
+
+    page.evaluate (juce::String (hostItem) + ".click()");
     page.pumpUntil ([&chosen] { return !chosen.isVoid(); });
     CHECK (static_cast<int> (chosen["id"]) == 0);
     CHECK (page.waitFor ("String (document.querySelector('.context-menu') === null)", "true") == "true");
@@ -289,18 +294,17 @@ TEST_CASE ("The page's corner grips resize the plugin", "[webui][webview]")
     juce::StringArray messages;
 
     WebUi::Handlers handlers;
-    handlers.resize = [&messages] (const juce::var& drag) { messages.add (drag["corner"].toString() + " " + drag["phase"].toString()); };
-    handlers.pointerDown = [&messages] (const juce::var& press) { messages.add (press["textEntry"].isBool() && !static_cast<bool> (press["textEntry"]) ? "pointer down, not in a text field" : "pointer down, other"); };
+    handlers.events["resize"] = [&messages] (const juce::var& drag) { messages.add (drag["corner"].toString() + " " + drag["phase"].toString()); };
 
     KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
     ControlSession noParameters ({});
     OffscreenWebUi page (keys, noParameters, std::move (handlers));
-    REQUIRE (page.waitFor ("document.querySelectorAll('.grip').length", "2") == "2");
+    REQUIRE (page.waitFor ("document.querySelectorAll('.grip').length", "4") == "4");
 
-    page.evaluate ("{ const grip = document.querySelector('.grip.bottomRight');"
+    page.evaluate ("{ const grip = document.querySelector('.grip.topLeft');"
                    "  grip.dispatchEvent (new PointerEvent ('pointerdown', { bubbles: true, cancelable: true, button: 0 }));"
                    "  grip.dispatchEvent (new PointerEvent ('pointerup', { bubbles: true })); }");
-    page.pumpUntil ([&messages] { return messages.size() >= 3; });
+    page.pumpUntil ([&messages] { return messages.size() >= 2; });
 
-    CHECK (messages == juce::StringArray { "pointer down, not in a text field", "bottomRight start", "bottomRight end" });
+    CHECK (messages == juce::StringArray { "topLeft start", "topLeft end" });
 }

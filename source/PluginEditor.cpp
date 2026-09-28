@@ -2,10 +2,6 @@
 
 namespace
 {
-    constexpr int cornerSize = 16;
-    constexpr int tabBarDepth = 28;
-    const auto background = juce::Colour (0xff1b1f3b);
-
     using Corner = PluginEditor::Corner;
 
     bool isLeft (Corner corner) { return corner == Corner::topLeft || corner == Corner::bottomLeft; }
@@ -27,75 +23,41 @@ namespace
 
         return std::nullopt;
     }
-}
 
-// A drag handle in one corner of the editor
-class CornerHandle final : public juce::Component
-{
-public:
-    CornerHandle (PluginEditor& editorIn, Corner cornerIn) : editor (editorIn), corner (cornerIn)
+    juce::var describePlugin (const Engine& engine, size_t slot)
     {
-        using Cursor = juce::MouseCursor;
-        setMouseCursor (isTop (corner) ? (isLeft (corner) ? Cursor::TopLeftCornerResizeCursor : Cursor::TopRightCornerResizeCursor)
-                                       : (isLeft (corner) ? Cursor::BottomLeftCornerResizeCursor : Cursor::BottomRightCornerResizeCursor));
-        setWantsKeyboardFocus (false);
+        const auto& plugin = *engine.getPlugins()[slot];
+        auto* entry = new juce::DynamicObject();
+        entry->setProperty ("slot", static_cast<int> (slot));
+        entry->setProperty ("label", engine.getSlotLabel (slot));
+        entry->setProperty ("name", plugin.getName());
+
+        if (auto* instance = plugin.getInstance())
+        {
+            entry->setProperty ("status", juce::String (static_cast<int> (plugin.getControls().size())) + " of " + juce::String (instance->getParameters().size()) + " parameters");
+            entry->setProperty ("canOpen", instance->hasEditor());
+        }
+        else
+        {
+            entry->setProperty ("status", "Failed to load: " + plugin.getLoadError());
+            entry->setProperty ("canOpen", false);
+        }
+
+        return entry;
     }
-
-    Corner getCorner() const noexcept { return corner; }
-
-    void paint (juce::Graphics& g) override
-    {
-        // Two short strokes across the corner
-        const auto area = getLocalBounds().toFloat().reduced (3.0f);
-        const auto tip = juce::Point<float> (isLeft (corner) ? area.getX() : area.getRight(), isTop (corner) ? area.getY() : area.getBottom());
-        const auto across = juce::Point<float> (isLeft (corner) ? 1.0f : -1.0f, isTop (corner) ? 1.0f : -1.0f);
-
-        g.setColour (juce::Colours::white.withAlpha (0.35f));
-
-        for (const auto length : { 0.5f, 0.9f })
-            g.drawLine (tip.x + across.x * length * area.getWidth(), tip.y, tip.x, tip.y + across.y * length * area.getHeight(), 1.0f);
-    }
-
-    void mouseDown (const juce::MouseEvent&) override { editor.beginResize (corner); }
-    void mouseDrag (const juce::MouseEvent&) override { editor.continueResize(); }
-    void mouseUp (const juce::MouseEvent&) override { editor.endResize(); }
-
-private:
-    PluginEditor& editor;
-    Corner corner;
-};
-
-void ScaleConstrainer::checkBounds (juce::Rectangle<int>& bounds, const juce::Rectangle<int>& previousBounds, const juce::Rectangle<int>& limits, bool isStretchingTop, bool isStretchingLeft, bool isStretchingBottom, bool isStretchingRight)
-{
-    ComponentBoundsConstrainer::checkBounds (bounds, previousBounds, limits, isStretchingTop, isStretchingLeft, isStretchingBottom, isStretchingRight);
-
-    if (constrainScale == nullptr)
-        return;
-
-    const auto scale = constrainScale (bounds.getWidth() / static_cast<double> (EditorScale::designWidth));
-    const auto width = juce::roundToInt (EditorScale::designWidth * scale);
-    const auto height = juce::roundToInt (EditorScale::designHeight * scale);
-
-    bounds = { isStretchingLeft ? bounds.getRight() - width : bounds.getX(), isStretchingTop ? bounds.getBottom() - height : bounds.getY(), width, height };
 }
 
 //==============================================================================
 PluginEditor::PluginEditor (PluginProcessor& p)
     : AudioProcessorEditor (&p),
       pluginProcessor (p),
-      keyForwarder (settings->getForwardedKeys(), withKeyLog (KeyForwarder::postToHostOf (*this)), KeyForwarder::readPhysicalModifiers),
+      keyForwarder (settings->getForwardedKeys(), KeyForwarder::postToHostOf (*this), KeyForwarder::readPhysicalModifiers),
       session (p.createSessionParameters()),
-      hostMenus (*this, session, *settings)
+      hostMenus (*this, session)
 {
     if (WebUi::isSupported())
     {
-        WebUi::Handlers handlers;
-        handlers.openParameterMenu = [this] (const juce::var& handle) { return hostMenus.open (handle); };
-        handlers.chooseMenuItem = [this] (const juce::var& choice) { hostMenus.choose (choice); };
-        handlers.closeMenu = [this] { hostMenus.close(); };
-        handlers.resize = [this] (const juce::var& message) { handlePageResize (message); };
-        handlers.pointerDown = [this] (const juce::var& press) { handlePagePointerDown (press); };
-        webUi = std::make_unique<WebUi> (p.getName() + " v" VERSION, keyForwarder, session, std::move (handlers));
+        webUi = std::make_unique<WebUi> (p.getName() + " v" VERSION, keyForwarder, session, createPageHandlers());
 
         // Started after our own page, so it never delays the first editor open
         webUi->onPageLoaded = [this] {
@@ -103,85 +65,137 @@ PluginEditor::PluginEditor (PluginProcessor& p)
                 webViewKeepAlive->start();
         };
 
-        panelPage.addAndMakeVisible (*webUi);
+        addAndMakeVisible (*webUi);
     }
     else
     {
         webUiUnavailable.setText ("Web UI unavailable: this system has no supported web view (on Windows, install the Microsoft Edge WebView2 Runtime).", juce::dontSendNotification);
         webUiUnavailable.setJustificationType (juce::Justification::centred);
-        panelPage.addAndMakeVisible (webUiUnavailable);
+        addAndMakeVisible (webUiUnavailable);
     }
-
-    pluginsPage = std::make_unique<PluginsPage> (p.getEngine());
-
-    SettingsPage::Callbacks callbacks;
-    callbacks.keepWarmChanged = [this] (bool keepWarm) {
-        if (keepWarm)
-            webViewKeepAlive->start();
-        else
-            webViewKeepAlive->stop();
-    };
-    callbacks.resizingChanged = [this] { setScale (getWidth() / static_cast<double> (EditorScale::designWidth)); };
-    callbacks.resetSize = [this] { setScale (1.0); };
-    callbacks.focusModeChanged = [this] { applyFocusMode(); };
-    callbacks.inspect = [this] {
-        if (inspector == nullptr)
-        {
-            inspector = std::make_unique<melatonin::Inspector> (*this);
-            inspector->onClose = [this] { inspector.reset(); };
-        }
-
-        inspector->setVisible (true);
-    };
-
-    settingsPage = std::make_unique<SettingsPage> (*settings, p.getName() + " v" VERSION " (" CMAKE_BUILD_TYPE ")", std::move (callbacks));
-    settingsPage->setWebUiAvailable (webUi != nullptr);
-#if JUCE_DEBUG
-    settingsPage->showKeyLog (keyDiagnostics);
-#endif
-
-    tabs.setTabBarDepth (tabBarDepth);
-    tabs.barIndent = cornerSize;
-    tabs.addTab ("Panel", background, &panelPage, false);
-    tabs.addTab ("Plugins", background, pluginsPage.get(), false);
-    tabs.addTab ("Settings", background, settingsPage.get(), false);
-    tabs.setCurrentTabIndex (p.getEditorTab(), false);
-    tabs.onTabChanged = [&p] (int index) { p.setEditorTab (index); };
-    tabs.setBounds (0, 0, EditorScale::designWidth, EditorScale::designHeight);
-    content.setBounds (tabs.getBounds());
-    content.addAndMakeVisible (tabs);
-    addAndMakeVisible (content);
-
-    for (const auto corner : { Corner::topLeft, Corner::topRight, Corner::bottomLeft, Corner::bottomRight })
-        addAndMakeVisible (*corners.emplace_back (std::make_unique<CornerHandle> (*this, corner)));
-
-    using namespace EditorScale;
-    constrainer.setFixedAspectRatio (designWidth / static_cast<double> (designHeight));
-    constrainer.setSizeLimits (juce::roundToInt (designWidth * minimum), juce::roundToInt (designHeight * minimum), juce::roundToInt (designWidth * maximum), juce::roundToInt (designHeight * maximum));
-    constrainer.constrainScale = [this] (double scale) { return constrainScale (scale); };
-    setConstrainer (&constrainer);
-    setResizable (true, false);
-
-    // Every click in the editor, for keeping keyboard focus in the host
-    addMouseListener (this, true);
-    applyFocusMode();
 
     if (!p.isEditorPlaced())
         placement = std::make_unique<EditorPlacement> (*this, settings->getEditorPlacement(), [&p] { p.setEditorPlaced(); });
 
+    // Only our own corner handles resize the window (not the host's window frame), always at the design's aspect ratio
     setScale (p.getEditorScale().value_or (settings->getLastEditorScale()));
 }
 
-PluginEditor::~PluginEditor()
+PluginEditor::~PluginEditor() = default;
+
+WebUi::Handlers PluginEditor::createPageHandlers()
 {
-    removeMouseListener (this);
-    tabs.clearTabs();
-    setConstrainer (nullptr);
+    WebUi::Handlers handlers;
+    handlers.describeEditor = [this] { return describeEditor(); };
+    handlers.openParameterMenu = [this] (const juce::var& handle) { return hostMenus.open (handle); };
+    handlers.events = {
+        { "menuChoice", [this] (const juce::var& choice) { hostMenus.choose (choice); } },
+        { "menuClosed", [this] (const juce::var&) { hostMenus.close(); } },
+        { "resize", [this] (const juce::var& message) { handleResize (message); } },
+        { "resetSize", [this] (const juce::var&) { setScale (1.0); } },
+        { "setting", [this] (const juce::var& message) { handleSetting (message); } },
+        { "tab", [this] (const juce::var& message) { handleTab (message); } },
+        { "openPlugin", [this] (const juce::var& message) { handleOpenPlugin (message); } },
+    };
+    return handlers;
+}
+
+juce::var PluginEditor::describeEditor() const
+{
+    auto* current = new juce::DynamicObject();
+    current->setProperty ("keepWebViewWarm", settings->getKeepWebViewWarm());
+    current->setProperty ("editorPlacement", EditorPlacement::toSettingsValue (settings->getEditorPlacement()));
+    current->setProperty ("resizing", EditorScale::toSettingsValue (settings->getResizing()));
+    current->setProperty ("resizeAnchor", EditorScale::toSettingsValue (settings->getResizeAnchor()));
+
+    const auto& engine = pluginProcessor.getEngine();
+    juce::Array<juce::var> plugins;
+
+    for (size_t slot = 0; slot < engine.getPlugins().size(); ++slot)
+        plugins.add (describePlugin (engine, slot));
+
+    auto* state = new juce::DynamicObject();
+    state->setProperty ("title", pluginProcessor.getName() + " v" VERSION " (" CMAKE_BUILD_TYPE ")");
+    state->setProperty ("tab", pluginProcessor.getEditorTab());
+    state->setProperty ("settings", current);
+    state->setProperty ("plugins", plugins);
+    return state;
+}
+
+void PluginEditor::handleSetting (const juce::var& message)
+{
+    const auto name = message["name"].toString();
+    const auto& value = message["value"];
+
+    if (name == "keepWebViewWarm" && value.isBool())
+    {
+        settings->setKeepWebViewWarm (static_cast<bool> (value));
+
+        if (static_cast<bool> (value))
+            webViewKeepAlive->start();
+        else
+            webViewKeepAlive->stop();
+    }
+    else if (name == "editorPlacement" && value.isString())
+    {
+        if (const auto monitor = EditorPlacement::fromSettingsValue (value.toString()))
+            settings->setEditorPlacement (*monitor);
+    }
+    else if (name == "resizing" && value.isString())
+    {
+        if (const auto resizing = EditorScale::resizingFromSettingsValue (value.toString()))
+        {
+            settings->setResizing (*resizing);
+            setScale (getScale());
+        }
+    }
+    else if (name == "resizeAnchor" && value.isString())
+    {
+        if (const auto anchor = EditorScale::anchorFromSettingsValue (value.toString()))
+            settings->setResizeAnchor (*anchor);
+    }
+}
+
+void PluginEditor::handleTab (const juce::var& message)
+{
+    const auto& index = message["index"];
+
+    if (index.isInt() && juce::isPositiveAndBelow (static_cast<int> (index), PluginProcessor::numEditorTabs))
+        pluginProcessor.setEditorTab (static_cast<int> (index));
+}
+
+void PluginEditor::handleOpenPlugin (const juce::var& message)
+{
+    const auto& slot = message["slot"];
+    const auto& plugins = pluginProcessor.getEngine().getPlugins();
+
+    if (slot.isInt() && juce::isPositiveAndBelow (static_cast<int> (slot), static_cast<int> (plugins.size())))
+        hostedEditors.open (*plugins[static_cast<size_t> (static_cast<int> (slot))]);
+}
+
+void PluginEditor::handleResize (const juce::var& message)
+{
+    const auto corner = cornerFromName (message["corner"]);
+    const auto phase = message["phase"].toString();
+
+    if (!corner.has_value())
+        return;
+
+    if (phase == "start")
+        beginResize (*corner);
+    else if (phase == "move" && drag.has_value() && drag->corner == *corner)
+        continueResize();
+    else if (phase == "end")
+        endResize();
 }
 
 void PluginEditor::beginResize (Corner corner)
 {
-    drag = Drag { corner, juce::Desktop::getInstance().getMainMouseSource().getScreenPosition(), getWidth() / static_cast<double> (EditorScale::designWidth) };
+    drag = Drag { corner,
+        juce::Desktop::getInstance().getMainMouseSource().getScreenPosition(),
+        getScale(),
+        { getWidth(), getHeight() },
+        EditorPlacement::getFloatingWindowBounds (*this) };
 }
 
 void PluginEditor::continueResize()
@@ -193,20 +207,30 @@ void PluginEditor::continueResize()
     const auto dx = static_cast<double> (isLeft (drag->corner) ? -moved.x : moved.x);
     const auto dy = static_cast<double> (isTop (drag->corner) ? -moved.y : moved.y);
 
+    // Growing around its center, the window grows on both sides, so twice as fast keeps the corner under the pointer
+    const auto aroundCenter = settings->getResizeAnchor() == EditorScale::Anchor::windowCenter && drag->startWindow.has_value();
+    const auto speed = aroundCenter ? 2.0 : 1.0;
+
     using namespace EditorScale;
-    const auto widthScale = drag->startScale + dx / designWidth;
-    const auto heightScale = drag->startScale + dy / designHeight;
-
-    const auto oldSize = juce::Point<int> (getWidth(), getHeight());
+    const auto widthScale = drag->startScale + speed * dx / designWidth;
+    const auto heightScale = drag->startScale + speed * dy / designHeight;
     setScale ((widthScale + heightScale) / 2.0);
-    const auto grown = juce::Point<int> (getWidth(), getHeight()) - oldSize;
 
-    // Hosts grow windows from their top-left corner, so a top or left handle moves the window to stay under the pointer
-    if (grown != juce::Point<int>() && (isLeft (drag->corner) || isTop (drag->corner)))
-    {
-        const auto physical = getPhysicalPixelsPerPixel();
-        EditorPlacement::moveFloatingWindowBy (*this, { isLeft (drag->corner) ? -juce::roundToInt (grown.x * physical) : 0, isTop (drag->corner) ? -juce::roundToInt (grown.y * physical) : 0 });
-    }
+    // Hosts keep a window's top-left corner when it grows, so the window moves to keep the anchor in place.
+    // Only separate floating windows can move; attached ones grow down and to the right.
+    if (!drag->startWindow.has_value() || !(aroundCenter || isLeft (drag->corner) || isTop (drag->corner)))
+        return;
+
+    const auto& start = *drag->startWindow;
+    const auto physical = getPhysicalPixelsPerPixel();
+    const auto width = start.getWidth() + juce::roundToInt ((getWidth() - drag->startSize.x) * physical);
+    const auto height = start.getHeight() + juce::roundToInt ((getHeight() - drag->startSize.y) * physical);
+
+    const auto topLeft = aroundCenter ? juce::Point<int> (start.getCentreX() - width / 2, start.getCentreY() - height / 2)
+                                      : juce::Point<int> (isLeft (drag->corner) ? start.getRight() - width : start.getX(),
+                                            isTop (drag->corner) ? start.getBottom() - height : start.getY());
+
+    EditorPlacement::moveFloatingWindowTo (*this, topLeft);
 }
 
 void PluginEditor::endResize()
@@ -218,6 +242,11 @@ void PluginEditor::setScale (double scale)
 {
     const auto constrained = constrainScale (scale);
     setSize (juce::roundToInt (EditorScale::designWidth * constrained), juce::roundToInt (EditorScale::designHeight * constrained));
+}
+
+double PluginEditor::getScale() const
+{
+    return getWidth() / static_cast<double> (EditorScale::designWidth);
 }
 
 double PluginEditor::constrainScale (double scale) const
@@ -235,94 +264,23 @@ double PluginEditor::getPhysicalPixelsPerPixel() const
     return scale;
 }
 
-void PluginEditor::applyFocusMode()
-{
-    const auto grabsFocus = !settings->getKeepKeyboardFocusInHost();
-
-    // Text fields keep their own behaviour: they need focus to be typed into
-    const std::function<void (juce::Component&)> apply = [&] (juce::Component& component) {
-        if (dynamic_cast<juce::TextEditor*> (&component) == nullptr)
-            component.setMouseClickGrabsKeyboardFocus (grabsFocus);
-
-        for (auto* child : component.getChildren())
-            apply (*child);
-    };
-
-    // Pages on hidden tabs aren't in the tree
-    for (auto* page : std::initializer_list<juce::Component*> { this, &panelPage, pluginsPage.get(), settingsPage.get() })
-        apply (*page);
-}
-
-void PluginEditor::mouseDown (const juce::MouseEvent&)
-{
-#if JUCE_DEBUG
-    keyDiagnostics.note ("editor mouse down");
-#endif
-
-    if (settings->getKeepKeyboardFocusInHost())
-        KeyForwarder::giveFocusToHostOf (*this);
-}
-
-void PluginEditor::handlePageResize (const juce::var& message)
-{
-    const auto corner = cornerFromName (message["corner"]);
-    const auto phase = message["phase"].toString();
-
-    if (!corner.has_value())
-        return;
-
-    if (phase == "start")
-        beginResize (*corner);
-    else if (phase == "move" && drag.has_value() && drag->corner == *corner)
-        continueResize();
-    else if (phase == "end")
-        endResize();
-}
-
-void PluginEditor::handlePagePointerDown (const juce::var& press)
-{
-    const auto& textEntry = press["textEntry"];
-    const auto isTextEntry = textEntry.isBool() && static_cast<bool> (textEntry);
-
-#if JUCE_DEBUG
-    keyDiagnostics.note (isTextEntry ? "page pointer down (text field)" : "page pointer down");
-#endif
-
-    if (!isTextEntry && settings->getKeepKeyboardFocusInHost())
-        KeyForwarder::giveFocusToHostOf (*this);
-}
-
-KeyForwarder::Post PluginEditor::withKeyLog (KeyForwarder::Post post)
-{
-#if JUCE_DEBUG
-    return [this, post = std::move (post)] (std::uint32_t scanCode, bool down, bool isRepeat) {
-        keyDiagnostics.note (juce::String ("forwarder posts key ") + (down ? "down" : "up") + (isRepeat ? " (repeat)" : ""));
-        post (scanCode, down, isRepeat);
-    };
-#else
-    return post;
-#endif
-}
-
 void PluginEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (background);
+    g.fillAll (juce::Colour (WebUi::placeholderColour));
 }
 
 void PluginEditor::resized()
 {
-    const auto scale = getWidth() / static_cast<double> (EditorScale::designWidth);
-    content.setTransform (juce::AffineTransform::scale (static_cast<float> (scale)));
-
-    const auto handleSize = std::max (10, juce::roundToInt (cornerSize * scale));
-
-    for (auto& handle : corners)
+    if (webUi != nullptr)
     {
-        const auto corner = handle->getCorner();
-        handle->setBounds (isLeft (corner) ? 0 : getWidth() - handleSize, isTop (corner) ? 0 : getHeight() - handleSize, handleSize, handleSize);
+        webUi->setBounds (getLocalBounds());
+        webUi->setUiScale (getScale());
+    }
+    else
+    {
+        webUiUnavailable.setBounds (getLocalBounds().reduced (10));
     }
 
-    pluginProcessor.setEditorScale (scale);
-    settings->setLastEditorScale (scale);
-    settingsPage->setSizeText ("Size: " + juce::String (getWidth()) + " x " + juce::String (getHeight()) + " (" + juce::String (juce::roundToInt (scale * 100.0)) + "%)");
+    pluginProcessor.setEditorScale (getScale());
+    settings->setLastEditorScale (getScale());
 }
