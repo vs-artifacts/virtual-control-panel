@@ -1,6 +1,6 @@
 # Decisions
 
-Short log of settled decisions. Newest at the bottom. Update when something changes; don't re-debate settled items without new information.
+Short log of settled decisions. Newest at the bottom. Update when something changes; don't re-debate settled items without new information. Where things stand and what's next: `docs/current.md`.
 
 ## Platforms and toolchain
 - **Windows now, macOS required.** Dev happens on Windows (VS Code + clangd + MSVC + Ninja). macOS support is mandatory: the user's target setup is a headless Mac mini. Don't pick Windows-only rendering tech.
@@ -64,7 +64,7 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
    - **1b.1. Page in the editor** via JUCE's native bridge. **Built 2026-09-26; FL go/no-go passed** (page shows, second instance fine, hosted plugins unaffected). Its findings (slow reopen, white flash, no key pass-through) are fixed; **FL re-check passed 2026-09-26**, except that keys don't pass while a mouse button is held on the page (carried into 1b.2).
    - **1b.2. One slider, two-way** (kHs 3-Band EQ low band gain) via the native bridge, **also exposed to the host** for automation and controllers (added to this slice: a core mechanic, so test it early). **Built 2026-09-27; FL check passed 2026-09-27** (slider both ways, Param 1 in the browser, last tweaked, automation playback and recording, Patcher nodes and internal controller links; a hardware controller and plugin swaps weren't testable). Centring on first open built and passed. Its findings are being wrapped up in the same slice (see "1b.2 wrap-up" below): tabs, scaling and corner resizing, the host's right-click menu, and key pass-through while the mouse is down (first pass: diagnosis). **Wrap-up built 2026-09-27; awaiting the FL check.**
    - **1b.3. Parameter outputs:** can our plugin hand values to FL as *outputs* (Patcher's controls list, internal controller links)? Two temporary test parameters appended after the pool (a meter-category one, which JUCE marks read-only in VST3, and an ordinary automatable one), both moved by an internal slow wave from the audio thread (VST3's output-parameter route; Param 1's plugin-driven changes go through the message-thread edit route and appear only as an input). No MIDI CC out: the user found it doesn't drive FL plugins in Patcher. **FL check 2026-10-01: no parameter outputs** (details in "Module bays and relay nodes"); the test parameters are removed.
-   - **1b.4. External module bays:** our way to use FL's own plugins, which we can't host (see "1b.2 wrap-up"). FL forbids feedback loops, so relay nodes on both sides of the FL plugin talk to our plugin directly instead of over Patcher wires (see "Module bays and relay nodes" below). Placed before plugin swap to validate the idea, or to settle a full move away from FL's plugins. **FL experiments done 2026-10-01** (outputs, Peak Controller, gain, smart disable; relay test plugin built and checked). **Next, in a new session: the minimal link test (audio round trip);** see "Module bays and relay nodes", which is the handover.
+   - **1b.4. External module bays:** our way to use FL's own plugins, which we can't host (see "1b.2 wrap-up"). FL forbids feedback loops, so relay nodes on both sides of the FL plugin talk to our plugin directly instead of over Patcher wires (see "Module bays and relay nodes" below). Placed before plugin swap to validate the idea, or to settle a full move away from FL's plugins. **FL experiments done 2026-10-01** (outputs, Peak Controller, gain, smart disable; relay test plugin built and checked). Status and next step: `docs/current.md`.
    - **1b.5. Plugin swap** (core, non-negotiable: choosing the plugin in a slot): a button per slot in the Plugins tab that swaps the plugin from a copy of FL's plugin menu (its categories and favourites, plus "More plugins…" with everything installed), read from FL's plugin database (`Documents\Image-Line\FL Studio\Presets\Plugin database`) each time the menu opens so it follows FL's changes, and styleable like the rest of our UI later. Needs: swapping while audio runs, safe unbinding of host controls, saving each slot's plugin and the bindings with the project, and a rudimentary "Bind…" menu per host control (the real solution is each parameter item in a slot's UI linking to the exposed-parameters list). Lets us test automation across swaps.
    - **1b.6. Remote server:** Crow WebSocket server behind a remote-control toggle, own update thread, security tests, "Open in browser" button.
 3. **1c. Shader knob:** the slider becomes a WebGL2 glass/light-scatter knob with a frame-time readout, running inside FL.
@@ -238,7 +238,7 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
 - **Right-click on the slider:** our menu shows "Host menu"; its submenu lists FL's options with headings and dividers, stays inside the window at any position, and its items work (e.g. "Create automation clip"). The menu closes on a click elsewhere, Escape, and clicking into FL.
 
 ## Module bays and relay nodes (2026-10-01)
-Handover for the next session: read this section and `CLAUDE.md`, then propose the link test ("Next" below) for the user's go.
+The design and FL's measured behaviour. Status, next step and test builds: `docs/current.md`.
 
 ### Decided
 - **FL forbids feedback loops** of any kind, so our plugin can't send audio through an FL plugin and get it back over Patcher wires. Both sides of a bay are wireless instead: relay nodes before and after the FL plugin talk to our plugin directly.
@@ -274,20 +274,3 @@ Handover for the next session: read this section and `CLAUDE.md`, then propose t
   - Reporting an endless tail made no observable difference; it was tried and removed.
   - A relay that isn't being called counts as a missing block (silence or bypass, never a repeated stale buffer), and the user is told.
   - **"Audio: running / not running"** (last audio block more than 500 ms ago, checked 4 times a second) shows on the panel's Panel tab and in the relay's window; it caught smart disable in every test. To be restyled as a graphic element later.
-
-### Next: the minimal link test (audio round trip)
-- **Setup in FL:** panel synth → link → relay A (input mode, main output) → an FL plugin (e.g. Fruity Filter; later one with latency) → relay B (output mode, input) → link → panel. A panel switch picks its output: direct, or the bay's return.
-- **Build:** the hub (self-contained, in the relay's file); the relay's input/output mode and link client; the panel's link client, direct/return switch and missing-block setting (silence / bypass). Every window shows: connected, link name, round-trip delay, dropout count.
-- **Measures:** whether the fixed delay stays steady in FL (order, threads, varying blocks); whether FL's latency compensation lines the return up; whether adding, removing and reloading in any order connects and disconnects cleanly (no crash, no stuck or stale audio).
-- **Then:** control outputs (input-mode relays, one per parameter, into Peak Controllers).
-
-### Current test builds
-- **Relay:** main input measured (its window shows the last block's peak to 7 decimals, to read a wire's exact level), all outputs silent, four control outputs declared (active, silent). Window: running indicator and input peak. Its test signals and switches are removed.
-- **Panel:** probe outputs removed; running indicator and the FL correction setting kept.
-
-### The user's preferences for this work
-- Precision first: controlled parameters leave no room for calibration error, so no fiddly correction chains inside FL.
-- Keep diagnostics that make FL's behaviour visible (silence on missing blocks, running indicators, exact level readouts) until the user drops them.
-- FL-specific behaviour goes behind settings, not hard-coded. Tidying the settings is a later polishing step, not now.
-- Relays stay light (many per instrument package); relays working without a panel is a wanted later utility.
-- Small slices, each ending in an FL check by the user; propose a plan and wait for a go before changing anything.

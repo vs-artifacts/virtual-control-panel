@@ -15,7 +15,7 @@ The template provides the build system, CI/CD, and project structure. The plugin
 - **Never make code or file changes without explicit confirmation from the user.** For discussion questions, answer and propose a plan (files touched, approach, rough size), then wait for a go-ahead.
 - **Ask clarifying questions whenever anything is ambiguous.** A cheap extra turn beats a wrong large implementation.
 - Work in small vertical slices. Each slice ends with: warning-free build, passing tests, and a visual check (see Visual Verification).
-- One chat session per feature. Keep this file and `docs/` current so a fresh session can pick up without the chat history: record decisions in `docs/decisions.md`, keep the index below accurate.
+- One chat session per feature. Keep this file and `docs/` current so a fresh session can pick up without the chat history: record decisions in `docs/decisions.md`, keep the index below accurate, and at the end of every session rewrite `docs/current.md` (status, next step, which `decisions.md` sections to read for it).
 - The user has professional technical writing/editing experience in software and knows the concepts, but has very limited hands-on dev experience in any language (including Svelte and C++). Explain code and concepts plainly when relevant.
 
 ## Security (networked surfaces)
@@ -25,11 +25,29 @@ The template provides the build system, CI/CD, and project structure. The plugin
 - Keep code reachable before authentication to a minimum, use third-party network libraries minimally and pinned to patched versions, and validate every incoming message (size and nesting depth before parsing).
 - Raise security concerns proactively, even when not asked. Concrete rules are recorded in `docs/decisions.md`.
 
+## Standing Rules (apply to every task)
+
+Condensed from `docs/decisions.md`, so they hold even when a session reads only part of it.
+
+- **Windows now, macOS required** (the live rig is a headless Mac mini): no Windows-only technology without a macOS path; keep platform-specific code isolated. Re-add `AU` to `FORMATS` before any macOS build.
+- **One engine, two shells:** keep `source/engine/` and `source/bridge/` free of plugin-shell code; the standalone app comes later.
+- **Keep the CPU for DSP:** UI rendering goes to the GPU; no UI work on the audio thread (see Threading Model).
+- **Configurability is a core value:** where it's cheap, offer a setting instead of hard-coding a trade-off. Plugin-wide preferences go in `PluginSettings` (Settings tab), per-project state in the plugin's saved state. Host-specific behaviour (e.g. FL Studio's) goes behind a setting.
+- **Host-control IDs are permanent:** `param1`…`param256` never change and the pool never shrinks; projects' automation refers to them.
+- **Untrusted input:** plugin-supplied strings (names, presets) and every message from the page, a relay or the network are untrusted. Svelte text escaping only (never `{@html}`); validate before use.
+- **Benchmarks:** quote Release numbers (`Builds-Release`); Debug numbers are smoke checks only.
+- **FL Studio is the test host:** slices end with the user's FL check. Keep diagnostics that make the host's behaviour visible until the user drops them.
+
 ## Project Docs (source of truth)
 
-Read only the files relevant to the task at hand.
+Read only the files relevant to the task at hand. At the start of every session:
 
-- `docs/decisions.md` - Decisions made so far and why (platforms, performance targets, rendering approach, workflow). **Read this at the start of every session.**
+1. This file.
+2. `docs/current.md`: where things stand, the next step, and which sections of `docs/decisions.md` to read for it.
+3. Those sections. Read all of `docs/decisions.md` only for questions they don't cover (cross-cutting changes, re-planning, or when unsure whether something was already decided).
+
+- `docs/current.md` - The live handover: status, next step, reading list, current test builds, the user's preferences for the work in hand. Rewritten at the end of every session.
+- `docs/decisions.md` - The permanent record of decisions and why (platforms, product shape, security, protocol, engine, each slice's findings). Newest at the bottom; the slice plan is near the top.
 - `docs/architecture.md` - *(not yet written)* Signal flow, modules, parameter table (ID, range, default, visual mapping).
 - `docs/style/glass.md` - *(not yet written)* Glass material system: layering, blur modes, blend modes, light scatter model.
 - `docs/style/tokens.md` - *(not yet written)* Named visual constants; may be superseded by the live-reloading JSON token file.
