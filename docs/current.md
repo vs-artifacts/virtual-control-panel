@@ -2,10 +2,10 @@
 
 The live handover: where things stand, what's next, and exactly what to read for it. Rewritten at the end of every session. Lasting decisions belong in `docs/decisions.md`; this file only points to them.
 
-**Last updated:** 2026-10-02, after the FL check and its two fixes (committed with this file). Checkpoint before the link work: commit `2c47997`.
+**Last updated:** 2026-10-02, end of session, after commit `29f7ab0` (the bay link test, FL-checked; this file's update follows it).
 
 ## Where things stand
-- **Slice 1b.4, external module bays:** the minimal link test (audio round trip) is **built and FL-checked.** Everything passed except the 1-block round trip and confusing lag readouts; both are fixed (results and causes: `decisions.md`, "Bay link" > "FL check").
+- **Slice 1b.4, external module bays:** the minimal link test (audio round trip) is **done and passed the user's FL check**, including the re-check of its two fixes (1-block round trip with a wired receiver; lag readouts). Results: `decisions.md`, "Bay link" > "FL check".
 - **Built:**
   - **Link hub** in the relay's file.
   - **Relays** with receiver and transmitter modes.
@@ -13,17 +13,31 @@ The live handover: where things stand, what's next, and exactly what to read for
   - **Diagnostics** in every window.
 - **Automated tests pass in Debug and Release** (47 test cases). They include a simulated Patcher in every processing order, FL-like varying blocks, and a test that hosts the real relay file.
 
-## Next: a short FL re-check of the two fixes
-1. **1 block with a wire** from the panel's output into the receiver's input (stage 4.4 below), also with the wire added after linking. **Expect:** missing blocks stop rising within a block or two; the receiver may show one "skipped ahead to the panel's newest block".
-2. **1 block without a wire:** still expected to fail (missing blocks rising).
-3. **Lag:**
-   - Measure with short, percussive notes through Fruity Filter. **Expect:** a value near 0.
-   - Measure with held notes. **Expect:** "unclear: … the sound repeats".
-   - Measure FL's linear-phase EQ 2 at its highest setting. **Expect:** 12,288.
+## Next: control outputs (the rest of 1b.4)
+Propose a plan (files touched, approach, rough size), ask about anything open, and wait for the user's go.
+- **Goal:** a receiver relay outputs one control signal per controlled parameter, each on its own control output into an FL Peak Controller linked to one knob of the bay's FL plugin. The panel drives the values (later: morphs).
+- **Already known (read before planning):**
+  - Values reach FL plugins only as audio into Peak Controllers. MIDI CC and parameter outputs don't work.
+  - The Peak Controller is exact: steady levels give exact tenths, linearly, near-instantly at maximum decay speed; its Ramp switch smooths jumps.
+  - Relays are effects, so FL doesn't scale their outputs. Only a generator's (the panel's) added outputs are scaled by 0.7792467; the FL gain correction setting exists for those.
+  - The relay already declares 4 stereo control outputs, active and silent. Outputs must be assigned in FL's wrapper (Processing > Connections) before Patcher pins carry them.
+  - The link carries exact values; turning them into audio is only the last step, in the relay ("The node demultiplexes").
+  - Smart disable: a Patcher holding relays needs its own smart disable off; receivers on mixer inserts need theirs off.
+- **Open questions for the plan:**
+  - How values cross the hub: a channel per parameter, or one value channel.
+  - Their timing relative to the bay's audio: same stamps?
+  - Which parameters a receiver carries, and where that's chosen (the panel's UI, by decision).
+  - Smoothing.
+  - How many control outputs a relay declares (fixed at load).
+  - What the user checks in FL.
+- **Decisions still pending from the link test** (raise them; they may shape the plan):
+  - The round trip's default (2 blocks now).
+  - Whether to adopt the wired receiver (1 block, or control values on the wire).
+  - How to align bypass with a bay plugin's own latency.
+  - The bypass crossfade.
+- **After 1b.4:** 1b.5 plugin swap (see the slice plan in `decisions.md`).
 
-Then decide: the round trip's default; whether to adopt the wired receiver; how to align bypass with a bay plugin's own latency. After that, control outputs: receivers with one control output per parameter into Peak Controllers.
-
-## FL check steps (kept for re-runs)
+## Bay link FL checklist (for regression runs when bays change)
 Before starting: the panel and relay junctions in the system VST3 folder point at the Debug builds, so FL picks up this build. If FL was open during the build, restart it. Note FL's sample rate and buffer length (Options > Audio settings).
 
 **Record for every stage:**
@@ -53,7 +67,7 @@ Before starting: the panel and relay junctions in the system VST3 folder point a
 
 ### 3. An FL plugin with latency of its own
 1. Use one with lookahead or linear phase, set as neutral as possible.
-2. Lag > Measure. **Expect:** a match at +L samples, the plugin's own latency. Compare it with what FL shows for that plugin's delay.
+2. Lag > Measure. **Expect:** a match at +L samples, the plugin's own latency, as FL reports it (FL's linear-phase EQ 2 at its highest: 12,288). Compare it with what FL shows for that plugin's delay.
 3. Flip Direct and Bay return: the return is L samples late. Bypass alignment for this is still open.
 4. Note whether anything else in the project shifts in time when the plugin is added or removed (FL's latency compensation).
 
@@ -61,7 +75,7 @@ Before starting: the panel and relay junctions in the system VST3 folder point a
 1. Settings tab, **2 blocks** (default), no wire into the receiver. Play for a few minutes, with some CPU load (other plugins). **Expect:** panel missing blocks 0; receiver missed blocks at most 1, right after linking.
 2. **3 blocks.** **Expect:** 0 everywhere.
 3. **1 block, no wire into the receiver.** **Expect:** missing blocks climb steadily and Bay return is silent (FL ran the receiver first in the 2026-10-02 check).
-4. **1 block with a wire** from the panel's output into the receiver's input (the receiver ignores what arrives there; this is the "wired receiver" fallback). **Expect:** missing blocks 0, headroom 0.
+4. **1 block with a wire** from the panel's output into the receiver's input (the receiver ignores what arrives there; this is the "wired receiver" fallback). **Expect:** missing blocks stop rising within a block or two, also when the wire is added after linking (the receiver may show one "skipped ahead to the panel's newest block").
 5. After each change, note whether FL picks up the new latency right away or only after a restart of playback or the project.
 
 ### 5. Block sizes
@@ -95,7 +109,7 @@ Before starting: the panel and relay junctions in the system VST3 folder point a
   - Settings tab: "Missing bay return blocks", "Bay round trip".
   - Unchanged: the fixed test routing, "Audio: running", the FL gain correction setting.
   - The panel always reports the round trip as latency, and its direct sound is delayed by it, even with no relays.
-- **Relay:** window with Receiver / Transmitter, link status, round trip, missed blocks, headroom, block sizes, running, input peak, reset. Four control outputs, still silent.
+- **Relay:** window with Receiver / Transmitter, link status, round trip, missed blocks, headroom, block sizes, running, input peak, reset. Four control outputs, still silent (the next step fills them).
 - **Code to know:**
   - `source/link/` (`LinkApi.h`, `LinkHub.cpp`, `BayNames.h`)
   - `source/relay/` (`RelayLink`, `RelayProcessor`, `RelayEditor`)
@@ -115,10 +129,11 @@ Before starting: the panel and relay junctions in the system VST3 folder point a
 
 ## Read for this step
 In `docs/decisions.md`, by heading:
-- **"Bay link: the audio round-trip test"**: what's built, the timing rules, diagnostics, tests, open items.
-- **"Module bays and relay nodes"**: the bay design and what FL does (measured).
-- **"Platforms and toolchain"**: macOS is required (the finder is a stub there).
-- For the control-output step after it: **"Slice 1b.2" > "Parameter model"** and **"Data flow and threads"**.
+- **"Module bays and relay nodes"**, all of it: the relay design (control outputs, "The node demultiplexes", FL gain correction) and what FL does (outputs, Peak Controller, gain, smart disable).
+- **"Bay link: the audio round-trip test"**: the hub's interface and rules (values will cross it too), timing, the FL check's findings (FL's blocks of 1 to 215 samples).
+- **"Slice 1b.2: one slider, two-way, exposed to the host"** > **"Parameter model"** and **"Data flow and threads"**: exposed parameters, host controls, which thread writes values.
+- **"Target production form"** > **"Architectural implications"**: morphs live in the engine; routing is data.
+- **"Platforms and toolchain"**: macOS is required.
 
 Read the rest of `decisions.md` only for questions these don't cover.
 
