@@ -10,6 +10,8 @@ namespace
     constexpr auto resizeAnchorKey = "resizeAnchor";
     constexpr auto lastEditorScaleKey = "lastEditorScale";
     constexpr auto flOutputCorrectionKey = "flOutputCorrection";
+    constexpr auto missingReturnBlocksKey = "missingReturnBlocks";
+    constexpr auto roundTripBlocksKey = "roundTripBlocks";
 }
 
 PluginSettings::PluginSettings()
@@ -85,6 +87,26 @@ bool PluginSettings::getFlOutputCorrection() const
 void PluginSettings::setFlOutputCorrection (bool shouldCorrect)
 {
     file.setValue (flOutputCorrectionKey, shouldCorrect);
+}
+
+BayLink::MissingBlocks PluginSettings::getMissingReturnBlocks() const
+{
+    return BayLink::missingBlocksFromName (file.getValue (missingReturnBlocksKey)).value_or (BayLink::MissingBlocks::silence);
+}
+
+void PluginSettings::setMissingReturnBlocks (BayLink::MissingBlocks missingBlocks)
+{
+    file.setValue (missingReturnBlocksKey, BayLink::toName (missingBlocks));
+}
+
+int PluginSettings::getRoundTripBlocks() const
+{
+    return juce::jlimit (BayLink::minRoundTripBlocks, BayLink::maxRoundTripBlocks, file.getIntValue (roundTripBlocksKey, BayLink::defaultRoundTripBlocks));
+}
+
+void PluginSettings::setRoundTripBlocks (int blocks)
+{
+    file.setValue (roundTripBlocksKey, juce::jlimit (BayLink::minRoundTripBlocks, BayLink::maxRoundTripBlocks, blocks));
 }
 
 juce::PropertiesFile::Options PluginSettings::createOptions()

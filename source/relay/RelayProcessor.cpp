@@ -1,4 +1,5 @@
 #include "RelayProcessor.h"
+#include "../link/LinkHub.h"
 #include "RelayEditor.h"
 
 juce::AudioProcessor::BusesProperties RelayProcessor::createBuses()
@@ -15,8 +16,15 @@ juce::AudioProcessor::BusesProperties RelayProcessor::createBuses()
 }
 
 RelayProcessor::RelayProcessor()
-    : AudioProcessor (createBuses())
+    : AudioProcessor (createBuses()),
+      link (*heartseeker_link_get_api (HS_LINK_ABI_VERSION))
 {
+    linkCheck.startTimerHz (4);
+}
+
+void RelayProcessor::prepareToPlay (double sampleRate, int maxBlockSize)
+{
+    link.prepare (sampleRate, maxBlockSize);
 }
 
 bool RelayProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -42,9 +50,36 @@ void RelayProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     const auto input = getBusBuffer (buffer, true, 0);
     inputPeak.store (input.getMagnitude (0, input.getNumSamples()), std::memory_order_relaxed);
 
-    // The main output shares its channels with the input; every output stays silent until the link exists
-    for (int channel = 0; channel < getTotalNumOutputChannels(); ++channel)
-        buffer.clear (channel, 0, buffer.getNumSamples());
+    // Without a stereo main input (a host may switch it off), channels 0 and 1 hold nothing a transmitter should send
+    if (getMainBusNumInputChannels() < 2)
+        for (int channel = 0; channel < std::min (2, buffer.getNumChannels()); ++channel)
+            buffer.clear (channel, 0, buffer.getNumSamples());
+
+    // The main output shares its channels with the input; every output is silent except what the link plays
+    link.process (buffer);
+}
+
+void RelayProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    juce::XmlElement state (stateTag);
+    state.setAttribute ("mode", getMode() == RelayLink::Mode::transmitter ? "transmitter" : "receiver");
+    copyXmlToBinary (state, destData);
+}
+
+void RelayProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    // Anything but our own saved state (e.g. a corrupt project) changes nothing
+    const auto state = getXmlFromBinary (data, sizeInBytes);
+
+    if (state == nullptr || !state->hasTagName (stateTag))
+        return;
+
+    const auto mode = state->getStringAttribute ("mode");
+
+    if (mode == "transmitter")
+        setMode (RelayLink::Mode::transmitter);
+    else if (mode == "receiver")
+        setMode (RelayLink::Mode::receiver);
 }
 
 bool RelayProcessor::isBeingProcessed() const noexcept

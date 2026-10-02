@@ -137,8 +137,8 @@ pamplejuce_shared_code_defaults()
 # If you want to appease the CMake gods and avoid globs, manually add files like so:
 # set(SourceFiles Source/PluginEditor.h Source/PluginProcessor.h Source/PluginEditor.cpp Source/PluginProcessor.cpp)
 file(GLOB_RECURSE SourceFiles CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/source/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/source/*.h")
-# The relay is its own plugin (below)
-list(FILTER SourceFiles EXCLUDE REGEX "/source/relay/")
+# The relay is its own plugin (below); the link hub lives only in the relay, the panel uses just its headers
+list(FILTER SourceFiles EXCLUDE REGEX "/source/(relay|link)/")
 target_sources(SharedCode INTERFACE ${SourceFiles})
 
 # Adds a BinaryData target for embedding assets into the binary
@@ -215,6 +215,10 @@ juce_add_plugin(HeartseekerRelay
     VST3_CATEGORIES Fx
     PRODUCT_NAME "heartseeker relay")
 
+# The link hub: self-contained, compiled into every relay (the panel finds it there at run time, see RelayHubFinder)
+add_library(LinkHub INTERFACE)
+target_sources(LinkHub INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/source/link/LinkHub.cpp")
+
 # Like SharedCode: the relay's code, for both its plugin target and the Tests target
 add_library(RelayCode INTERFACE)
 pamplejuce_shared_code_defaults(TARGET RelayCode)
@@ -224,6 +228,7 @@ list(FILTER RelaySourceFiles EXCLUDE REGEX "RelayEntry\\.cpp$")
 target_sources(RelayCode INTERFACE ${RelaySourceFiles})
 target_link_libraries(RelayCode
     INTERFACE
+    LinkHub
     juce_audio_processors
     juce_gui_basics
     juce::juce_recommended_config_flags
@@ -240,6 +245,10 @@ include(PamplejuceIPP)
 # Everything related to the tests target
 pamplejuce_add_tests()
 target_link_libraries(Tests PRIVATE RelayCode)
+
+# The built relay file, for the test that loads it as a host would and finds its hub the way the panel does
+add_dependencies(Tests HeartseekerRelay_VST3)
+target_compile_definitions(Tests PRIVATE HEARTSEEKER_RELAY_BINARY="$<TARGET_FILE:HeartseekerRelay_VST3>")
 
 # A separate target for Benchmarks (keeps the Tests target fast)
 pamplejuce_add_benchmarks()

@@ -2,6 +2,7 @@
 
 #include "EditorPlacement.h"
 #include "EditorScale.h"
+#include "engine/BayLink.h"
 #include <juce_data_structures/juce_data_structures.h>
 
 // Plugin-wide preferences, shared by every instance and project, kept in the user's settings folder.
@@ -41,6 +42,14 @@ public:
     // Undo that gain on our own control outputs, in FL Studio only. We have none yet: a safety setting for when we do.
     bool getFlOutputCorrection() const;
     void setFlOutputCorrection (bool);
+
+    // What plays when a bay's return block is missing: silence (makes dropouts audible) or the audio that was sent
+    BayLink::MissingBlocks getMissingReturnBlocks() const;
+    void setMissingReturnBlocks (BayLink::MissingBlocks);
+
+    // A bay's round trip, in blocks of the host's largest block size; reported to the host as latency
+    int getRoundTripBlocks() const;
+    void setRoundTripBlocks (int);
 
 private:
     static juce::PropertiesFile::Options createOptions();

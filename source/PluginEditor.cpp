@@ -98,6 +98,9 @@ WebUi::Handlers PluginEditor::createPageHandlers()
         { "setting", [this] (const juce::var& message) { handleSetting (message); } },
         { "tab", [this] (const juce::var& message) { handleTab (message); } },
         { "openPlugin", [this] (const juce::var& message) { handleOpenPlugin (message); } },
+        { "bayOutput", [this] (const juce::var& message) { handleBayOutput (message); } },
+        { "measureLag", [this] (const juce::var&) { pluginProcessor.getBayLink().measureLag(); } },
+        { "resetLinkCounters", [this] (const juce::var&) { pluginProcessor.getBayLink().resetCounters(); } },
     };
     return handlers;
 }
@@ -110,6 +113,8 @@ juce::var PluginEditor::describeEditor() const
     current->setProperty ("resizing", EditorScale::toSettingsValue (settings->getResizing()));
     current->setProperty ("resizeAnchor", EditorScale::toSettingsValue (settings->getResizeAnchor()));
     current->setProperty ("flOutputCorrection", settings->getFlOutputCorrection());
+    current->setProperty ("missingReturnBlocks", BayLink::toName (settings->getMissingReturnBlocks()));
+    current->setProperty ("roundTripBlocks", settings->getRoundTripBlocks());
 
     const auto& engine = pluginProcessor.getEngine();
     juce::Array<juce::var> plugins;
@@ -123,7 +128,56 @@ juce::var PluginEditor::describeEditor() const
     state->setProperty ("settings", current);
     state->setProperty ("plugins", plugins);
     state->setProperty ("processing", pluginProcessor.isBeingProcessed());
+    state->setProperty ("link", describeLink());
     return state;
+}
+
+juce::var PluginEditor::describeLink() const
+{
+    const auto status = pluginProcessor.getBayLink().getStatus();
+    auto* link = new juce::DynamicObject();
+
+    const auto setIfKnown = [link] (const char* name, auto value) {
+        if (value.has_value())
+            link->setProperty (name, *value);
+    };
+
+    link->setProperty ("hubProblem", status.hubProblem);
+    link->setProperty ("name", status.linkName);
+    link->setProperty ("linkProblem", status.linkProblem);
+    link->setProperty ("receiver", status.receiverPlaying ? "playing" : status.receiverLinked ? "linked"
+                                                                                              : "none");
+    link->setProperty ("transmitter", status.transmitterReturning ? "returning" : status.transmitterLinked ? "linked"
+                                                                                                           : "none");
+    link->setProperty ("roundTrip", status.roundTripSamples);
+    link->setProperty ("roundTripBlocks", status.roundTripBlocks);
+    link->setProperty ("maxBlock", status.maxBlock);
+    link->setProperty ("sampleRate", status.sampleRate);
+    link->setProperty ("latency", pluginProcessor.getLatencySamples());
+    link->setProperty ("output", BayLink::toName (status.output));
+    link->setProperty ("missingBlocks", BayLink::toName (status.missingBlocks));
+    link->setProperty ("missing", static_cast<juce::int64> (status.missing));
+    link->setProperty ("replaced", static_cast<juce::int64> (status.replaced));
+    link->setProperty ("oversized", static_cast<juce::int64> (status.oversized));
+    setIfKnown ("headroomNow", status.headroomNow);
+    setIfKnown ("headroomLowest", status.headroomLowest);
+    setIfKnown ("blockMin", status.blockMin);
+    setIfKnown ("blockMax", status.blockMax);
+    setIfKnown ("differenceNow", status.differenceNow);
+    setIfKnown ("differenceLargest", status.differenceLargest);
+
+    constexpr const char* lagStates[] { "notMeasured", "measuring", "silent", "found", "noMatch" };
+    auto* lag = new juce::DynamicObject();
+    lag->setProperty ("state", lagStates[static_cast<size_t> (status.lag.state)]);
+    lag->setProperty ("samples", status.lag.samples);
+    lag->setProperty ("exact", status.lag.exact);
+    lag->setProperty ("similarity", status.lag.similarity);
+    lag->setProperty ("earliest", status.lag.earliest);
+    lag->setProperty ("latest", status.lag.latest);
+    lag->setProperty ("ambiguous", status.lag.ambiguous);
+    lag->setProperty ("alternative", status.lag.alternative);
+    link->setProperty ("lag", lag);
+    return link;
 }
 
 void PluginEditor::handleSetting (const juce::var& message)
@@ -162,6 +216,24 @@ void PluginEditor::handleSetting (const juce::var& message)
     {
         settings->setFlOutputCorrection (static_cast<bool> (value));
     }
+    else if (name == "missingReturnBlocks" && value.isString())
+    {
+        if (const auto missingBlocks = BayLink::missingBlocksFromName (value.toString()))
+        {
+            settings->setMissingReturnBlocks (*missingBlocks);
+            pluginProcessor.applyLinkSettings();
+        }
+    }
+    else if (name == "roundTripBlocks" && value.isInt())
+    {
+        const auto blocks = static_cast<int> (value);
+
+        if (blocks >= BayLink::minRoundTripBlocks && blocks <= BayLink::maxRoundTripBlocks)
+        {
+            settings->setRoundTripBlocks (blocks);
+            pluginProcessor.applyLinkSettings();
+        }
+    }
 }
 
 void PluginEditor::handleTab (const juce::var& message)
@@ -179,6 +251,21 @@ void PluginEditor::handleOpenPlugin (const juce::var& message)
 
     if (slot.isInt() && juce::isPositiveAndBelow (static_cast<int> (slot), static_cast<int> (plugins.size())))
         hostedEditors.open (*plugins[static_cast<size_t> (static_cast<int> (slot))]);
+}
+
+void PluginEditor::handleBayOutput (const juce::var& message)
+{
+    const auto& value = message["value"];
+
+    if (value.isString())
+        if (const auto output = BayLink::outputFromName (value.toString()))
+            pluginProcessor.getBayLink().setOutput (*output);
+}
+
+void PluginEditor::reportLink()
+{
+    if (webUi != nullptr && webUi->isShowing())
+        webUi->emitEventIfBrowserIsVisible ("link", describeLink());
 }
 
 void PluginEditor::reportProcessing()

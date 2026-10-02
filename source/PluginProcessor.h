@@ -4,8 +4,11 @@
 
 #include "EditorScale.h"
 #include "HostControls.h"
+#include "PluginSettings.h"
+#include "RelayHubFinder.h"
 #include "WebViewKeepAlive.h"
 #include "bridge/ControlSession.h"
+#include "engine/BayLink.h"
 #include "engine/Engine.h"
 
 #if (MSVC)
@@ -55,6 +58,12 @@ public:
     Engine& getEngine() noexcept { return engine; }
     HostControls& getHostControls() noexcept { return hostControls; }
 
+    // The external module bay (link test): its output switch is saved with the instance
+    BayLink& getBayLink() noexcept { return bayLink; }
+
+    // Takes the plugin-wide link settings (missing blocks, round trip), and reports the latency if it changed
+    void applyLinkSettings();
+
     // Every exposed parameter, for a page to control through its host control
     std::vector<ControlSession::Parameter> createSessionParameters();
 
@@ -73,6 +82,8 @@ public:
     bool isBeingProcessed() const noexcept;
 
 private:
+    void reportLatency();
+
     Engine engine;
     HostControls hostControls { *this };
     bool editorPlaced = false;
@@ -83,6 +94,15 @@ private:
 
     // Keeps the editors' hidden web view (once an editor starts it) for as long as any instance exists
     juce::SharedResourcePointer<WebViewKeepAlive> webViewKeepAlive;
+
+    juce::SharedResourcePointer<PluginSettings> settings;
+
+    // The finder outlives the link, since it keeps the relay's file (where the hub lives) loaded
+    RelayHubFinder relayHubFinder;
+    BayLink bayLink { [this] { return relayHubFinder.find(); } };
+
+    // Other instances' editors may change the plugin-wide settings at any time; declared last, so it stops first
+    juce::TimedCallback linkSettingsCheck { [this] { applyLinkSettings(); } };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

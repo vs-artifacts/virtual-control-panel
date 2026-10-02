@@ -26,6 +26,23 @@
         { value: "oppositeCorner", text: "Opposite corner" },
         { value: "windowCenter", text: "Window center" },
     ];
+
+    const missingModes: {
+        value: Settings["missingReturnBlocks"];
+        text: string;
+    }[] = [
+        { value: "silence", text: "Silence (makes dropouts audible)" },
+        { value: "bypass", text: "Bypass (plays the audio that was sent)" },
+    ];
+
+    const roundTrips: { value: Settings["roundTripBlocks"]; text: string }[] = [
+        {
+            value: 1,
+            text: "1 block (the receiver must run after the panel)",
+        },
+        { value: 2, text: "2 blocks" },
+        { value: 3, text: "3 blocks" },
+    ];
 </script>
 
 <p class="title">{editor.title}</p>
@@ -89,6 +106,37 @@
                 name="resizeAnchor"
                 checked={editor.settings.resizeAnchor === option.value}
                 onchange={() => changeSetting("resizeAnchor", option.value)}
+            />
+            {option.text}
+        </label>
+    {/each}
+</fieldset>
+
+<fieldset>
+    <legend>Missing bay return blocks</legend>
+    {#each missingModes as option (option.value)}
+        <label class="option">
+            <input
+                type="radio"
+                name="missingReturnBlocks"
+                checked={editor.settings.missingReturnBlocks === option.value}
+                onchange={() =>
+                    changeSetting("missingReturnBlocks", option.value)}
+            />
+            {option.text}
+        </label>
+    {/each}
+</fieldset>
+
+<fieldset>
+    <legend>Bay round trip (the host is told it as latency)</legend>
+    {#each roundTrips as option (option.value)}
+        <label class="option">
+            <input
+                type="radio"
+                name="roundTripBlocks"
+                checked={editor.settings.roundTripBlocks === option.value}
+                onchange={() => changeSetting("roundTripBlocks", option.value)}
             />
             {option.text}
         </label>

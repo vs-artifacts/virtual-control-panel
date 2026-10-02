@@ -54,11 +54,14 @@ private:
     double constrainScale (double) const;
     WebUi::Handlers createPageHandlers();
     juce::var describeEditor() const;
+    juce::var describeLink() const;
     void handleResize (const juce::var&);
     void handleSetting (const juce::var&);
     void handleTab (const juce::var&);
     void handleOpenPlugin (const juce::var&);
+    void handleBayOutput (const juce::var&);
     void reportProcessing();
+    void reportLink();
 
     PluginProcessor& pluginProcessor;
     juce::SharedResourcePointer<PluginSettings> settings;
@@ -72,7 +75,10 @@ private:
     std::optional<Drag> drag;
     std::unique_ptr<EditorPlacement> placement;
     std::optional<bool> sentProcessing;
-    juce::TimedCallback processingCheck { [this] { reportProcessing(); } };
+    juce::TimedCallback processingCheck { [this] {
+        reportProcessing();
+        reportLink();
+    } };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)
 };

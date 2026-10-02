@@ -42,7 +42,7 @@ export function sendTab(index: number): void {
     window.__JUCE__.backend.emitEvent('tab', { index })
 }
 
-export function sendSetting(name: string, value: string | boolean): void {
+export function sendSetting(name: string, value: string | boolean | number): void {
     window.__JUCE__.backend.emitEvent('setting', { name, value })
 }
 
@@ -62,6 +62,25 @@ export function onDisplay(listener: (display: unknown) => void): void {
 // { running }: whether the host is running the plugin's audio (FL's smart disable stops it)
 export function onProcessing(listener: (message: unknown) => void): void {
     window.__JUCE__.backend.addEventListener('processing', listener)
+}
+
+// The bay link's status (see LinkStatus), about 4 times a second while the editor shows
+export function onLink(listener: (status: unknown) => void): void {
+    window.__JUCE__.backend.addEventListener('link', listener)
+}
+
+// What the panel plays: its own sound (delayed by the round trip) or the bay's return
+export function sendBayOutput(value: 'direct' | 'return'): void {
+    window.__JUCE__.backend.emitEvent('bayOutput', { value })
+}
+
+// Compares the next stretch of returned audio with what was sent; the result comes with the link status
+export function sendMeasureLag(): void {
+    window.__JUCE__.backend.emitEvent('measureLag', {})
+}
+
+export function sendResetLinkCounters(): void {
+    window.__JUCE__.backend.emitEvent('resetLinkCounters', {})
 }
 
 // { items }: our menu for a parameter, with the host's options in a submenu

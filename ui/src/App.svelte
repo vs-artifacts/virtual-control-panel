@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import ContextMenu from "./components/ContextMenu.svelte";
+  import LinkStatus from "./components/LinkStatus.svelte";
   import PluginsTab from "./components/PluginsTab.svelte";
   import ResizeGrips from "./components/ResizeGrips.svelte";
   import SettingsTab from "./components/SettingsTab.svelte";
@@ -79,6 +80,8 @@
         {#each controls.params as param (param.h)}
           <Slider {param} />
         {/each}
+
+        <LinkStatus />
       {/if}
     {/if}
   </main>

@@ -308,3 +308,34 @@ TEST_CASE ("The page's corner grips resize the plugin", "[webui][webview]")
 
     CHECK (messages == juce::StringArray { "topLeft start", "topLeft end" });
 }
+
+TEST_CASE ("The Panel tab shows the bay link and sends the output choice", "[webui][webview]")
+{
+    if (!WebUi::isSupported())
+        SKIP ("No supported web view on this system");
+
+    juce::var chosen;
+    WebUi::Handlers handlers;
+    handlers.describeEditor = [] {
+        return juce::JSON::parse (R"({ "title": "test", "tab": 0, "settings": {}, "plugins": [], "processing": true,
+            "link": { "hubProblem": "", "name": "Panel 1", "linkProblem": "", "receiver": "playing", "transmitter": "returning",
+                "roundTrip": 1024, "roundTripBlocks": 2, "maxBlock": 512, "sampleRate": 48000, "latency": 1024,
+                "output": "direct", "missingBlocks": "silence", "missing": 3, "replaced": 0, "oversized": 0,
+                "differenceNow": 0, "differenceLargest": 0,
+                "lag": { "state": "found", "samples": 0, "exact": true, "similarity": 1, "earliest": 1024, "latest": 8192 } } })");
+    };
+    handlers.events["bayOutput"] = [&chosen] (const juce::var& message) { chosen = message; };
+
+    KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
+    ControlSession noParameters ({});
+    OffscreenWebUi page (keys, noParameters, std::move (handlers));
+    CHECK (page.waitFor ("document.getElementById('link-state')?.textContent ?? ''", "Linked as Panel 1") == "Linked as Panel 1");
+    CHECK (page.evaluate ("document.getElementById('link-relays').textContent") == "receiver playing; transmitter returning");
+    CHECK (page.evaluate ("document.getElementById('link-missing').textContent") == "3 (played as silence)");
+    CHECK (page.evaluate ("document.getElementById('link-difference').textContent.trim()") == "now identical, largest identical");
+    CHECK (page.evaluate ("document.getElementById('link-lag').textContent") == "exact match at 0 samples");
+
+    page.evaluate ("document.querySelectorAll('input[name=bayOutput]')[1].click()");
+    page.pumpUntil ([&chosen] { return !chosen.isVoid(); });
+    CHECK (chosen["value"] == "return");
+}

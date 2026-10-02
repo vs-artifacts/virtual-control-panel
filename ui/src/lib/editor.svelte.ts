@@ -1,10 +1,14 @@
 import { fetchEditorState, onProcessing, sendOpenPlugin, sendResetSize, sendSetting, sendTab } from './bridge'
+import { link, listenForLink, readLink } from './link.svelte'
+import { asRecord, oneOf } from './read'
 
 export const tabNames = ['Panel', 'Plugins', 'Settings'] as const
 
 const placements = ['off', 'hostPlaced', 'mouse', 'hostMainWindow'] as const
 const resizings = ['smooth', 'sharp'] as const
 const anchors = ['oppositeCorner', 'windowCenter'] as const
+const missingModes = ['silence', 'bypass'] as const
+const roundTrips = [1, 2, 3] as const
 
 // Plugin-wide preferences, stored by the plugin
 export interface Settings {
@@ -13,6 +17,8 @@ export interface Settings {
     resizing: (typeof resizings)[number]
     resizeAnchor: (typeof anchors)[number]
     flOutputCorrection: boolean
+    missingReturnBlocks: (typeof missingModes)[number]
+    roundTripBlocks: (typeof roundTrips)[number]
 }
 
 export interface HostedPlugin {
@@ -28,7 +34,15 @@ export const editor = $state({
     ready: false,
     title: '',
     tab: 0,
-    settings: { keepWebViewWarm: false, editorPlacement: 'off', resizing: 'smooth', resizeAnchor: 'oppositeCorner', flOutputCorrection: true } as Settings,
+    settings: {
+        keepWebViewWarm: false,
+        editorPlacement: 'off',
+        resizing: 'smooth',
+        resizeAnchor: 'oppositeCorner',
+        flOutputCorrection: true,
+        missingReturnBlocks: 'silence',
+        roundTripBlocks: 2,
+    } as Settings,
     plugins: [] as HostedPlugin[],
     // Unknown (null) until the plugin says
     processing: null as boolean | null,
@@ -36,14 +50,6 @@ export const editor = $state({
 
 // Only a page that has heard from the plugin sends changes back to it
 let connected = false
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-    return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null
-}
-
-function oneOf<T extends string>(options: readonly T[], value: unknown): T | undefined {
-    return options.find((option) => option === value)
-}
 
 function readPlugins(raw: unknown): HostedPlugin[] {
     if (!Array.isArray(raw)) return []
@@ -70,6 +76,8 @@ function readSettings(raw: unknown): void {
     settings.editorPlacement = oneOf(placements, fields.editorPlacement) ?? settings.editorPlacement
     settings.resizing = oneOf(resizings, fields.resizing) ?? settings.resizing
     settings.resizeAnchor = oneOf(anchors, fields.resizeAnchor) ?? settings.resizeAnchor
+    settings.missingReturnBlocks = oneOf(missingModes, fields.missingReturnBlocks) ?? settings.missingReturnBlocks
+    settings.roundTripBlocks = roundTrips.find((blocks) => blocks === fields.roundTripBlocks) ?? settings.roundTripBlocks
 }
 
 export async function loadEditorState(): Promise<void> {
@@ -78,6 +86,8 @@ export async function loadEditorState(): Promise<void> {
 
         if (typeof running === 'boolean') editor.processing = running
     })
+
+    listenForLink()
 
     try {
         const state = asRecord(await fetchEditorState())
@@ -92,6 +102,7 @@ export async function loadEditorState(): Promise<void> {
 
         readSettings(state.settings)
         editor.plugins = readPlugins(state.plugins)
+        link.status = readLink(state.link)
     } catch {
         // The Panel tab still works; the other tabs just have nothing from the plugin
     } finally {

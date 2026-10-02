@@ -21,6 +21,9 @@ PluginProcessor::PluginProcessor()
 
     for (size_t i = 0; i < exposed.size(); ++i)
         hostControls.bind (static_cast<int> (i), *exposed[i].parameter);
+
+    applyLinkSettings();
+    linkSettingsCheck.startTimerHz (2);
 }
 
 PluginProcessor::~PluginProcessor()
@@ -97,7 +100,26 @@ void PluginProcessor::changeProgramName (int index, const juce::String& newName)
 void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     engine.prepare (sampleRate, samplesPerBlock, isNonRealtime());
-    setLatencySamples (engine.getLatencySamples());
+    applyLinkSettings();
+    bayLink.prepare (sampleRate, samplesPerBlock);
+    reportLatency();
+}
+
+void PluginProcessor::applyLinkSettings()
+{
+    bayLink.setMissingBlocks (settings->getMissingReturnBlocks());
+
+    if (const auto blocks = settings->getRoundTripBlocks(); blocks != bayLink.getRoundTripBlocks())
+    {
+        bayLink.setRoundTripBlocks (blocks);
+        reportLatency();
+    }
+}
+
+void PluginProcessor::reportLatency()
+{
+    // The bay's round trip delays everything we play, the direct sound included
+    setLatencySamples (engine.getLatencySamples() + bayLink.getRoundTripSamples());
 }
 
 void PluginProcessor::releaseResources()
@@ -139,6 +161,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         buffer.clear (i, 0, buffer.getNumSamples());
 
     engine.process (buffer, midiMessages, getPlayHead());
+    bayLink.process (buffer);
 }
 
 bool PluginProcessor::isBeingProcessed() const noexcept
@@ -164,6 +187,7 @@ void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
     juce::XmlElement state ("HeartseekerPanelState");
     state.setAttribute ("editorPlaced", editorPlaced);
     state.setAttribute ("editorTab", editorTab);
+    state.setAttribute ("bayOutput", BayLink::toName (bayLink.getOutput()));
 
     if (editorScale.has_value())
         state.setAttribute ("editorScale", *editorScale);
@@ -179,6 +203,7 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
     {
         editorPlaced = state->getBoolAttribute ("editorPlaced");
         editorTab = juce::jlimit (0, numEditorTabs - 1, state->getIntAttribute ("editorTab"));
+        bayLink.setOutput (BayLink::outputFromName (state->getStringAttribute ("bayOutput")).value_or (BayLink::Output::direct));
 
         if (state->hasAttribute ("editorScale"))
             editorScale = EditorScale::constrain (state->getDoubleAttribute ("editorScale"), EditorScale::Resizing::smooth, 1.0);
