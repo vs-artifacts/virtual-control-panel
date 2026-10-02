@@ -137,6 +137,8 @@ pamplejuce_shared_code_defaults()
 # If you want to appease the CMake gods and avoid globs, manually add files like so:
 # set(SourceFiles Source/PluginEditor.h Source/PluginProcessor.h Source/PluginEditor.cpp Source/PluginProcessor.cpp)
 file(GLOB_RECURSE SourceFiles CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/source/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/source/*.h")
+# The relay is its own plugin (below)
+list(FILTER SourceFiles EXCLUDE REGEX "/source/relay/")
 target_sources(SharedCode INTERFACE ${SourceFiles})
 
 # Adds a BinaryData target for embedding assets into the binary
@@ -199,11 +201,45 @@ endif ()
 # Link the JUCE plugin targets our SharedCode target
 target_link_libraries("${PROJECT_NAME}" PRIVATE SharedCode)
 
+# The relay node: a separate, small VST3 effect (no web view, no engine) that sits in FL around FL's own plugins
+juce_add_plugin(HeartseekerRelay
+    COMPANY_NAME "${COMPANY_NAME}"
+    BUNDLE_ID "com.heartseeker.heartseekerrelay"
+    COPY_PLUGIN_AFTER_BUILD ${COPY_PLUGIN_AFTER_BUILD}
+    PLUGIN_MANUFACTURER_CODE Hrtk
+    PLUGIN_CODE Hsr1
+    FORMATS VST3
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_OUTPUT FALSE
+    VST3_CATEGORIES Fx
+    PRODUCT_NAME "heartseeker relay")
+
+# Like SharedCode: the relay's code, for both its plugin target and the Tests target
+add_library(RelayCode INTERFACE)
+pamplejuce_shared_code_defaults(TARGET RelayCode)
+file(GLOB_RECURSE RelaySourceFiles CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/source/relay/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/source/relay/*.h")
+# The plugin entry point; Tests already has the panel's
+list(FILTER RelaySourceFiles EXCLUDE REGEX "RelayEntry\\.cpp$")
+target_sources(RelayCode INTERFACE ${RelaySourceFiles})
+target_link_libraries(RelayCode
+    INTERFACE
+    juce_audio_processors
+    juce_gui_basics
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_lto_flags
+    juce::juce_recommended_warning_flags)
+
+target_sources(HeartseekerRelay PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/source/relay/RelayEntry.cpp")
+target_compile_definitions(HeartseekerRelay PRIVATE JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_WEB_BROWSER=0)
+target_link_libraries(HeartseekerRelay PRIVATE RelayCode)
+
 # IPP support, comment out to disable
 include(PamplejuceIPP)
 
 # Everything related to the tests target
 pamplejuce_add_tests()
+target_link_libraries(Tests PRIVATE RelayCode)
 
 # A separate target for Benchmarks (keeps the Tests target fast)
 pamplejuce_add_benchmarks()

@@ -9,6 +9,7 @@ namespace
     constexpr auto resizingKey = "resizing";
     constexpr auto resizeAnchorKey = "resizeAnchor";
     constexpr auto lastEditorScaleKey = "lastEditorScale";
+    constexpr auto flOutputCorrectionKey = "flOutputCorrection";
 }
 
 PluginSettings::PluginSettings()
@@ -74,6 +75,16 @@ double PluginSettings::getLastEditorScale() const
 void PluginSettings::setLastEditorScale (double scale)
 {
     file.setValue (lastEditorScaleKey, scale);
+}
+
+bool PluginSettings::getFlOutputCorrection() const
+{
+    return file.getBoolValue (flOutputCorrectionKey, true);
+}
+
+void PluginSettings::setFlOutputCorrection (bool shouldCorrect)
+{
+    file.setValue (flOutputCorrectionKey, shouldCorrect);
 }
 
 juce::PropertiesFile::Options PluginSettings::createOptions()

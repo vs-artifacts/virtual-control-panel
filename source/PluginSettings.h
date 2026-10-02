@@ -35,6 +35,13 @@ public:
     double getLastEditorScale() const;
     void setLastEditorScale (double);
 
+    // What FL Studio multiplies a generator's added outputs by (measured, see docs/decisions.md); effects' aren't scaled
+    static constexpr double flGeneratorOutputGain = 6536795.0 / 8388608.0;
+
+    // Undo that gain on our own control outputs, in FL Studio only. We have none yet: a safety setting for when we do.
+    bool getFlOutputCorrection() const;
+    void setFlOutputCorrection (bool);
+
 private:
     static juce::PropertiesFile::Options createOptions();
 

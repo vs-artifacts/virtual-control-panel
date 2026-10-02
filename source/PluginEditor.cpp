@@ -79,6 +79,8 @@ PluginEditor::PluginEditor (PluginProcessor& p)
 
     // Only our own corner handles resize the window (not the host's window frame), always at the design's aspect ratio
     setScale (p.getEditorScale().value_or (settings->getLastEditorScale()));
+
+    processingCheck.startTimerHz (4);
 }
 
 PluginEditor::~PluginEditor() = default;
@@ -107,6 +109,7 @@ juce::var PluginEditor::describeEditor() const
     current->setProperty ("editorPlacement", EditorPlacement::toSettingsValue (settings->getEditorPlacement()));
     current->setProperty ("resizing", EditorScale::toSettingsValue (settings->getResizing()));
     current->setProperty ("resizeAnchor", EditorScale::toSettingsValue (settings->getResizeAnchor()));
+    current->setProperty ("flOutputCorrection", settings->getFlOutputCorrection());
 
     const auto& engine = pluginProcessor.getEngine();
     juce::Array<juce::var> plugins;
@@ -119,6 +122,7 @@ juce::var PluginEditor::describeEditor() const
     state->setProperty ("tab", pluginProcessor.getEditorTab());
     state->setProperty ("settings", current);
     state->setProperty ("plugins", plugins);
+    state->setProperty ("processing", pluginProcessor.isBeingProcessed());
     return state;
 }
 
@@ -154,6 +158,10 @@ void PluginEditor::handleSetting (const juce::var& message)
         if (const auto anchor = EditorScale::anchorFromSettingsValue (value.toString()))
             settings->setResizeAnchor (*anchor);
     }
+    else if (name == "flOutputCorrection" && value.isBool())
+    {
+        settings->setFlOutputCorrection (static_cast<bool> (value));
+    }
 }
 
 void PluginEditor::handleTab (const juce::var& message)
@@ -171,6 +179,20 @@ void PluginEditor::handleOpenPlugin (const juce::var& message)
 
     if (slot.isInt() && juce::isPositiveAndBelow (static_cast<int> (slot), static_cast<int> (plugins.size())))
         hostedEditors.open (*plugins[static_cast<size_t> (static_cast<int> (slot))]);
+}
+
+void PluginEditor::reportProcessing()
+{
+    const auto processing = pluginProcessor.isBeingProcessed();
+
+    // Re-sent once shown, so a hidden page catches up
+    if (webUi == nullptr || !webUi->isShowing() || sentProcessing == processing)
+        return;
+
+    sentProcessing = processing;
+    auto* message = new juce::DynamicObject();
+    message->setProperty ("running", processing);
+    webUi->emitEventIfBrowserIsVisible ("processing", message);
 }
 
 void PluginEditor::handleResize (const juce::var& message)

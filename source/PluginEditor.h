@@ -58,6 +58,7 @@ private:
     void handleSetting (const juce::var&);
     void handleTab (const juce::var&);
     void handleOpenPlugin (const juce::var&);
+    void reportProcessing();
 
     PluginProcessor& pluginProcessor;
     juce::SharedResourcePointer<PluginSettings> settings;
@@ -70,6 +71,8 @@ private:
     juce::Label webUiUnavailable;
     std::optional<Drag> drag;
     std::unique_ptr<EditorPlacement> placement;
+    std::optional<bool> sentProcessing;
+    juce::TimedCallback processingCheck { [this] { reportProcessing(); } };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)
 };

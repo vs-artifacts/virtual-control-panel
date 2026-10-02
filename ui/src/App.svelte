@@ -68,6 +68,13 @@
       {:else}
         <h1>heartseeker panel</h1>
         <p id="bridge-status">{status}</p>
+        {#if editor.processing !== null}
+          <p>
+            Audio: {editor.processing
+              ? "running"
+              : "not running (the host has stopped calling this plugin)"}
+          </p>
+        {/if}
 
         {#each controls.params as param (param.h)}
           <Slider {param} />

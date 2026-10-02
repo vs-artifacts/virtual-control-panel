@@ -63,9 +63,10 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
 2. **1b. Bridge:** the plugin editor shows a minimal Svelte page; one plain slider controls one hosted parameter two-way, including pushed updates when the hosted plugin's own UI changes it; then a remote-control server. Sub-slices:
    - **1b.1. Page in the editor** via JUCE's native bridge. **Built 2026-09-26; FL go/no-go passed** (page shows, second instance fine, hosted plugins unaffected). Its findings (slow reopen, white flash, no key pass-through) are fixed; **FL re-check passed 2026-09-26**, except that keys don't pass while a mouse button is held on the page (carried into 1b.2).
    - **1b.2. One slider, two-way** (kHs 3-Band EQ low band gain) via the native bridge, **also exposed to the host** for automation and controllers (added to this slice: a core mechanic, so test it early). **Built 2026-09-27; FL check passed 2026-09-27** (slider both ways, Param 1 in the browser, last tweaked, automation playback and recording, Patcher nodes and internal controller links; a hardware controller and plugin swaps weren't testable). Centring on first open built and passed. Its findings are being wrapped up in the same slice (see "1b.2 wrap-up" below): tabs, scaling and corner resizing, the host's right-click menu, and key pass-through while the mouse is down (first pass: diagnosis). **Wrap-up built 2026-09-27; awaiting the FL check.**
-   - **1b.3. Plugin swap:** a button per slot in the Plugins tab that swaps the plugin from a copy of FL's plugin menu (its categories and favourites, plus "More plugins…" with everything installed), read from FL's plugin database (`Documents\Image-Line\FL Studio\Presets\Plugin database`) each time the menu opens so it follows FL's changes, and styleable like the rest of our UI later. Needs: swapping while audio runs, safe unbinding of host controls, saving each slot's plugin and the bindings with the project, and a rudimentary "Bind…" menu per host control (the real solution is each parameter item in a slot's UI linking to the exposed-parameters list). Lets us test automation across swaps.
-   - **1b.4. External module bays:** in/out pins on our plugin that the host routes through its own plugins and back, because FL's native plugins can't be hosted by us (see "1b.2 wrap-up"). Needs an FL experiment first: how FL handles a loop through a plugin (refused, or at least one block of delay); the alternative is linked instances sharing one engine.
-   - **1b.5. Remote server:** Crow WebSocket server behind a remote-control toggle, own update thread, security tests, "Open in browser" button.
+   - **1b.3. Parameter outputs:** can our plugin hand values to FL as *outputs* (Patcher's controls list, internal controller links)? Two temporary test parameters appended after the pool (a meter-category one, which JUCE marks read-only in VST3, and an ordinary automatable one), both moved by an internal slow wave from the audio thread (VST3's output-parameter route; Param 1's plugin-driven changes go through the message-thread edit route and appear only as an input). No MIDI CC out: the user found it doesn't drive FL plugins in Patcher. **FL check 2026-10-01: no parameter outputs** (details in "Module bays and relay nodes"); the test parameters are removed.
+   - **1b.4. External module bays:** our way to use FL's own plugins, which we can't host (see "1b.2 wrap-up"). FL forbids feedback loops, so relay nodes on both sides of the FL plugin talk to our plugin directly instead of over Patcher wires (see "Module bays and relay nodes" below). Placed before plugin swap to validate the idea, or to settle a full move away from FL's plugins. **FL experiments done 2026-10-01** (outputs, Peak Controller, gain, smart disable; relay test plugin built and checked). **Next, in a new session: the minimal link test (audio round trip);** see "Module bays and relay nodes", which is the handover.
+   - **1b.5. Plugin swap** (core, non-negotiable: choosing the plugin in a slot): a button per slot in the Plugins tab that swaps the plugin from a copy of FL's plugin menu (its categories and favourites, plus "More plugins…" with everything installed), read from FL's plugin database (`Documents\Image-Line\FL Studio\Presets\Plugin database`) each time the menu opens so it follows FL's changes, and styleable like the rest of our UI later. Needs: swapping while audio runs, safe unbinding of host controls, saving each slot's plugin and the bindings with the project, and a rudimentary "Bind…" menu per host control (the real solution is each parameter item in a slot's UI linking to the exposed-parameters list). Lets us test automation across swaps.
+   - **1b.6. Remote server:** Crow WebSocket server behind a remote-control toggle, own update thread, security tests, "Open in browser" button.
 3. **1c. Shader knob:** the slider becomes a WebGL2 glass/light-scatter knob with a frame-time readout, running inside FL.
 - Style work starts after 1c.
 
@@ -121,7 +122,7 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
   - Hosted plugins' own windows still swallow keys (they aren't FL's windows); a workaround would mean intercepting other plugins' window messages. Parked; showing hosted editors inside our editor may solve it later.
 - **Plugin-wide settings** (`PluginSettings`): an XML file in `%APPDATA%\heartseeker panel\`, shared by all instances and projects. Values from it are validated like any other input.
 
-### Remote server rules (1b.5 and later LAN mode)
+### Remote server rules (1b.6 and later LAN mode)
 - **Crow >= 1.3.4.** Five advisories published Sept 2026 (auth bypass via middleware on WebSocket upgrade, Windows crash from nested JSON in Crow's parser, fragmented messages bypassing size limits, and two in features we won't use); the three relevant ones are fixed in 1.3.4. A 2022 use-after-free allowed code execution (up to 1.0+4). Boost.Beast rejected: hand-written hardened netcode isn't maintainable here.
 - **Use Crow minimally:** auth checks in `onaccept` (never middleware), two routes, no Crow JSON / static folder / sessions / multipart / compression, `CROW_ENFORCE_WS_SPEC`, limits on request size, message size and connections, `signal_clear()` (else it hijacks the host's shutdown signals), `TCP_NODELAY`.
 - **Checks:** bind `127.0.0.1` until LAN mode; per-session 128-bit token from the OS's secure random source, compared in constant time, stripped from the address bar after load; exact `Origin` and `Host` match (DNS rebinding); HTTP read-only, commands only over the authenticated WebSocket.
@@ -155,13 +156,13 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
 - **State restore:** host controls take the restored values without notifying the host, before the host reads them back.
 - **Not yet:** passing the hosted plugin's own gestures on to the host (so a recording from the plugin's own window groups its moves); rebinding while running (needs a realtime-safe handover).
 
-### Protocol (native bridge now, WebSocket in 1b.5)
+### Protocol (native bridge now, WebSocket in 1b.6)
 - **`ControlSession`** (`source/bridge/`) doesn't know the transport. `catalog` (native function) starts or restarts a session: `[{ h, slot, plugin, name, host, v, t }]`. `params` (C++ to page, 30 Hz, only while the editor is shown): `[{ h, v, t }]` for changes since the last one. `set` (page to C++): `[{ h, v }]`, at most one batch per frame. `gesture`: `{ h, active }`.
 - **Validation:** arrays only, at most 4096 entries (else the whole batch is dropped), integer handles in range, finite numbers clamped to 0–1; everything else is ignored. Nothing is accepted before the page has asked for the catalog.
 - **Open gestures end** when the page restarts the session or the session ends (editor closed), so the host never stays stuck in a gesture.
 - **The page ignores incoming values for a slider while dragging it** (replies still on their way would make it jitter); it always takes the display text.
-- **Accepted:** JUCE parses page messages with its recursive JSON parser before we can check their depth. Only our own page can send, and a compromised page already has full control. WebSocket input is checked before parsing (1b.5).
-- **For 1b.5:** the session is message-thread-only because `poll` fetches display text; the remote server's own update thread needs values and text split. Two sessions on one control (editor + remote) need shared gesture bookkeeping: JUCE asserts on overlapping gestures.
+- **Accepted:** JUCE parses page messages with its recursive JSON parser before we can check their depth. Only our own page can send, and a compromised page already has full control. WebSocket input is checked before parsing (1b.6).
+- **For 1b.6:** the session is message-thread-only because `poll` fetches display text; the remote server's own update thread needs values and text split. Two sessions on one control (editor + remote) need shared gesture bookkeeping: JUCE asserts on overlapping gestures.
 
 ### Keys on focused controls
 - Sliders, checkboxes and buttons don't count as text entry, so forwarded keys still reach the host while they have focus. Text fields and selects keep their keys.
@@ -185,7 +186,7 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
 
 ### FL check (2026-09-27): passed
 - Slider both ways; Param 1 in the browser, last tweaked, automation playback and recording, Patcher nodes and internal controller links; centring on first open.
-- Not testable yet: a hardware controller link (none at hand), and what happens to automation when a plugin is swapped (no swap UI: 1b.3).
+- Not testable yet: a hardware controller link (none at hand), and what happens to automation when a plugin is swapped (no swap UI: 1b.5).
 - Findings, handled in the wrap-up below: the web view scaled to the monitor (200%) while the JUCE part followed FL (100%); right-click showed the browser's menu instead of the host's options; no keys pass while the mouse is pressed anywhere in our editor.
 
 ## 1b.2 wrap-up (2026-09-27; second round 2026-09-28)
@@ -197,7 +198,7 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
 - **Dropped:** the "Inspect the UI" button (Melatonin inspects JUCE components, and there are none left to inspect), the key log, and the "keep keyboard focus in the host" experiment (both solved by the keys fix below; the log is recoverable from commit `fb37620`).
 
 ### Tabs
-- **Panel** (sliders), **Plugins** (the temporary plugin list and "Open window" buttons; the swap buttons come in 1b.3), **Settings** (every setting, the title and version).
+- **Panel** (sliders), **Plugins** (the temporary plugin list and "Open window" buttons; the swap buttons come in 1b.5), **Settings** (every setting, the title and version).
 - Each instance reopens on the tab it was closed at (saved with the instance); new instances open on Panel.
 - The whole Plugins tab is temporary: it becomes part of the panel later, in our own style.
 
@@ -230,8 +231,63 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
 - It's the format, not their location: FL's own plugins (e.g. `Plugins\Fruity\Generators\FLEX\FLEX_x64.dll`) use FL's private plugin format, which only FL can host; Image-Line's kit is for writing plugins for FL, not hosting them. "FL Studio VSTi" (FL running as a VST2) can't be hosted either: JUCE hosts VST2 only with Steinberg's VST2 SDK, which is no longer licensed. Hence external module bays (1b.4).
 
 ### FL check (2026-09-27): passed, minor bugs and tweaks left for the next session
-- **Next:** a small test of parameters as outputs (FL's Patcher "controls" list): a meter-category parameter (JUCE marks those read-only in VST3) that moves by itself, plus MIDI CC out. Param 1 already shows that a plugin-driven ordinary parameter appears only as an input.
+- **Next (now slice 1b.3):** a small test of parameters as outputs (FL's Patcher "controls" list): a meter-category parameter (JUCE marks those read-only in VST3) that moves by itself, plus MIDI CC out. Param 1 already shows that a plugin-driven ordinary parameter appears only as an input.
 - **Keys:** FL's typing keyboard plays while the mouse is held on the slider, on a grip, on a tab and on empty page space; releases arrive (no stuck notes), including when the mouse is released first.
 - **Scaling:** at 200% Windows scaling the page fills the window at every size. All four grips resize at a fixed ratio; with "Opposite corner" the opposite corner stays put, with "Window center" the center does (detached windows); attached windows grow down and right. Sharp steps; size remembered per instance and for new instances; "Reset size". FL's window frame no longer resizes the plugin.
 - **Tabs:** reopen on the last tab (no flash of Panel first); new instances on Panel; all three tabs work; "Open window" on the Plugins tab opens the hosted plugin's editor.
 - **Right-click on the slider:** our menu shows "Host menu"; its submenu lists FL's options with headings and dividers, stays inside the window at any position, and its items work (e.g. "Create automation clip"). The menu closes on a click elsewhere, Escape, and clicking into FL.
+
+## Module bays and relay nodes (2026-10-01)
+Handover for the next session: read this section and `CLAUDE.md`, then propose the link test ("Next" below) for the user's go.
+
+### Decided
+- **FL forbids feedback loops** of any kind, so our plugin can't send audio through an FL plugin and get it back over Patcher wires. Both sides of a bay are wireless instead: relay nodes before and after the FL plugin talk to our plugin directly.
+- **FL findings (user):** MIDI CC out doesn't drive FL plugins in the user's Patcher setup. Audio into a Peak Controller does, linked to any knob: 0.1% precision, smoothing can be turned off.
+- **No parameter outputs (1b.3 FL check, 2026-10-01).** An ordinary parameter moved by our plugin on the audio thread ("Test output") is offered in Patcher only as an input; a meter-category one ("Test meter", read-only in VST3) appears nowhere. Inside Patcher a plugin's parameters don't show in FL's browser; outside it, "Test output" did. A brief recording test didn't capture its moves. So values reach FL's plugins only as audio into Peak Controllers.
+- **One relay node type** with an input/output mode: "heartseeker relay", a separate small VST3 *effect* (`source/relay/`, CMake target `HeartseekerRelay`). VST3 fixes inputs, outputs and parameters at load, so it declares everything both modes need, all active (FL leaves outputs declared inactive switched off); unused pins stay silent. Kept light, since an instrument package needs 2 relays per FL plugin: a small native JUCE window, no web view, no engine; configured from the panel's UI. Used inside Patcher and on mixer inserts (a useful utility there too).
+  - *Input mode* (before the FL plugin): outputs the audio our plugin sends, plus one control output per controlled parameter, each into its own Peak Controller linked to one knob. Audio outputs add no delay of their own.
+  - *Output mode* (after it): takes the FL plugin's audio and passes it back.
+- **The node demultiplexes.** Rejected: one value signal plus a selector signal into a switch script, because simultaneous changes (e.g. 10 parameters during a morph) would also need time multiplexing. The link itself carries exact values; audio encoding is only for the last step into FL.
+- **Link hub in the relay's file** (changed 2026-10-01; was in the panel's). All relays are the same file, so they share memory with no library at all, and relay-to-relay use without a panel comes free later (a utility the user wants if the link proves acoustically robust). The panel is a client: on the message thread, about once a second, it asks Windows whether the relay's file is loaded in FL's process, looks up one plain, versioned function, and holds a reference so the file can't unload while connected. No loading from disk, no network, no new files; a version mismatch or a bridged plugin (separate process) shows "not connected".
+  - **The hub is self-contained** (its own folder, no panel or relay dependencies; plain named channels any party can write to or read from), so moving it into a shared library later is packaging, not a redesign. It must stay small: it ships in every relay.
+  - Rejected: a shared library now (a third file to install, protect and sign), OS shared memory (a local attack surface; only if FL's bridging forces it), a relay mode of the panel (not light).
+- **Timing:** audio crosses the link through lock-free ring buffers with a fixed delay counted in samples (at least 2 × the largest block, since FL can vary block sizes). The panel reports the round trip to FL as latency and never waits for a relay.
+  - **Patcher's order** (FL's docs): modules at the same depth after "From FL Studio" run at the same time, on several threads; deeper columns run after. The panel and an input-mode relay (no input wires) share the first column, so the relay reads what the panel wrote a block earlier; the output-mode relay runs after the bay's plugin, after the panel, so the panel picks the return up a block later. Expect a steady 2 blocks plus the bay plugin's own latency.
+- **Missing return blocks:** a panel setting chooses *silence* (diagnostic; the user wants it kept for testing) or *bypass*: the panel plays the matching block it sent, so only the bay is skipped for that block instead of the whole chain dropping out.
+  - Bypass must line up with where the processed signal would have been: easy for the link's own delay, but a bay plugin with latency of its own (lookahead, linear phase) shifts the return further. Measuring that latency is open.
+  - Switching between processed and unprocessed audio can click when the effect changes the sound a lot; a short crossfade would need one block of lookahead (one more block of latency), so it's an option, not a default.
+- **Linking:** one link name per panel for now (e.g. "Panel 1", shown in every window); a relay connects to the first panel it finds and reconnects if it loads first. Choosing names comes later.
+- **FL gain correction is a panel setting** (Settings tab, plugin-wide, on by default, effective in FL Studio only): ×1.283291 on the panel's own control outputs. The panel has none yet; it's a hardwired safety for when it does. Relays need no correction (see below).
+
+### What FL does (measured 2026-10-01)
+- **Extra outputs work once assigned.** Until then FL sums every output into the main one (Patcher's first pin, or the channel's mixer track outside Patcher), and added Patcher pins stay silent.
+  - Assigning: wrapper settings > Processing > Connections lists the outputs by name, each with an on/off switch and a target number (plus "Auto map outputs"). In Patcher, target *n* is the node's pin *n* + 1: pin 1 is the main output, so target 1 is the first added pin.
+  - An output declared inactive shows switched off until the user switches it on.
+  - Mono and stereo outputs give the same Peak Controller reading; steady levels (DC) pass through Patcher intact. Never route control outputs to speakers.
+- **The Peak Controller is exact:** steady levels give exact tenths (relay → Peak Controller), linearly, near-instantly at maximum decay speed; its Ramp switch smooths jumps.
+- **FL scales a generator's added outputs by 0.7792467 (−2.167 dB), not an effect's.**
+  - Measured exactly: 24-bit Edison recordings (`C:\dev\auxiliary materials`) of the panel's 100% probe hold 6536795 in every sample, so 6536795 / 8388608 = 0.7792467 ±0.0000001. A relay reading the panel's probe agreed (0.7792467); one relay reading another's 100% level read exactly 1.0000000.
+  - It can't be corrected inside FL: no plugin there sets a gain precisely enough, and controlled parameters leave no room for error.
+- **Smart disable stops FL calling a plugin at all.** Wires keep animating, but nothing downstream gets values, and no audio leaves Patcher. A note wakes a generator.
+  - **Inside Patcher only Patcher's own smart disable counts** (set from Patcher's wrapper menu; Patcher has no Processing tab). With it on, our plugin stopped whatever its own setting said; with it off, a silent relay with its own "Allow smart disable" on kept running. So a Patcher holding relays needs smart disable off.
+  - **On a mixer insert the relay's own setting applies,** judged by its input: it stopped whether its outputs were silent or not. So input-mode relays on inserts need their own smart disable off.
+  - Reporting an endless tail made no observable difference; it was tried and removed.
+  - A relay that isn't being called counts as a missing block (silence or bypass, never a repeated stale buffer), and the user is told.
+  - **"Audio: running / not running"** (last audio block more than 500 ms ago, checked 4 times a second) shows on the panel's Panel tab and in the relay's window; it caught smart disable in every test. To be restyled as a graphic element later.
+
+### Next: the minimal link test (audio round trip)
+- **Setup in FL:** panel synth → link → relay A (input mode, main output) → an FL plugin (e.g. Fruity Filter; later one with latency) → relay B (output mode, input) → link → panel. A panel switch picks its output: direct, or the bay's return.
+- **Build:** the hub (self-contained, in the relay's file); the relay's input/output mode and link client; the panel's link client, direct/return switch and missing-block setting (silence / bypass). Every window shows: connected, link name, round-trip delay, dropout count.
+- **Measures:** whether the fixed delay stays steady in FL (order, threads, varying blocks); whether FL's latency compensation lines the return up; whether adding, removing and reloading in any order connects and disconnects cleanly (no crash, no stuck or stale audio).
+- **Then:** control outputs (input-mode relays, one per parameter, into Peak Controllers).
+
+### Current test builds
+- **Relay:** main input measured (its window shows the last block's peak to 7 decimals, to read a wire's exact level), all outputs silent, four control outputs declared (active, silent). Window: running indicator and input peak. Its test signals and switches are removed.
+- **Panel:** probe outputs removed; running indicator and the FL correction setting kept.
+
+### The user's preferences for this work
+- Precision first: controlled parameters leave no room for calibration error, so no fiddly correction chains inside FL.
+- Keep diagnostics that make FL's behaviour visible (silence on missing blocks, running indicators, exact level readouts) until the user drops them.
+- FL-specific behaviour goes behind settings, not hard-coded. Tidying the settings is a later polishing step, not now.
+- Relays stay light (many per instrument package); relays working without a panel is a wanted later utility.
+- Small slices, each ending in an FL check by the user; propose a plan and wait for a go before changing anything.

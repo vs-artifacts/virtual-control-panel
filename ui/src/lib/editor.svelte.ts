@@ -1,4 +1,4 @@
-import { fetchEditorState, sendOpenPlugin, sendResetSize, sendSetting, sendTab } from './bridge'
+import { fetchEditorState, onProcessing, sendOpenPlugin, sendResetSize, sendSetting, sendTab } from './bridge'
 
 export const tabNames = ['Panel', 'Plugins', 'Settings'] as const
 
@@ -12,6 +12,7 @@ export interface Settings {
     editorPlacement: (typeof placements)[number]
     resizing: (typeof resizings)[number]
     resizeAnchor: (typeof anchors)[number]
+    flOutputCorrection: boolean
 }
 
 export interface HostedPlugin {
@@ -27,8 +28,10 @@ export const editor = $state({
     ready: false,
     title: '',
     tab: 0,
-    settings: { keepWebViewWarm: false, editorPlacement: 'off', resizing: 'smooth', resizeAnchor: 'oppositeCorner' } as Settings,
+    settings: { keepWebViewWarm: false, editorPlacement: 'off', resizing: 'smooth', resizeAnchor: 'oppositeCorner', flOutputCorrection: true } as Settings,
     plugins: [] as HostedPlugin[],
+    // Unknown (null) until the plugin says
+    processing: null as boolean | null,
 })
 
 // Only a page that has heard from the plugin sends changes back to it
@@ -62,6 +65,7 @@ function readSettings(raw: unknown): void {
     const settings = editor.settings
 
     if (typeof fields.keepWebViewWarm === 'boolean') settings.keepWebViewWarm = fields.keepWebViewWarm
+    if (typeof fields.flOutputCorrection === 'boolean') settings.flOutputCorrection = fields.flOutputCorrection
 
     settings.editorPlacement = oneOf(placements, fields.editorPlacement) ?? settings.editorPlacement
     settings.resizing = oneOf(resizings, fields.resizing) ?? settings.resizing
@@ -69,6 +73,12 @@ function readSettings(raw: unknown): void {
 }
 
 export async function loadEditorState(): Promise<void> {
+    onProcessing((message) => {
+        const running = asRecord(message)?.running
+
+        if (typeof running === 'boolean') editor.processing = running
+    })
+
     try {
         const state = asRecord(await fetchEditorState())
 
@@ -78,6 +88,7 @@ export async function loadEditorState(): Promise<void> {
 
         if (typeof state.title === 'string') editor.title = state.title
         if (typeof state.tab === 'number' && Number.isInteger(state.tab) && state.tab >= 0 && state.tab < tabNames.length) editor.tab = state.tab
+        if (typeof state.processing === 'boolean') editor.processing = state.processing
 
         readSettings(state.settings)
         editor.plugins = readPlugins(state.plugins)

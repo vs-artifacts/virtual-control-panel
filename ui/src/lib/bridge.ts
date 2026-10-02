@@ -59,6 +59,11 @@ export function onDisplay(listener: (display: unknown) => void): void {
     window.__JUCE__.backend.addEventListener('display', listener)
 }
 
+// { running }: whether the host is running the plugin's audio (FL's smart disable stops it)
+export function onProcessing(listener: (message: unknown) => void): void {
+    window.__JUCE__.backend.addEventListener('processing', listener)
+}
+
 // { items }: our menu for a parameter, with the host's options in a submenu
 export function fetchParameterMenu(h: number, timeoutMs = 10000): Promise<unknown> {
     return callNative('parameterMenu', timeoutMs, h)

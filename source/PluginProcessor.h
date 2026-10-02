@@ -69,12 +69,17 @@ public:
     std::optional<double> getEditorScale() const noexcept { return editorScale; }
     void setEditorScale (double scale) noexcept { editorScale = scale; }
 
+    // Whether the host has run our audio in the last half second; false while it doesn't (e.g. FL's smart disable)
+    bool isBeingProcessed() const noexcept;
+
 private:
     Engine engine;
     HostControls hostControls { *this };
     bool editorPlaced = false;
     int editorTab = 0;
     std::optional<double> editorScale;
+
+    std::atomic<juce::uint32> lastBlockTime { 0 }; // Time::getMillisecondCounter()
 
     // Keeps the editors' hidden web view (once an editor starts it) for as long as any instance exists
     juce::SharedResourcePointer<WebViewKeepAlive> webViewKeepAlive;

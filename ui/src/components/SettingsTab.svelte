@@ -40,6 +40,16 @@
     Keep web UI warm (reopens instantly, uses more memory)
 </label>
 
+<label class="option">
+    <input
+        type="checkbox"
+        checked={editor.settings.flOutputCorrection}
+        onchange={(event) =>
+            changeSetting("flOutputCorrection", event.currentTarget.checked)}
+    />
+    Correct FL Studio's gain on our control outputs (x1.283291, FL only)
+</label>
+
 <fieldset>
     <legend>Center the window when it first opens on</legend>
     {#each placements as option (option.value)}

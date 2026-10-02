@@ -19,19 +19,19 @@ namespace
         return midi;
     }
 
-    // Sends one note-on, renders about half a second, and returns the loudest sample
+    // Sends one note-on, renders about half a second, and returns the loudest sample on the main output (channels 0 and 1)
     template <typename Render>
-    float loudestAfterNote (Render&& render)
+    float loudestAfterNote (Render&& render, int numChannels = 2)
     {
         auto loudest = 0.0f;
 
         for (int block = 0; block < 48; ++block)
         {
-            juce::AudioBuffer<float> buffer (2, testBlockSize);
+            juce::AudioBuffer<float> buffer (numChannels, testBlockSize);
             buffer.clear();
             auto midi = block == 0 ? noteOn() : juce::MidiBuffer();
             render (buffer, midi);
-            loudest = std::max (loudest, buffer.getMagnitude (0, testBlockSize));
+            loudest = std::max ({ loudest, buffer.getMagnitude (0, 0, testBlockSize), buffer.getMagnitude (1, 0, testBlockSize) });
         }
 
         return loudest;
@@ -223,16 +223,17 @@ TEST_CASE ("The fixed setup: both synths summed into the EQ", "[processor][synth
     CHECK_FALSE (engine.isConnected (serum, sylenth));
 
     processor.prepareToPlay (testSampleRate, testBlockSize);
+    const auto numChannels = processor.getTotalNumOutputChannels();
     const auto render = [&] (auto& buffer, auto& midi) { processor.processBlock (buffer, midi); };
 
     SECTION ("a note comes out of the EQ")
     {
-        CHECK (loudestAfterNote (render) > 0.001f);
+        CHECK (loudestAfterNote (render, numChannels) > 0.001f);
     }
 
     SECTION ("MIDI also passes straight through")
     {
-        juce::AudioBuffer<float> buffer (2, testBlockSize);
+        juce::AudioBuffer<float> buffer (numChannels, testBlockSize);
         buffer.clear();
         auto midi = noteOn();
         processor.processBlock (buffer, midi);
@@ -245,7 +246,7 @@ TEST_CASE ("The fixed setup: both synths summed into the EQ", "[processor][synth
         processor.getStateInformation (saved);
         processor.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
         processor.setStateInformation ("garbage", 7);
-        CHECK (loudestAfterNote (render) > 0.001f);
+        CHECK (loudestAfterNote (render, numChannels) > 0.001f);
     }
 
     processor.releaseResources();
@@ -297,7 +298,7 @@ TEST_CASE ("The EQ's low band gain is exposed to the host as Param 1", "[process
 
     // Restored state reaches Param 1 before the host reads it back
     processor.prepareToPlay (testSampleRate, testBlockSize);
-    juce::AudioBuffer<float> buffer (2, testBlockSize);
+    juce::AudioBuffer<float> buffer (processor.getTotalNumOutputChannels(), testBlockSize);
     juce::MidiBuffer midi;
     const auto processOneBlock = [&] {
         buffer.clear();
@@ -314,6 +315,24 @@ TEST_CASE ("The EQ's low band gain is exposed to the host as Param 1", "[process
     processor.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
     CHECK_THAT (eqLow.getValue(), WithinAbs (0.7, 0.001));
     CHECK_THAT (param1.getValue(), WithinAbs (eqLow.getValue(), 1e-6));
+
+    processor.releaseResources();
+}
+
+TEST_CASE ("The processor knows when the host is running it", "[processor]")
+{
+    PluginProcessor processor;
+    CHECK_FALSE (processor.isBeingProcessed());
+
+    processor.prepareToPlay (testSampleRate, testBlockSize);
+    juce::AudioBuffer<float> buffer (processor.getTotalNumOutputChannels(), testBlockSize);
+    juce::MidiBuffer midi;
+    processor.processBlock (buffer, midi);
+    CHECK (processor.isBeingProcessed());
+
+    // As when FL's smart disable stops calling it
+    juce::Thread::sleep (600);
+    CHECK_FALSE (processor.isBeingProcessed());
 
     processor.releaseResources();
 }

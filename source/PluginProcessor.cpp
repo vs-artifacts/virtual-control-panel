@@ -128,6 +128,8 @@ bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     juce::MidiBuffer& midiMessages)
 {
+    lastBlockTime.store (juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
+
     juce::ScopedNoDenormals noDenormals;
     auto totalNumInputChannels = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
@@ -137,6 +139,12 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         buffer.clear (i, 0, buffer.getNumSamples());
 
     engine.process (buffer, midiMessages, getPlayHead());
+}
+
+bool PluginProcessor::isBeingProcessed() const noexcept
+{
+    constexpr juce::uint32 stallMs = 500;
+    return juce::Time::getMillisecondCounter() - lastBlockTime.load (std::memory_order_relaxed) < stallMs;
 }
 
 //==============================================================================
