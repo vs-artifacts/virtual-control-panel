@@ -285,11 +285,14 @@ TEST_CASE ("The EQ's low band gain is exposed to the host as Param 1", "[process
     {
         ControlSession session (processor.createSessionParameters());
         const auto catalog = session.catalog();
-        REQUIRE (catalog.size() == 1);
+        REQUIRE (catalog.size() == 1 + BayLink::numControls);
         CHECK (catalog[0]["slot"] == "FX 1");
         CHECK (catalog[0]["plugin"] == processor.getEngine().getPlugins()[2]->getName());
         CHECK (catalog[0]["name"] == "Low");
         CHECK (catalog[0]["host"] == "Param 1");
+        CHECK (catalog[1]["slot"] == "Bay 1");
+        CHECK (catalog[1]["name"] == "Control 1");
+        CHECK (catalog[1]["host"] == "Param 2");
 
         session.applySet (juce::JSON::parse (R"([{ "h": 0, "v": 0.25 }])"));
         CHECK_THAT (param1.getValue(), WithinAbs (0.25, 1e-6));

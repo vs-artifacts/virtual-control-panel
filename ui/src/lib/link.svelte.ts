@@ -1,24 +1,36 @@
-import { onLink, sendBayOutput, sendMeasureLag, sendResetLinkCounters } from './bridge'
+import { onLink, sendBayBypass, sendMeasureLag, sendResetLinkCounters, sendStartProbe } from './bridge'
 import { asRecord, count, finiteOrNull, oneOf, text } from './read'
 
 const relayStates = ['none', 'linked', 'playing', 'returning'] as const
-const outputs = ['direct', 'return'] as const
-const missingModes = ['silence', 'bypass'] as const
-const lagStates = ['notMeasured', 'measuring', 'silent', 'found', 'noMatch'] as const
+const dropoutModes = ['safe', 'silence'] as const
+const autoStates = ['off', 'checking', 'oneBlock', 'fellBack'] as const
+const lagStates = ['notMeasured', 'measuring', 'found', 'noReturn', 'noMatch'] as const
+const probeStates = ['notRun', 'running', 'found', 'noReturn', 'noChange'] as const
 
-export type Output = (typeof outputs)[number]
+export type AutoState = (typeof autoStates)[number]
 
-// How far the return is from the audio it was sent with; positive samples: the return is late
+// A delay at which the panel's test burst comes back, and how strongly (1: as loud as sent)
+export interface LagPath {
+    samples: number
+    gain: number
+}
+
+// How late the bay returns what it's sent; several paths through the bay show as several delays, the strongest first
 export interface Lag {
     state: (typeof lagStates)[number]
-    samples: number
+    paths: LagPath[]
     exact: boolean
-    similarity: number
     earliest: number
     latest: number
-    // Another delay fits about as well (a held note repeats), so `samples` is only a guess
-    ambiguous: boolean
-    alternative: number
+}
+
+// How long a step on control 1 took to show in the return (samples from the step to halfway, and 10% to 90%)
+export interface Probe {
+    state: (typeof probeStates)[number]
+    delay: number
+    rise: number
+    before: number
+    after: number
 }
 
 // The external module bay's link, as the plugin reports it about 4 times a second
@@ -28,16 +40,22 @@ export interface LinkStatus {
     linkProblem: string
     receiver: (typeof relayStates)[number]
     transmitter: (typeof relayStates)[number]
+    // 0: automatic
+    roundTripSetting: number
+    autoState: AutoState
     roundTrip: number
     roundTripBlocks: number
     maxBlock: number
     sampleRate: number
     latency: number
-    output: Output
-    missingBlocks: (typeof missingModes)[number]
+    bypass: boolean
+    dropouts: (typeof dropoutModes)[number]
+    crossfadeMs: number
     missing: number
+    receiverMisses: number
     replaced: number
     oversized: number
+    valueSets: number
     headroomNow: number | null
     headroomLowest: number | null
     blockMin: number | null
@@ -45,6 +63,7 @@ export interface LinkStatus {
     differenceNow: number | null
     differenceLargest: number | null
     lag: Lag
+    probe: Probe
 }
 
 // Unknown (null) until the plugin says
@@ -52,16 +71,32 @@ export const link = $state({ status: null as LinkStatus | null })
 
 function readLag(raw: unknown): Lag {
     const fields = asRecord(raw) ?? {}
+    const paths = Array.isArray(fields.paths) ? fields.paths.slice(0, 8) : []
 
     return {
         state: oneOf(lagStates, fields.state) ?? 'notMeasured',
-        samples: finiteOrNull(fields.samples) ?? 0,
+        paths: paths.flatMap((entry) => {
+            const path = asRecord(entry)
+            const samples = finiteOrNull(path?.samples)
+            const gain = finiteOrNull(path?.gain)
+
+            return samples === null || gain === null ? [] : [{ samples, gain }]
+        }),
         exact: fields.exact === true,
-        similarity: finiteOrNull(fields.similarity) ?? 0,
         earliest: count(fields.earliest),
         latest: count(fields.latest),
-        ambiguous: fields.ambiguous === true,
-        alternative: finiteOrNull(fields.alternative) ?? 0,
+    }
+}
+
+function readProbe(raw: unknown): Probe {
+    const fields = asRecord(raw) ?? {}
+
+    return {
+        state: oneOf(probeStates, fields.state) ?? 'notRun',
+        delay: finiteOrNull(fields.delay) ?? 0,
+        rise: finiteOrNull(fields.rise) ?? 0,
+        before: finiteOrNull(fields.before) ?? 0,
+        after: finiteOrNull(fields.after) ?? 0,
     }
 }
 
@@ -76,16 +111,21 @@ export function readLink(raw: unknown): LinkStatus | null {
         linkProblem: text(fields.linkProblem),
         receiver: oneOf(relayStates, fields.receiver) ?? 'none',
         transmitter: oneOf(relayStates, fields.transmitter) ?? 'none',
+        roundTripSetting: count(fields.roundTripSetting),
+        autoState: oneOf(autoStates, fields.autoState) ?? 'off',
         roundTrip: count(fields.roundTrip),
         roundTripBlocks: count(fields.roundTripBlocks),
         maxBlock: count(fields.maxBlock),
         sampleRate: count(fields.sampleRate),
         latency: count(fields.latency),
-        output: oneOf(outputs, fields.output) ?? 'direct',
-        missingBlocks: oneOf(missingModes, fields.missingBlocks) ?? 'silence',
+        bypass: fields.bypass === true,
+        dropouts: oneOf(dropoutModes, fields.dropouts) ?? 'safe',
+        crossfadeMs: count(fields.crossfadeMs),
         missing: count(fields.missing),
+        receiverMisses: count(fields.receiverMisses),
         replaced: count(fields.replaced),
         oversized: count(fields.oversized),
+        valueSets: count(fields.valueSets),
         headroomNow: finiteOrNull(fields.headroomNow),
         headroomLowest: finiteOrNull(fields.headroomLowest),
         blockMin: finiteOrNull(fields.blockMin),
@@ -93,6 +133,7 @@ export function readLink(raw: unknown): LinkStatus | null {
         differenceNow: finiteOrNull(fields.differenceNow),
         differenceLargest: finiteOrNull(fields.differenceLargest),
         lag: readLag(fields.lag),
+        probe: readProbe(fields.probe),
     }
 }
 
@@ -105,11 +146,11 @@ export function listenForLink(): void {
 }
 
 // Only offered once the plugin has reported the link, so the bridge is known to be there
-export function setBayOutput(output: Output): void {
+export function setBayBypass(bypass: boolean): void {
     if (link.status === null) return
 
-    link.status.output = output
-    sendBayOutput(output)
+    link.status.bypass = bypass
+    sendBayBypass(bypass)
 }
 
 export function measureLag(): void {
@@ -117,6 +158,13 @@ export function measureLag(): void {
 
     link.status.lag.state = 'measuring'
     sendMeasureLag()
+}
+
+export function startProbe(): void {
+    if (link.status === null) return
+
+    link.status.probe.state = 'running'
+    sendStartProbe()
 }
 
 export function resetLinkCounters(): void {

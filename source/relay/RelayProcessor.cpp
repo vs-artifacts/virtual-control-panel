@@ -8,9 +8,9 @@ juce::AudioProcessor::BusesProperties RelayProcessor::createBuses()
                      .withInput ("Input", juce::AudioChannelSet::stereo(), true)
                      .withOutput ("Output", juce::AudioChannelSet::stereo(), true);
 
-    // Active from the start: FL leaves outputs that start off switched off
+    // Active from the start: FL leaves outputs that start off switched off. Mono: FL's Peak Controller reads one channel.
     for (int number = 1; number <= numControlOutputs; ++number)
-        buses = buses.withOutput ("Control " + juce::String (number), juce::AudioChannelSet::stereo(), true);
+        buses = buses.withOutput ("Control " + juce::String (number), juce::AudioChannelSet::mono(), true);
 
     return buses;
 }
@@ -57,12 +57,28 @@ void RelayProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
     // The main output shares its channels with the input; every output is silent except what the link plays
     link.process (buffer);
+
+    // A receiver's control outputs: each value as a steady level, held when the panel's values don't arrive
+    if (getMode() != RelayLink::Mode::receiver)
+        return;
+
+    for (int bus = 1; bus <= std::min (numControlOutputs, getBusCount (false) - 1); ++bus)
+    {
+        auto output = getBusBuffer (buffer, false, bus);
+
+        for (int channel = 0; channel < output.getNumChannels(); ++channel)
+            juce::FloatVectorOperations::fill (output.getWritePointer (channel), link.getControl (bus - 1), output.getNumSamples());
+    }
 }
 
 void RelayProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::XmlElement state (stateTag);
     state.setAttribute ("mode", getMode() == RelayLink::Mode::transmitter ? "transmitter" : "receiver");
+
+    for (int i = 0; i < numControlOutputs; ++i)
+        state.setAttribute ("control" + juce::String (i + 1), static_cast<double> (link.getControl (i)));
+
     copyXmlToBinary (state, destData);
 }
 
@@ -80,6 +96,10 @@ void RelayProcessor::setStateInformation (const void* data, int sizeInBytes)
         setMode (RelayLink::Mode::transmitter);
     else if (mode == "receiver")
         setMode (RelayLink::Mode::receiver);
+
+    for (int i = 0; i < numControlOutputs; ++i)
+        if (const auto name = "control" + juce::String (i + 1); state->hasAttribute (name))
+            link.setControl (i, static_cast<float> (state->getDoubleAttribute (name)));
 }
 
 bool RelayProcessor::isBeingProcessed() const noexcept

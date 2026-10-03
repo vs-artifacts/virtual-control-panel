@@ -98,8 +98,9 @@ WebUi::Handlers PluginEditor::createPageHandlers()
         { "setting", [this] (const juce::var& message) { handleSetting (message); } },
         { "tab", [this] (const juce::var& message) { handleTab (message); } },
         { "openPlugin", [this] (const juce::var& message) { handleOpenPlugin (message); } },
-        { "bayOutput", [this] (const juce::var& message) { handleBayOutput (message); } },
+        { "bayBypass", [this] (const juce::var& message) { handleBayBypass (message); } },
         { "measureLag", [this] (const juce::var&) { pluginProcessor.getBayLink().measureLag(); } },
+        { "startProbe", [this] (const juce::var&) { pluginProcessor.getBayLink().startProbe(); } },
         { "resetLinkCounters", [this] (const juce::var&) { pluginProcessor.getBayLink().resetCounters(); } },
     };
     return handlers;
@@ -113,8 +114,9 @@ juce::var PluginEditor::describeEditor() const
     current->setProperty ("resizing", EditorScale::toSettingsValue (settings->getResizing()));
     current->setProperty ("resizeAnchor", EditorScale::toSettingsValue (settings->getResizeAnchor()));
     current->setProperty ("flOutputCorrection", settings->getFlOutputCorrection());
-    current->setProperty ("missingReturnBlocks", BayLink::toName (settings->getMissingReturnBlocks()));
+    current->setProperty ("bayDropouts", BayLink::toName (settings->getBayDropouts()));
     current->setProperty ("roundTripBlocks", settings->getRoundTripBlocks());
+    current->setProperty ("bypassCrossfadeMs", settings->getBypassCrossfadeMs());
 
     const auto& engine = pluginProcessor.getEngine();
     juce::Array<juce::var> plugins;
@@ -149,16 +151,21 @@ juce::var PluginEditor::describeLink() const
                                                                                               : "none");
     link->setProperty ("transmitter", status.transmitterReturning ? "returning" : status.transmitterLinked ? "linked"
                                                                                                            : "none");
+    link->setProperty ("roundTripSetting", status.roundTripSetting);
+    link->setProperty ("autoState", BayLink::toName (status.autoState));
     link->setProperty ("roundTrip", status.roundTripSamples);
     link->setProperty ("roundTripBlocks", status.roundTripBlocks);
     link->setProperty ("maxBlock", status.maxBlock);
     link->setProperty ("sampleRate", status.sampleRate);
     link->setProperty ("latency", pluginProcessor.getLatencySamples());
-    link->setProperty ("output", BayLink::toName (status.output));
-    link->setProperty ("missingBlocks", BayLink::toName (status.missingBlocks));
+    link->setProperty ("bypass", status.bypass);
+    link->setProperty ("dropouts", BayLink::toName (status.dropouts));
+    link->setProperty ("crossfadeMs", status.crossfadeMs);
     link->setProperty ("missing", static_cast<juce::int64> (status.missing));
+    link->setProperty ("receiverMisses", static_cast<juce::int64> (status.receiverMisses));
     link->setProperty ("replaced", static_cast<juce::int64> (status.replaced));
     link->setProperty ("oversized", static_cast<juce::int64> (status.oversized));
+    link->setProperty ("valueSets", static_cast<juce::int64> (status.valueSets));
     setIfKnown ("headroomNow", status.headroomNow);
     setIfKnown ("headroomLowest", status.headroomLowest);
     setIfKnown ("blockMin", status.blockMin);
@@ -166,17 +173,34 @@ juce::var PluginEditor::describeLink() const
     setIfKnown ("differenceNow", status.differenceNow);
     setIfKnown ("differenceLargest", status.differenceLargest);
 
-    constexpr const char* lagStates[] { "notMeasured", "measuring", "silent", "found", "noMatch" };
+    constexpr const char* lagStates[] { "notMeasured", "measuring", "found", "noReturn", "noMatch" };
     auto* lag = new juce::DynamicObject();
     lag->setProperty ("state", lagStates[static_cast<size_t> (status.lag.state)]);
-    lag->setProperty ("samples", status.lag.samples);
     lag->setProperty ("exact", status.lag.exact);
-    lag->setProperty ("similarity", status.lag.similarity);
     lag->setProperty ("earliest", status.lag.earliest);
     lag->setProperty ("latest", status.lag.latest);
-    lag->setProperty ("ambiguous", status.lag.ambiguous);
-    lag->setProperty ("alternative", status.lag.alternative);
+
+    juce::Array<juce::var> paths;
+
+    for (const auto& [samples, gain] : status.lag.paths)
+    {
+        auto* path = new juce::DynamicObject();
+        path->setProperty ("samples", samples);
+        path->setProperty ("gain", gain);
+        paths.add (path);
+    }
+
+    lag->setProperty ("paths", paths);
     link->setProperty ("lag", lag);
+
+    constexpr const char* probeStates[] { "notRun", "running", "found", "noReturn", "noChange" };
+    auto* probe = new juce::DynamicObject();
+    probe->setProperty ("state", probeStates[static_cast<size_t> (status.probe.state)]);
+    probe->setProperty ("delay", status.probe.delay);
+    probe->setProperty ("rise", status.probe.rise);
+    probe->setProperty ("before", status.probe.before);
+    probe->setProperty ("after", status.probe.after);
+    link->setProperty ("probe", probe);
     return link;
 }
 
@@ -216,11 +240,11 @@ void PluginEditor::handleSetting (const juce::var& message)
     {
         settings->setFlOutputCorrection (static_cast<bool> (value));
     }
-    else if (name == "missingReturnBlocks" && value.isString())
+    else if (name == "bayDropouts" && value.isString())
     {
-        if (const auto missingBlocks = BayLink::missingBlocksFromName (value.toString()))
+        if (const auto dropouts = BayLink::dropoutsFromName (value.toString()))
         {
-            settings->setMissingReturnBlocks (*missingBlocks);
+            settings->setBayDropouts (*dropouts);
             pluginProcessor.applyLinkSettings();
         }
     }
@@ -228,9 +252,19 @@ void PluginEditor::handleSetting (const juce::var& message)
     {
         const auto blocks = static_cast<int> (value);
 
-        if (blocks >= BayLink::minRoundTripBlocks && blocks <= BayLink::maxRoundTripBlocks)
+        if (blocks == BayLink::autoRoundTrip || (blocks >= BayLink::minRoundTripBlocks && blocks <= BayLink::maxRoundTripBlocks))
         {
             settings->setRoundTripBlocks (blocks);
+            pluginProcessor.applyLinkSettings();
+        }
+    }
+    else if (name == "bypassCrossfadeMs" && value.isInt())
+    {
+        const auto milliseconds = static_cast<int> (value);
+
+        if (milliseconds >= 0 && milliseconds <= BayLink::maxCrossfadeMs)
+        {
+            settings->setBypassCrossfadeMs (milliseconds);
             pluginProcessor.applyLinkSettings();
         }
     }
@@ -253,13 +287,12 @@ void PluginEditor::handleOpenPlugin (const juce::var& message)
         hostedEditors.open (*plugins[static_cast<size_t> (static_cast<int> (slot))]);
 }
 
-void PluginEditor::handleBayOutput (const juce::var& message)
+void PluginEditor::handleBayBypass (const juce::var& message)
 {
     const auto& value = message["value"];
 
-    if (value.isString())
-        if (const auto output = BayLink::outputFromName (value.toString()))
-            pluginProcessor.getBayLink().setOutput (*output);
+    if (value.isBool())
+        pluginProcessor.getBayLink().setBypass (static_cast<bool> (value));
 }
 
 void PluginEditor::reportLink()

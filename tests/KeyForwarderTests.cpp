@@ -174,16 +174,18 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
         CHECK (juce::exactlyEqual (settings.getLastEditorScale(), 1.0));
         CHECK (settings.getResizeAnchor() == EditorScale::Anchor::oppositeCorner);
         CHECK (settings.getFlOutputCorrection());
-        CHECK (settings.getMissingReturnBlocks() == BayLink::MissingBlocks::silence);
-        CHECK (settings.getRoundTripBlocks() == BayLink::defaultRoundTripBlocks);
+        CHECK (settings.getBayDropouts() == BayLink::Dropouts::safe);
+        CHECK (settings.getRoundTripBlocks() == BayLink::autoRoundTrip);
+        CHECK (settings.getBypassCrossfadeMs() == BayLink::defaultCrossfadeMs);
 
         settings.setKeepWebViewWarm (false);
         settings.setResizing (EditorScale::Resizing::sharp);
         settings.setResizeAnchor (EditorScale::Anchor::windowCenter);
         settings.setLastEditorScale (99.0);
         settings.setFlOutputCorrection (false);
-        settings.setMissingReturnBlocks (BayLink::MissingBlocks::bypass);
+        settings.setBayDropouts (BayLink::Dropouts::silence);
         settings.setRoundTripBlocks (7);
+        settings.setBypassCrossfadeMs (50);
     }
 
     PluginSettings reloaded (file);
@@ -192,7 +194,8 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
     CHECK (reloaded.getResizeAnchor() == EditorScale::Anchor::windowCenter);
     CHECK (juce::exactlyEqual (reloaded.getLastEditorScale(), EditorScale::maximum));
     CHECK_FALSE (reloaded.getFlOutputCorrection());
-    CHECK (reloaded.getMissingReturnBlocks() == BayLink::MissingBlocks::bypass);
+    CHECK (reloaded.getBayDropouts() == BayLink::Dropouts::silence);
     CHECK (reloaded.getRoundTripBlocks() == BayLink::maxRoundTripBlocks);
+    CHECK (reloaded.getBypassCrossfadeMs() == 50);
     file.deleteFile();
 }

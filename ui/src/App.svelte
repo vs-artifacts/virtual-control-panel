@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import ContextMenu from "./components/ContextMenu.svelte";
   import LinkStatus from "./components/LinkStatus.svelte";
   import PluginsTab from "./components/PluginsTab.svelte";
@@ -18,6 +18,21 @@
 
   const insidePlugin = isInsidePlugin();
   let status = $state("Checking the bridge…");
+
+  // The tabs share one scrolling area, so each tab's position is kept and put back
+  let mainElement: HTMLElement | undefined = $state();
+  const scrollTops = new Map<number, number>();
+
+  async function selectTab(index: number) {
+    if (mainElement !== undefined)
+      scrollTops.set(editor.tab, mainElement.scrollTop);
+
+    showTab(index);
+    await tick();
+
+    if (mainElement !== undefined)
+      mainElement.scrollTop = scrollTops.get(index) ?? 0;
+  }
 
   onMount(async () => {
     if (!insidePlugin) {
@@ -55,12 +70,12 @@
         role="tab"
         aria-selected={editor.tab === index}
         class:selected={editor.tab === index}
-        onclick={() => showTab(index)}>{name}</button
+        onclick={() => selectTab(index)}>{name}</button
       >
     {/each}
   </div>
 
-  <main>
+  <main bind:this={mainElement}>
     {#if editor.ready}
       {#if editor.tab === 1}
         <PluginsTab />

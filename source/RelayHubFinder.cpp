@@ -38,7 +38,8 @@ BayLink::HubSearch RelayHubFinder::find()
     const auto* api = getApi (HS_LINK_ABI_VERSION);
     const auto complete = api != nullptr && api->struct_size >= sizeof (hs_link_api) && api->abi_version == HS_LINK_ABI_VERSION
                           && api->open != nullptr && api->close != nullptr && api->set_writer_details != nullptr
-                          && api->write != nullptr && api->read != nullptr && api->get_info != nullptr;
+                          && api->write != nullptr && api->read != nullptr && api->get_info != nullptr
+                          && api->write_values != nullptr && api->read_values != nullptr;
 
     if (!complete)
     {

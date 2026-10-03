@@ -69,14 +69,19 @@ export function onLink(listener: (status: unknown) => void): void {
     window.__JUCE__.backend.addEventListener('link', listener)
 }
 
-// What the panel plays: its own sound (delayed by the round trip) or the bay's return
-export function sendBayOutput(value: 'direct' | 'return'): void {
-    window.__JUCE__.backend.emitEvent('bayOutput', { value })
+// Bypassed, the panel plays the audio it sent (delayed like the return) instead of the bay's return
+export function sendBayBypass(value: boolean): void {
+    window.__JUCE__.backend.emitEvent('bayBypass', { value })
 }
 
 // Compares the next stretch of returned audio with what was sent; the result comes with the link status
 export function sendMeasureLag(): void {
     window.__JUCE__.backend.emitEvent('measureLag', {})
+}
+
+// Steps control 1 and times the change in the return; the result comes with the link status
+export function sendStartProbe(): void {
+    window.__JUCE__.backend.emitEvent('startProbe', {})
 }
 
 export function sendResetLinkCounters(): void {

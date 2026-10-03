@@ -59,7 +59,7 @@ private:
     void handleSetting (const juce::var&);
     void handleTab (const juce::var&);
     void handleOpenPlugin (const juce::var&);
-    void handleBayOutput (const juce::var&);
+    void handleBayBypass (const juce::var&);
     void reportProcessing();
     void reportLink();
 

@@ -94,12 +94,15 @@ RelayEditor::RelayEditor (RelayProcessor& p)
 
     addAndMakeVisible (resetButton);
 
-    for (auto* label : { &title, &audioStatus, &inputLevel, &linkStatus, &roundTrip, &missed, &headroom, &blocks })
+    for (auto* label : { &title, &audioStatus, &inputLevel, &linkStatus, &roundTrip, &missed, &headroom, &blocks, &controlsStatus, &controlValues })
         addAndMakeVisible (label);
+
+    controlValues.setJustificationType (juce::Justification::topLeft);
+    controlValues.setFont (juce::Font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain)));
 
     timerCallback();
     startTimerHz (4);
-    setSize (380, 330);
+    setSize (420, 440);
 }
 
 void RelayEditor::paint (juce::Graphics& g)
@@ -116,9 +119,10 @@ void RelayEditor::resized()
     receiverButton.setBounds (modes.removeFromTop (24));
     transmitterButton.setBounds (modes);
 
-    for (auto* label : { &linkStatus, &roundTrip, &missed, &headroom, &blocks, &audioStatus, &inputLevel })
+    for (auto* label : { &linkStatus, &roundTrip, &missed, &headroom, &blocks, &audioStatus, &inputLevel, &controlsStatus })
         label->setBounds (area.removeFromTop (26));
 
+    controlValues.setBounds (area.removeFromTop (80));
     resetButton.setBounds (area.removeFromTop (30).removeFromLeft (130).reduced (0, 3));
 }
 
@@ -126,7 +130,7 @@ juce::StringArray RelayEditor::getStatusLines() const
 {
     juce::StringArray lines;
 
-    for (const auto* label : { &linkStatus, &roundTrip, &missed, &headroom, &blocks, &audioStatus, &inputLevel })
+    for (const auto* label : { &linkStatus, &roundTrip, &missed, &headroom, &blocks, &audioStatus, &inputLevel, &controlsStatus, &controlValues })
         lines.add (label->getText());
 
     return lines;
@@ -156,4 +160,24 @@ void RelayEditor::timerCallback()
     blocks.setText ("Block sizes: " + describeRange (status.blockMin, status.blockMax) + " samples", juce::dontSendNotification);
     audioStatus.setText (relay.isBeingProcessed() ? "Audio: running" : "Audio: not running (stopped by the host)", juce::dontSendNotification);
     inputLevel.setText ("Input peak: " + juce::String (relay.getInputPeak(), 7), juce::dontSendNotification);
+
+    if (!receiver)
+    {
+        controlsStatus.setText ("Control outputs: silent (receivers only)", juce::dontSendNotification);
+        controlValues.setText ({}, juce::dontSendNotification);
+        return;
+    }
+
+    controlsStatus.setText (status.controlsLive ? "Control outputs: from the panel" : "Control outputs: holding the last values", juce::dontSendNotification);
+
+    // Exact values, four to a line
+    juce::String values;
+
+    for (int i = 0; i < RelayLink::numControls; ++i)
+    {
+        values << juce::String (i + 1).paddedLeft (' ', 2) << ": " << juce::String (status.controls[static_cast<size_t> (i)], 7);
+        values << (i % 4 == 3 ? "\n" : "  ");
+    }
+
+    controlValues.setText (values.trimEnd(), juce::dontSendNotification);
 }

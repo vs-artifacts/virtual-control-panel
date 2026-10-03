@@ -7,8 +7,15 @@ export const tabNames = ['Panel', 'Plugins', 'Settings'] as const
 const placements = ['off', 'hostPlaced', 'mouse', 'hostMainWindow'] as const
 const resizings = ['smooth', 'sharp'] as const
 const anchors = ['oppositeCorner', 'windowCenter'] as const
-const missingModes = ['silence', 'bypass'] as const
-const roundTrips = [1, 2, 3] as const
+const dropoutModes = ['safe', 'silence'] as const
+const roundTrips = [0, 1, 2, 3] as const
+
+// The bay bypass crossfade: whole milliseconds, 0 is off
+export const crossfadeRange = { min: 0, max: 50 } as const
+
+function isCrossfadeMs(value: unknown): value is number {
+    return typeof value === 'number' && Number.isInteger(value) && value >= crossfadeRange.min && value <= crossfadeRange.max
+}
 
 // Plugin-wide preferences, stored by the plugin
 export interface Settings {
@@ -17,8 +24,10 @@ export interface Settings {
     resizing: (typeof resizings)[number]
     resizeAnchor: (typeof anchors)[number]
     flOutputCorrection: boolean
-    missingReturnBlocks: (typeof missingModes)[number]
+    bayDropouts: (typeof dropoutModes)[number]
+    // 0: automatic
     roundTripBlocks: (typeof roundTrips)[number]
+    bypassCrossfadeMs: number
 }
 
 export interface HostedPlugin {
@@ -40,8 +49,9 @@ export const editor = $state({
         resizing: 'smooth',
         resizeAnchor: 'oppositeCorner',
         flOutputCorrection: true,
-        missingReturnBlocks: 'silence',
-        roundTripBlocks: 2,
+        bayDropouts: 'safe',
+        roundTripBlocks: 0,
+        bypassCrossfadeMs: 30,
     } as Settings,
     plugins: [] as HostedPlugin[],
     // Unknown (null) until the plugin says
@@ -76,8 +86,9 @@ function readSettings(raw: unknown): void {
     settings.editorPlacement = oneOf(placements, fields.editorPlacement) ?? settings.editorPlacement
     settings.resizing = oneOf(resizings, fields.resizing) ?? settings.resizing
     settings.resizeAnchor = oneOf(anchors, fields.resizeAnchor) ?? settings.resizeAnchor
-    settings.missingReturnBlocks = oneOf(missingModes, fields.missingReturnBlocks) ?? settings.missingReturnBlocks
+    settings.bayDropouts = oneOf(dropoutModes, fields.bayDropouts) ?? settings.bayDropouts
     settings.roundTripBlocks = roundTrips.find((blocks) => blocks === fields.roundTripBlocks) ?? settings.roundTripBlocks
+    if (isCrossfadeMs(fields.bypassCrossfadeMs)) settings.bypassCrossfadeMs = fields.bypassCrossfadeMs
 }
 
 export async function loadEditorState(): Promise<void> {

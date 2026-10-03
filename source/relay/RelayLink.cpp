@@ -1,5 +1,6 @@
 #include "RelayLink.h"
 #include "../link/BayNames.h"
+#include <bit>
 
 namespace
 {
@@ -147,6 +148,8 @@ void RelayLink::process (juce::AudioBuffer<float>& buffer)
         returnedEnd = 0;
     }
 
+    controlsLive.store (false, std::memory_order_relaxed);
+
     if (mode.load() == Mode::receiver)
     {
         buffer.clear();
@@ -231,6 +234,7 @@ void RelayLink::receive (juce::AudioBuffer<float>& buffer)
         const auto headroom = static_cast<int> (std::max<juce::int64> (0, info.readable_end - (cursor + numSamples)));
         lower (headroomNow, headroom);
         lower (headroomLowest, headroom);
+        receiveControls (reader, cursor + numSamples - 1);
         cursor += numSamples;
         streaming = true;
         return;
@@ -241,6 +245,28 @@ void RelayLink::receive (juce::AudioBuffer<float>& buffer)
         noteMiss (result == HS_LINK_NOT_YET ? Miss::late : Miss::gone);
 
     cursor = info.readable_end - lead + numSamples;
+}
+
+void RelayLink::receiveControls (int32_t reader, juce::int64 position)
+{
+    // The values in effect by the end of the block just played, so they stay in step with the audio
+    std::array<float, numControls> values {};
+    auto count = int32_t { 0 };
+
+    if (hub.read_values (reader, position, values.data(), numControls, &count) != HS_LINK_OK)
+        return;
+
+    for (int i = 0; i < std::min<int> (count, numControls); ++i)
+        setControl (i, values[static_cast<size_t> (i)]);
+
+    controlsLive.store (true, std::memory_order_relaxed);
+}
+
+void RelayLink::setControl (int index, float value) noexcept
+{
+    // Checked by its bits: fast-math builds may assume NaN never happens
+    if ((std::bit_cast<juce::uint32> (value) & 0x7f800000u) != 0x7f800000u)
+        controls[static_cast<size_t> (index)].store (juce::jlimit (0.0f, 1.0f, value), std::memory_order_relaxed);
 }
 
 void RelayLink::transmit (const juce::AudioBuffer<float>& buffer)
@@ -376,6 +402,11 @@ RelayLink::Status RelayLink::getStatus()
     status.headroomLowest = valueOf (headroomLowest.load());
     status.blockMin = valueOf (blockMin.load());
     status.blockMax = valueOf (blockMax.load());
+    status.controlsLive = controlsLive.load();
+
+    for (int i = 0; i < numControls; ++i)
+        status.controls[static_cast<size_t> (i)] = getControl (i);
+
     return status;
 }
 

@@ -12,7 +12,9 @@ TEST_CASE ("The relay test build", "[relay]")
     RelayProcessor relay;
     REQUIRE (relay.getBusCount (true) == 1);
     REQUIRE (relay.getBusCount (false) == 1 + RelayProcessor::numControlOutputs);
-    CHECK (relay.getTotalNumOutputChannels() == 2 * (1 + RelayProcessor::numControlOutputs)); // all start active
+    CHECK (RelayProcessor::numControlOutputs == 16);
+    CHECK (relay.getTotalNumOutputChannels() == 2 + RelayProcessor::numControlOutputs); // mono, and all start active
+    CHECK (relay.getBus (false, 1)->getName() == "Control 1");
     CHECK_FALSE (relay.isBeingProcessed());
     CHECK (relay.getMode() == RelayLink::Mode::receiver);
 
@@ -41,15 +43,20 @@ TEST_CASE ("The relay test build", "[relay]")
         }
     }
 
-    SECTION ("it saves and restores its mode, and ignores anything else")
+    SECTION ("it saves and restores its mode and control values, and ignores anything else")
     {
         relay.setMode (RelayLink::Mode::transmitter);
+        relay.getLink().setControl (0, 0.3f);
+        relay.getLink().setControl (15, 1.0f);
         juce::MemoryBlock saved;
         relay.getStateInformation (saved);
 
         RelayProcessor restored;
         restored.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
         CHECK (restored.getMode() == RelayLink::Mode::transmitter);
+        CHECK (juce::exactlyEqual (restored.getLink().getControl (0), 0.3f));
+        CHECK (juce::exactlyEqual (restored.getLink().getControl (15), 1.0f));
+        CHECK (juce::exactlyEqual (restored.getLink().getControl (1), 0.0f));
 
         const auto unknown = [&restored] (const juce::String& xml) {
             juce::MemoryBlock data;
@@ -58,12 +65,26 @@ TEST_CASE ("The relay test build", "[relay]")
         };
 
         restored.setStateInformation ("garbage", 7);
-        unknown (R"(<HeartseekerRelayState mode="sideways"/>)");
-        unknown (R"(<SomethingElse mode="receiver"/>)");
+        unknown (R"(<HeartseekerRelayState mode="sideways" control1="nonsense" control2="7"/>)");
+        unknown (R"(<SomethingElse mode="receiver" control1="0.5"/>)");
         CHECK (restored.getMode() == RelayLink::Mode::transmitter);
+        CHECK (juce::exactlyEqual (restored.getLink().getControl (0), 0.0f)); // not a number: read as 0
+        CHECK (juce::exactlyEqual (restored.getLink().getControl (1), 1.0f)); // out of range: limited
 
         unknown (R"(<HeartseekerRelayState mode="receiver"/>)");
         CHECK (restored.getMode() == RelayLink::Mode::receiver);
+    }
+
+    SECTION ("a receiver plays its control values as steady levels, even without a panel")
+    {
+        relay.getLink().setControl (2, 0.4f);
+        buffer.clear();
+        relay.processBlock (buffer, midi);
+
+        for (int i = 0; i < relayBlockSize; ++i)
+            CHECK (juce::exactlyEqual (buffer.getSample (2 + 2, i), 0.4f));
+
+        CHECK (juce::exactlyEqual (buffer.getMagnitude (2 + 3, 0, relayBlockSize), 0.0f));
     }
 
     SECTION ("its window shows the mode and the link")
@@ -72,10 +93,20 @@ TEST_CASE ("The relay test build", "[relay]")
         std::unique_ptr<juce::AudioProcessorEditor> editor (relay.createEditorAndMakeActive());
         REQUIRE (editor != nullptr);
 
-        const auto lines = dynamic_cast<RelayEditor&> (*editor).getStatusLines();
+        auto lines = dynamic_cast<RelayEditor&> (*editor).getStatusLines();
         CHECK (lines[0] == "Not linked: waiting for a panel");
         CHECK (lines[1] == "Round trip: -");
         CHECK (lines[2] == "Missed blocks: 0");
+        CHECK (lines[7] == "Control outputs: silent (receivers only)");
+        relay.editorBeingDeleted (editor.get());
+        editor.reset();
+
+        relay.setMode (RelayLink::Mode::receiver);
+        relay.getLink().setControl (0, 0.5f);
+        editor.reset (relay.createEditorAndMakeActive());
+        lines = dynamic_cast<RelayEditor&> (*editor).getStatusLines();
+        CHECK (lines[7] == "Control outputs: holding the last values");
+        CHECK (lines[8].startsWith (" 1: 0.5000000   2: 0.0000000"));
         relay.editorBeingDeleted (editor.get());
     }
 

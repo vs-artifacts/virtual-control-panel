@@ -4,13 +4,13 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 // The relay node, test build: a small effect plugin that links FL's own plugins into the panel's bays.
-// Receiver mode (before the FL plugin) plays what the panel sends; transmitter mode (after it) sends the FL plugin's
-// audio back. Its control outputs are silent for now.
+// Receiver mode (before the FL plugin) plays what the panel sends, and the panel's control values as steady levels
+// on its control outputs (into FL Peak Controllers); transmitter mode (after it) sends the FL plugin's audio back.
 // Shares nothing with the panel's shell: the Tests target compiles both, so no JucePlugin_ macros here.
 class RelayProcessor final : public juce::AudioProcessor
 {
 public:
-    static constexpr int numControlOutputs = 4;
+    static constexpr int numControlOutputs = RelayLink::numControls;
 
     RelayProcessor();
 
@@ -34,7 +34,7 @@ public:
     const juce::String getProgramName (int) override { return "Default"; }
     void changeProgramName (int, const juce::String&) override {}
 
-    // Saves and restores the mode
+    // Saves and restores the mode and the control values
     void getStateInformation (juce::MemoryBlock&) override;
     void setStateInformation (const void*, int) override;
 

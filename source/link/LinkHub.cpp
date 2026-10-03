@@ -36,16 +36,31 @@ namespace
     static_assert (std::atomic<int64_t>::is_always_lock_free);
     static_assert (std::atomic<uint64_t>::is_always_lock_free);
 
+    constexpr uint64_t valueSetCount = HS_LINK_VALUE_SETS;
+
+    // One value set. Odd sequence: being written; a reader that sees it change drops what it copied.
+    struct ValueSet
+    {
+        std::atomic<uint32_t> sequence { 0 };
+        std::atomic<uint32_t> epoch { 0 }; // sets from an earlier epoch are no longer readable
+        std::atomic<int64_t> position { 0 };
+        std::atomic<int32_t> count { 0 };
+        std::array<std::atomic<float>, HS_LINK_MAX_VALUES> values {};
+    };
+
     struct Channel
     {
         // Named once, under the hub's mutex, and never removed, so a handle can never point at freed memory
         char name[HS_LINK_MAX_NAME] {};
         std::unique_ptr<std::atomic<float>[]> frames; // two channels of `capacity` frames
+        std::unique_ptr<ValueSet[]> valueSets; // valueSetCount of them, reused in turn
         std::atomic<bool> named { false };
 
         // 0: free; otherwise the claim number in its owner's handle
         std::atomic<uint32_t> writerClaim { 0 };
         std::atomic<uint32_t> readerClaim { 0 };
+        std::atomic<uint32_t> writerClaims { 0 };
+        std::atomic<uint32_t> readerClaims { 0 };
 
         std::atomic<uint64_t> session { 0 };
         std::atomic<double> sampleRate { 0.0 };
@@ -67,6 +82,10 @@ namespace
         std::atomic<uint64_t> lastRead { 0 };
         std::atomic<uint64_t> writes { 0 };
         std::atomic<uint64_t> reads { 0 };
+        std::atomic<uint64_t> failedReads { 0 };
+
+        std::atomic<uint64_t> valueWrites { 0 }; // sets written so far; the next goes in valueSets[valueWrites % count]
+        std::atomic<uint32_t> valueEpoch { 1 };
     };
 
     bool isValidName (const char* name)
@@ -92,6 +111,11 @@ namespace
     bool isFinite (double value)
     {
         return (std::bit_cast<uint64_t> (value) & 0x7ff0000000000000ull) != 0x7ff0000000000000ull;
+    }
+
+    bool isFinite (float value)
+    {
+        return (std::bit_cast<uint32_t> (value) & 0x7f800000u) != 0x7f800000u;
     }
 
     bool isValidBlock (int64_t position, int32_t numFrames)
@@ -141,9 +165,16 @@ namespace
             lastClaim = lastClaim % maxClaim + 1;
 
             if (role == HS_LINK_WRITER)
+            {
                 channel.restartNext.store (true, std::memory_order_release);
+                channel.valueEpoch.fetch_add (1, std::memory_order_acq_rel);
+                channel.writerClaims.fetch_add (1, std::memory_order_relaxed);
+            }
             else
+            {
                 channel.lastRead.store (0, std::memory_order_relaxed);
+                channel.readerClaims.fetch_add (1, std::memory_order_relaxed);
+            }
 
             claimWord.store (lastClaim, std::memory_order_release);
             return static_cast<int32_t> ((lastClaim << claimShift) | slotBits | static_cast<uint32_t> (role));
@@ -265,8 +296,12 @@ namespace
             const auto result = numFrames == 0 ? HS_LINK_OK : readFrames (*channel, position, destination, numChannels, numFrames);
 
             if (result != HS_LINK_OK)
+            {
                 for (int ch = 0; ch < numChannels; ++ch)
                     std::fill_n (destination[ch], numFrames, 0.0f);
+
+                channel->failedReads.fetch_add (1, std::memory_order_relaxed);
+            }
 
             const auto packed = static_cast<uint64_t> (position) | (static_cast<uint64_t> (numFrames) << lengthShift) | (result == HS_LINK_OK ? okBit : 0);
             channel->lastRead.store (packed, std::memory_order_relaxed);
@@ -311,7 +346,125 @@ namespace
             info->last_read_length = static_cast<int32_t> ((lastRead >> lengthShift) & 0xffff);
             info->last_read_ok = (lastRead & okBit) != 0 ? 1u : 0u;
             info->writes = c.writes.load (std::memory_order_relaxed);
+            info->writer_claims = c.writerClaims.load (std::memory_order_relaxed);
+            info->reader_claims = c.readerClaims.load (std::memory_order_relaxed);
+            info->value_sets = c.valueWrites.load (std::memory_order_relaxed);
+            info->failed_reads = c.failedReads.load (std::memory_order_relaxed);
             return HS_LINK_OK;
+        }
+
+        int32_t writeValues (int32_t handle, int64_t position, const float* values, int32_t numValues)
+        {
+            Channel* channel = nullptr;
+            int32_t role = 0;
+
+            if (const auto result = resolve (handle, channel, role); result != HS_LINK_OK)
+                return result;
+
+            if (role != HS_LINK_WRITER || !isValidBlock (position, 0) || numValues < 0 || numValues > HS_LINK_MAX_VALUES || (numValues > 0 && values == nullptr))
+                return HS_LINK_BAD_ARGUMENT;
+
+            for (int32_t i = 0; i < numValues; ++i)
+                if (!isFinite (values[i]))
+                    return HS_LINK_BAD_ARGUMENT;
+
+            auto& c = *channel;
+            auto epoch = c.valueEpoch.load (std::memory_order_acquire);
+            const auto written = c.valueWrites.load (std::memory_order_relaxed);
+
+            // Going back: the newer sets would hide this one, so they all go
+            if (written > 0)
+                if (const auto& newest = c.valueSets[(written - 1) % valueSetCount]; newest.epoch.load (std::memory_order_relaxed) == epoch && position < newest.position.load (std::memory_order_relaxed))
+                    epoch = c.valueEpoch.fetch_add (1, std::memory_order_acq_rel) + 1;
+
+            auto& set = c.valueSets[written % valueSetCount];
+            const auto sequence = set.sequence.load (std::memory_order_relaxed);
+            set.sequence.store (sequence + 1, std::memory_order_relaxed);
+            std::atomic_thread_fence (std::memory_order_release);
+
+            set.epoch.store (epoch, std::memory_order_relaxed);
+            set.position.store (position, std::memory_order_relaxed);
+            set.count.store (numValues, std::memory_order_relaxed);
+
+            for (int32_t i = 0; i < numValues; ++i)
+                set.values[static_cast<size_t> (i)].store (values[i], std::memory_order_relaxed);
+
+            set.sequence.store (sequence + 2, std::memory_order_release);
+            c.valueWrites.store (written + 1, std::memory_order_release);
+            return HS_LINK_OK;
+        }
+
+        int32_t readValues (int32_t handle, int64_t position, float* values, int32_t maxValues, int32_t* numValues)
+        {
+            Channel* channel = nullptr;
+            int32_t role = 0;
+
+            if (const auto result = resolve (handle, channel, role); result != HS_LINK_OK)
+                return result;
+
+            if (role == HS_LINK_WRITER || !isValidBlock (position, 0) || maxValues < 0 || maxValues > HS_LINK_MAX_VALUES || (maxValues > 0 && values == nullptr) || numValues == nullptr)
+                return HS_LINK_BAD_ARGUMENT;
+
+            *numValues = 0;
+            const auto& c = *channel;
+
+            // A set the writer overwrites while we copy it: look again, from the newest
+            for (int attempt = 0; attempt < 4; ++attempt)
+            {
+                const auto epoch = c.valueEpoch.load (std::memory_order_acquire);
+                const auto written = c.valueWrites.load (std::memory_order_acquire);
+                const auto oldest = written > valueSetCount ? written - valueSetCount : 0;
+                auto result = written > valueSetCount ? HS_LINK_GONE : HS_LINK_NOT_YET;
+                auto changed = false;
+
+                for (auto number = written; number > oldest; --number)
+                {
+                    const auto& set = c.valueSets[(number - 1) % valueSetCount];
+                    const auto sequence = set.sequence.load (std::memory_order_acquire);
+
+                    if ((sequence & 1u) != 0)
+                    {
+                        changed = true;
+                        break;
+                    }
+
+                    const auto setEpoch = set.epoch.load (std::memory_order_relaxed);
+                    const auto setPosition = set.position.load (std::memory_order_relaxed);
+                    const auto setCount = std::clamp (set.count.load (std::memory_order_relaxed), 0, HS_LINK_MAX_VALUES);
+                    const auto toCopy = std::min (setCount, maxValues);
+                    std::array<float, HS_LINK_MAX_VALUES> copy {};
+
+                    for (int32_t i = 0; i < toCopy; ++i)
+                        copy[static_cast<size_t> (i)] = set.values[static_cast<size_t> (i)].load (std::memory_order_relaxed);
+
+                    std::atomic_thread_fence (std::memory_order_acquire);
+
+                    if (set.sequence.load (std::memory_order_relaxed) != sequence)
+                    {
+                        changed = true;
+                        break;
+                    }
+
+                    // Epochs only grow in the order sets are written, so nothing older is readable either
+                    if (setEpoch != epoch)
+                    {
+                        result = HS_LINK_NOT_YET;
+                        break;
+                    }
+
+                    if (setPosition <= position)
+                    {
+                        std::copy_n (copy.begin(), toCopy, values);
+                        *numValues = setCount;
+                        return HS_LINK_OK;
+                    }
+                }
+
+                if (!changed)
+                    return result;
+            }
+
+            return HS_LINK_GONE;
         }
 
     private:
@@ -376,9 +529,14 @@ namespace
                     continue;
 
                 c.frames.reset (new (std::nothrow) std::atomic<float>[2 * capacity]());
+                c.valueSets.reset (new (std::nothrow) ValueSet[valueSetCount]);
 
-                if (c.frames == nullptr)
+                if (c.frames == nullptr || c.valueSets == nullptr)
+                {
+                    c.frames.reset();
+                    c.valueSets.reset();
                     return -1;
+                }
 
                 // Checked by isValidName: shorter than the buffer, which is still all zeros
                 std::memcpy (c.name, name, std::strlen (name));
@@ -453,6 +611,8 @@ namespace
     int32_t apiWrite (int32_t handle, int64_t position, const float* const* channels, int32_t numChannels, int32_t numFrames) { return hub().write (handle, position, channels, numChannels, numFrames); }
     int32_t apiRead (int32_t handle, int64_t position, float* const* channels, int32_t numChannels, int32_t numFrames) { return hub().read (handle, position, channels, numChannels, numFrames); }
     int32_t apiGetInfo (int32_t handle, hs_link_info* info) { return hub().getInfo (handle, info); }
+    int32_t apiWriteValues (int32_t handle, int64_t position, const float* values, int32_t numValues) { return hub().writeValues (handle, position, values, numValues); }
+    int32_t apiReadValues (int32_t handle, int64_t position, float* values, int32_t maxValues, int32_t* numValues) { return hub().readValues (handle, position, values, maxValues, numValues); }
 
     constexpr hs_link_api api {
         sizeof (hs_link_api),
@@ -463,6 +623,8 @@ namespace
         apiWrite,
         apiRead,
         apiGetInfo,
+        apiWriteValues,
+        apiReadValues,
     };
 }
 

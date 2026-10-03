@@ -88,6 +88,7 @@ namespace
 TEST_CASE ("The link hub only speaks its own version", "[link]")
 {
     CHECK (heartseeker_link_get_api (0) == nullptr);
+    CHECK (heartseeker_link_get_api (1) == nullptr); // no value sets
     CHECK (heartseeker_link_get_api (HS_LINK_ABI_VERSION + 1) == nullptr);
 
     const auto* api = heartseeker_link_get_api (HS_LINK_ABI_VERSION);
@@ -101,6 +102,8 @@ TEST_CASE ("The link hub only speaks its own version", "[link]")
     CHECK (api->write != nullptr);
     CHECK (api->read != nullptr);
     CHECK (api->get_info != nullptr);
+    CHECK (api->write_values != nullptr);
+    CHECK (api->read_values != nullptr);
 }
 
 TEST_CASE ("Link channels: names and roles", "[link]")
@@ -316,6 +319,11 @@ TEST_CASE ("Link channels carry exact audio by position", "[link]")
         info = infoFor (writer);
         CHECK (info.last_read_position == 1400);
         CHECK (info.last_read_ok == 0);
+
+        const auto failedBefore = info.failed_reads;
+        REQUIRE (readFrames (reader, 1600, 256).result == HS_LINK_NOT_YET);
+        REQUIRE (readFrames (reader, 1000, 256).result == HS_LINK_OK);
+        CHECK (infoFor (writer).failed_reads == failedBefore + 1);
     }
 
     SECTION ("a mono write fills both channels; a mono read gets the first")
@@ -404,6 +412,207 @@ TEST_CASE ("Link calls refuse bad arguments", "[link]")
         CHECK (hub.get_info (observer, &info) == HS_LINK_BAD_ARGUMENT);
         CHECK (hub.get_info (observer, nullptr) == HS_LINK_BAD_ARGUMENT);
     }
+
+    SECTION ("value sets")
+    {
+        std::array<float, HS_LINK_MAX_VALUES + 1> values {};
+        int32_t count = 0;
+
+        CHECK (hub.write_values (writer, 0, values.data(), HS_LINK_MAX_VALUES) == HS_LINK_OK);
+        CHECK (hub.write_values (writer, 0, nullptr, 0) == HS_LINK_OK);
+        CHECK (hub.write_values (writer, 0, values.data(), HS_LINK_MAX_VALUES + 1) == HS_LINK_BAD_ARGUMENT);
+        CHECK (hub.write_values (writer, 0, values.data(), -1) == HS_LINK_BAD_ARGUMENT);
+        CHECK (hub.write_values (writer, -1, values.data(), 1) == HS_LINK_BAD_ARGUMENT);
+        CHECK (hub.write_values (writer, HS_LINK_MAX_POSITION + 1, values.data(), 1) == HS_LINK_BAD_ARGUMENT);
+        CHECK (hub.write_values (writer, 0, nullptr, 1) == HS_LINK_BAD_ARGUMENT);
+        CHECK (hub.write_values (reader, 0, values.data(), 1) == HS_LINK_BAD_ARGUMENT);
+        CHECK (hub.write_values (observer, 0, values.data(), 1) == HS_LINK_BAD_ARGUMENT);
+
+        for (const auto bad : { std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity() })
+        {
+            values[3] = bad;
+            CHECK (hub.write_values (writer, 0, values.data(), 4) == HS_LINK_BAD_ARGUMENT);
+        }
+
+        CHECK (hub.read_values (reader, 0, values.data(), HS_LINK_MAX_VALUES + 1, &count) == HS_LINK_BAD_ARGUMENT);
+        CHECK (hub.read_values (reader, 0, values.data(), -1, &count) == HS_LINK_BAD_ARGUMENT);
+        CHECK (hub.read_values (reader, 0, nullptr, 1, &count) == HS_LINK_BAD_ARGUMENT);
+        CHECK (hub.read_values (reader, 0, values.data(), 1, nullptr) == HS_LINK_BAD_ARGUMENT);
+        CHECK (hub.read_values (reader, -1, values.data(), 1, &count) == HS_LINK_BAD_ARGUMENT);
+        CHECK (hub.read_values (writer, 0, values.data(), 1, &count) == HS_LINK_BAD_ARGUMENT);
+    }
+}
+
+TEST_CASE ("Link channels carry value sets by position", "[link]")
+{
+    const auto& hub = linkHub();
+    Claims claims;
+    const auto writer = claims.open ("test/values", HS_LINK_WRITER);
+    const auto reader = claims.open ("test/values", HS_LINK_READER);
+    const auto observer = hub.open ("test/values", HS_LINK_OBSERVER);
+    REQUIRE (writer >= 0);
+    REQUIRE (reader >= 0);
+    REQUIRE (observer >= 0);
+
+    // A set of `count` values: first, first + 0.125, ...
+    const auto writeSet = [&hub] (int32_t handle, int64_t position, float first, int count = 3) {
+        std::array<float, HS_LINK_MAX_VALUES> values {};
+
+        for (int i = 0; i < count; ++i)
+            values[static_cast<size_t> (i)] = first + static_cast<float> (i) * 0.125f;
+
+        return hub.write_values (handle, position, values.data(), count);
+    };
+
+    struct ValuesRead
+    {
+        int32_t result;
+        int32_t count;
+        std::array<float, HS_LINK_MAX_VALUES> values;
+    };
+
+    const auto readSet = [&hub] (int32_t handle, int64_t position, int32_t maxValues = HS_LINK_MAX_VALUES) {
+        ValuesRead read {};
+        read.values.fill (9.0f);
+        read.count = -1;
+        read.result = hub.read_values (handle, position, read.values.data(), maxValues, &read.count);
+        return read;
+    };
+
+    SECTION ("a read gets the set in effect at its position: the newest written at or before it")
+    {
+        const auto setsBefore = infoFor (reader).value_sets;
+        REQUIRE (writeSet (writer, 1000, 0.25f) == HS_LINK_OK);
+        REQUIRE (writeSet (writer, 2000, 0.5f) == HS_LINK_OK);
+        CHECK (infoFor (reader).value_sets == setsBefore + 2);
+
+        // Nothing yet: the values are left alone
+        const auto early = readSet (reader, 999);
+        CHECK (early.result == HS_LINK_NOT_YET);
+        CHECK (early.count == 0);
+        CHECK (juce::exactlyEqual (early.values[0], 9.0f));
+
+        for (const auto& [position, first] : { std::pair { int64_t (1000), 0.25f }, std::pair { int64_t (1999), 0.25f }, std::pair { int64_t (2000), 0.5f }, std::pair { int64_t (900000), 0.5f } })
+        {
+            INFO (position);
+            const auto read = readSet (reader, position);
+            CHECK (read.result == HS_LINK_OK);
+            CHECK (read.count == 3);
+            CHECK (juce::exactlyEqual (read.values[0], first));
+            CHECK (juce::exactlyEqual (read.values[2], first + 0.25f));
+            CHECK (juce::exactlyEqual (read.values[3], 9.0f));
+        }
+
+        // Observers may read values too (more than one relay could serve a bay)
+        CHECK (readSet (observer, 2000).result == HS_LINK_OK);
+    }
+
+    SECTION ("a reader asking for fewer values gets those; the count says how many the set has")
+    {
+        REQUIRE (writeSet (writer, 1000, 0.25f, 10) == HS_LINK_OK);
+        const auto read = readSet (reader, 1000, 4);
+        CHECK (read.result == HS_LINK_OK);
+        CHECK (read.count == 10);
+        CHECK (juce::exactlyEqual (read.values[3], 0.625f));
+        CHECK (juce::exactlyEqual (read.values[4], 9.0f));
+    }
+
+    SECTION ("sets outlast new writer details, but the oldest go once the ring is full")
+    {
+        REQUIRE (writeSet (writer, 1000, 0.25f) == HS_LINK_OK);
+        REQUIRE (hub.set_writer_details (writer, 48000.0, 256, 512) == HS_LINK_OK);
+        CHECK (readSet (reader, 1000).result == HS_LINK_OK);
+
+        for (int i = 0; i < HS_LINK_VALUE_SETS; ++i)
+            REQUIRE (writeSet (writer, 2000 + i, 0.5f) == HS_LINK_OK);
+
+        CHECK (readSet (reader, 1000).result == HS_LINK_GONE);
+        CHECK (readSet (reader, 2000).result == HS_LINK_OK);
+        CHECK (readSet (reader, 1999).result == HS_LINK_GONE);
+    }
+
+    SECTION ("going back starts the sets afresh")
+    {
+        REQUIRE (writeSet (writer, 5000, 0.25f) == HS_LINK_OK);
+        REQUIRE (writeSet (writer, 4000, 0.5f) == HS_LINK_OK);
+        CHECK (juce::exactlyEqual (readSet (reader, 6000).values[0], 0.5f));
+        CHECK (juce::exactlyEqual (readSet (reader, 4500).values[0], 0.5f));
+        CHECK (readSet (reader, 3999).result == HS_LINK_NOT_YET);
+    }
+
+    SECTION ("a new writer starts afresh, and the hub counts every claim")
+    {
+        const auto before = infoFor (observer);
+        REQUIRE (writeSet (writer, 1000, 0.25f) == HS_LINK_OK);
+        hub.close (writer);
+
+        const auto newWriter = claims.open ("test/values", HS_LINK_WRITER);
+        REQUIRE (newWriter >= 0);
+        CHECK (readSet (reader, 2000).result == HS_LINK_NOT_YET);
+        REQUIRE (writeSet (newWriter, 3000, 0.75f) == HS_LINK_OK);
+        CHECK (juce::exactlyEqual (readSet (reader, 3000).values[0], 0.75f));
+
+        hub.close (reader);
+        const auto newReader = claims.open ("test/values", HS_LINK_READER);
+        REQUIRE (newReader >= 0);
+
+        const auto after = infoFor (observer);
+        CHECK (after.writer_claims == before.writer_claims + 1);
+        CHECK (after.reader_claims == before.reader_claims + 1);
+    }
+}
+
+TEST_CASE ("Value sets are never torn while the writer runs on another thread", "[link]")
+{
+    // Every value in a set is the same number, different for each set: a read mixing two sets would show
+    const auto& hub = linkHub();
+    Claims claims;
+    const auto writer = claims.open ("test/value threads", HS_LINK_WRITER);
+    const auto reader = claims.open ("test/value threads", HS_LINK_READER);
+    REQUIRE (writer >= 0);
+    REQUIRE (reader >= 0);
+
+    std::atomic<bool> stop { false };
+    std::atomic<int64_t> newest { 0 };
+
+    std::thread writing ([&] {
+        juce::Random random (42);
+        std::array<float, HS_LINK_MAX_VALUES> values {};
+        int64_t position = 1000;
+
+        while (!stop.load())
+        {
+            position += random.nextInt ({ 1, 513 });
+            values.fill (static_cast<float> (position % 65521));
+            hub.write_values (writer, position, values.data(), HS_LINK_MAX_VALUES);
+            newest.store (position);
+        }
+    });
+
+    juce::Random random (7);
+    std::array<float, HS_LINK_MAX_VALUES> values {};
+    int complete = 0, torn = 0;
+    const auto deadline = juce::Time::getMillisecondCounter() + 400;
+
+    while (juce::Time::getMillisecondCounter() < deadline)
+    {
+        const auto position = newest.load() - random.nextInt (HS_LINK_VALUE_SETS * 100);
+        auto count = int32_t { 0 };
+
+        if (position < 0 || hub.read_values (reader, position, values.data(), HS_LINK_MAX_VALUES, &count) != HS_LINK_OK)
+            continue;
+
+        ++complete;
+
+        if (count != HS_LINK_MAX_VALUES || !std::all_of (values.begin(), values.end(), [first = values[0]] (float v) { return juce::exactlyEqual (v, first); }))
+            ++torn;
+    }
+
+    stop.store (true);
+    writing.join();
+
+    CHECK (complete > 500);
+    CHECK (torn == 0);
 }
 
 TEST_CASE ("Reads are never torn while the writer runs on another thread", "[link]")

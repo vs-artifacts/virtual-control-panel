@@ -10,8 +10,9 @@ namespace
     constexpr auto resizeAnchorKey = "resizeAnchor";
     constexpr auto lastEditorScaleKey = "lastEditorScale";
     constexpr auto flOutputCorrectionKey = "flOutputCorrection";
-    constexpr auto missingReturnBlocksKey = "missingReturnBlocks";
-    constexpr auto roundTripBlocksKey = "roundTripBlocks";
+    constexpr auto dropoutModeKey = "bayDropouts";
+    constexpr auto roundTripBlocksKey = "bayRoundTrip";
+    constexpr auto bypassCrossfadeKey = "bayBypassCrossfadeMs";
 }
 
 PluginSettings::PluginSettings()
@@ -89,24 +90,35 @@ void PluginSettings::setFlOutputCorrection (bool shouldCorrect)
     file.setValue (flOutputCorrectionKey, shouldCorrect);
 }
 
-BayLink::MissingBlocks PluginSettings::getMissingReturnBlocks() const
+BayLink::Dropouts PluginSettings::getBayDropouts() const
 {
-    return BayLink::missingBlocksFromName (file.getValue (missingReturnBlocksKey)).value_or (BayLink::MissingBlocks::silence);
+    return BayLink::dropoutsFromName (file.getValue (dropoutModeKey)).value_or (BayLink::Dropouts::safe);
 }
 
-void PluginSettings::setMissingReturnBlocks (BayLink::MissingBlocks missingBlocks)
+void PluginSettings::setBayDropouts (BayLink::Dropouts dropouts)
 {
-    file.setValue (missingReturnBlocksKey, BayLink::toName (missingBlocks));
+    file.setValue (dropoutModeKey, BayLink::toName (dropouts));
 }
 
 int PluginSettings::getRoundTripBlocks() const
 {
-    return juce::jlimit (BayLink::minRoundTripBlocks, BayLink::maxRoundTripBlocks, file.getIntValue (roundTripBlocksKey, BayLink::defaultRoundTripBlocks));
+    const auto blocks = file.getIntValue (roundTripBlocksKey, BayLink::defaultRoundTripBlocks);
+    return blocks == BayLink::autoRoundTrip ? blocks : juce::jlimit (BayLink::minRoundTripBlocks, BayLink::maxRoundTripBlocks, blocks);
 }
 
 void PluginSettings::setRoundTripBlocks (int blocks)
 {
-    file.setValue (roundTripBlocksKey, juce::jlimit (BayLink::minRoundTripBlocks, BayLink::maxRoundTripBlocks, blocks));
+    file.setValue (roundTripBlocksKey, blocks == BayLink::autoRoundTrip ? blocks : juce::jlimit (BayLink::minRoundTripBlocks, BayLink::maxRoundTripBlocks, blocks));
+}
+
+int PluginSettings::getBypassCrossfadeMs() const
+{
+    return juce::jlimit (0, BayLink::maxCrossfadeMs, file.getIntValue (bypassCrossfadeKey, BayLink::defaultCrossfadeMs));
+}
+
+void PluginSettings::setBypassCrossfadeMs (int milliseconds)
+{
+    file.setValue (bypassCrossfadeKey, juce::jlimit (0, BayLink::maxCrossfadeMs, milliseconds));
 }
 
 juce::PropertiesFile::Options PluginSettings::createOptions()

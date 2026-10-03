@@ -9,6 +9,9 @@
 // timeline (a sample count); one reader asks for frames by position. Frames that haven't arrived, or are no longer
 // there, are reported as such, never handed out stale. A writer that skips ahead leaves a gap (those frames never
 // arrive); one that goes back, or starts a new session, starts afresh.
+//
+// A channel also carries value sets: up to HS_LINK_MAX_VALUES numbers stamped with the position from which they apply,
+// until a later set. They outlast sessions; a new writer starts them afresh.
 
 #include <stdint.h>
 
@@ -16,7 +19,7 @@
 extern "C" {
 #endif
 
-#define HS_LINK_ABI_VERSION 1u
+#define HS_LINK_ABI_VERSION 2u
 #define HS_LINK_GET_API_SYMBOL "heartseeker_link_get_api"
 
 // Channel names: printable ASCII, 1 to HS_LINK_MAX_NAME - 1 characters
@@ -31,6 +34,10 @@ extern "C" {
 // Positions run from 0 to below this
 #define HS_LINK_MAX_POSITION ((int64_t) 1 << 47)
 
+// Most values in one set, and how many sets a channel keeps
+#define HS_LINK_MAX_VALUES 64
+#define HS_LINK_VALUE_SETS 256
+
 enum {
     HS_LINK_WRITER = 0, // one per channel
     HS_LINK_READER = 1, // one per channel; the hub publishes where it last read
@@ -39,8 +46,8 @@ enum {
 
 enum {
     HS_LINK_OK = 0,
-    HS_LINK_NOT_YET = 1, // read: some of the frames haven't been written yet
-    HS_LINK_GONE = 2, // read: some of the frames are no longer there (overwritten, or the writer restarted)
+    HS_LINK_NOT_YET = 1, // read: some of the frames (or no value set for that position) haven't been written yet
+    HS_LINK_GONE = 2, // read: some of the frames (or the value set) are no longer there (overwritten, or the writer restarted)
     HS_LINK_BAD_ARGUMENT = -1,
     HS_LINK_ROLE_TAKEN = -2,
     HS_LINK_NOT_FOUND = -3, // observer: no such channel
@@ -62,9 +69,13 @@ typedef struct hs_link_info
     int64_t readable_end; // ...to just before here can be read
     int64_t last_read_position; // where the reader's last read started
     int32_t last_read_length;
-    int32_t reserved;
+    uint32_t writer_claims; // times each role has been claimed, to tell when a new writer or reader has taken over
+    uint32_t reader_claims;
+    uint32_t reserved;
     uint64_t writes; // calls so far, to tell whether each side is running
     uint64_t reads;
+    uint64_t value_sets; // value sets written so far
+    uint64_t failed_reads; // reads that didn't get every frame
 } hs_link_info;
 
 typedef struct hs_link_api
@@ -85,6 +96,13 @@ typedef struct hs_link_api
     int32_t (*write) (int32_t handle, int64_t position, const float* const* channels, int32_t num_channels, int32_t num_frames);
     int32_t (*read) (int32_t handle, int64_t position, float* const* channels, int32_t num_channels, int32_t num_frames);
     int32_t (*get_info) (int32_t handle, hs_link_info* info);
+
+    // Any thread, as write and read. Writer: values (finite, 0 to HS_LINK_MAX_VALUES of them) that apply from `position`
+    // on; a set before the newest one starts the sets afresh. Reader or observer: the set in effect at `position` (the
+    // newest written at or before it); copies up to max_values of its values and sets *num_values to how many it has.
+    // A read that fails changes nothing but *num_values (0).
+    int32_t (*write_values) (int32_t handle, int64_t position, const float* values, int32_t num_values);
+    int32_t (*read_values) (int32_t handle, int64_t position, float* values, int32_t max_values, int32_t* num_values);
 } hs_link_api;
 
 // The one exported function: null unless this hub speaks the requested version

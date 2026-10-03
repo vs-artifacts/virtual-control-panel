@@ -309,7 +309,7 @@ TEST_CASE ("The page's corner grips resize the plugin", "[webui][webview]")
     CHECK (messages == juce::StringArray { "topLeft start", "topLeft end" });
 }
 
-TEST_CASE ("The Panel tab shows the bay link and sends the output choice", "[webui][webview]")
+TEST_CASE ("The Panel tab shows the bay link and sends the bypass switch", "[webui][webview]")
 {
     if (!WebUi::isSupported())
         SKIP ("No supported web view on this system");
@@ -319,23 +319,27 @@ TEST_CASE ("The Panel tab shows the bay link and sends the output choice", "[web
     handlers.describeEditor = [] {
         return juce::JSON::parse (R"({ "title": "test", "tab": 0, "settings": {}, "plugins": [], "processing": true,
             "link": { "hubProblem": "", "name": "Panel 1", "linkProblem": "", "receiver": "playing", "transmitter": "returning",
-                "roundTrip": 1024, "roundTripBlocks": 2, "maxBlock": 512, "sampleRate": 48000, "latency": 1024,
-                "output": "direct", "missingBlocks": "silence", "missing": 3, "replaced": 0, "oversized": 0,
+                "roundTripSetting": 0, "autoState": "oneBlock",
+                "roundTrip": 512, "roundTripBlocks": 1, "maxBlock": 512, "sampleRate": 48000, "latency": 512,
+                "bypass": false, "dropouts": "silence", "crossfadeMs": 20, "missing": 3, "replaced": 0, "oversized": 0, "valueSets": 7,
                 "differenceNow": 0, "differenceLargest": 0,
-                "lag": { "state": "found", "samples": 0, "exact": true, "similarity": 1, "earliest": 1024, "latest": 8192 } } })");
+                "lag": { "state": "found", "paths": [ { "samples": 12288, "gain": 0.98 }, { "samples": 0, "gain": 1 } ], "exact": false, "earliest": 1024, "latest": 32768 },
+                "probe": { "state": "found", "delay": 480, "rise": 24, "before": 0, "after": 0.25 } } })");
     };
-    handlers.events["bayOutput"] = [&chosen] (const juce::var& message) { chosen = message; };
+    handlers.events["bayBypass"] = [&chosen] (const juce::var& message) { chosen = message; };
 
     KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
     ControlSession noParameters ({});
     OffscreenWebUi page (keys, noParameters, std::move (handlers));
     CHECK (page.waitFor ("document.getElementById('link-state')?.textContent ?? ''", "Linked as Panel 1") == "Linked as Panel 1");
     CHECK (page.evaluate ("document.getElementById('link-relays').textContent") == "receiver playing; transmitter returning");
-    CHECK (page.evaluate ("document.getElementById('link-missing').textContent") == "3 (played as silence)");
+    CHECK (page.evaluate ("document.getElementById('link-auto').textContent") == "automatic: 1 block works (still watching: a miss on either side falls back to 2)");
+    CHECK (page.evaluate ("document.getElementById('link-missing').textContent.trim()") == "3 (dropouts play silence)");
     CHECK (page.evaluate ("document.getElementById('link-difference').textContent.trim()") == "now identical, largest identical");
-    CHECK (page.evaluate ("document.getElementById('link-lag').textContent") == "exact match at 0 samples");
+    CHECK (page.evaluate ("document.getElementById('link-lag').textContent") == "2 paths: +12288 samples (gain 0.98); 0 samples (gain 1.00)");
+    CHECK (page.evaluate ("document.getElementById('link-probe').textContent").startsWith ("+480 samples (10.0 ms, 0.94 blocks) after the step"));
 
-    page.evaluate ("document.querySelectorAll('input[name=bayOutput]')[1].click()");
+    page.evaluate ("document.getElementById('link-bypass').click()");
     page.pumpUntil ([&chosen] { return !chosen.isVoid(); });
-    CHECK (chosen["value"] == "return");
+    CHECK (chosen["value"] == juce::var (true));
 }

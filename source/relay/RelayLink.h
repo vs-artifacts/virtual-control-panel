@@ -4,11 +4,15 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 
 // A relay's side of a bay link, for one bay ("bay 1") of the first panel it finds.
-// Receiver mode (before the FL plugin): plays what the panel sends. Transmitter mode (after it): sends what comes
-// out of the FL plugin back to the panel, stamped with the position the receiver played in the same cycle.
+// Receiver mode (before the FL plugin): plays what the panel sends, and holds the panel's control values for the
+// relay's control outputs. Transmitter mode (after it): sends what comes out of the FL plugin back to the panel,
+// stamped with the position the receiver played in the same cycle.
 class RelayLink
 {
 public:
+    // Control values a receiver holds, one per control output
+    static constexpr int numControls = 16;
+
     enum class Mode {
         receiver,
         transmitter,
@@ -45,6 +49,8 @@ public:
         Miss lastMiss = Miss::none;
         std::optional<int> headroomNow, headroomLowest; // receiver: samples of the panel's audio to spare
         std::optional<int> blockMin, blockMax;
+        bool controlsLive = false; // receiver: the last block's values came from the panel (otherwise they're held)
+        std::array<float, numControls> controls {};
     };
 
     explicit RelayLink (const hs_link_api&);
@@ -62,12 +68,18 @@ public:
     // main output, a transmitter sends the main input. Every output channel ends up silent otherwise.
     void process (juce::AudioBuffer<float>&);
 
+    // A control output's value: what the panel last sent (held through misses and without a link), kept with the
+    // relay's state so knobs don't drop when a project opens. Any thread.
+    float getControl (int index) const noexcept { return controls[static_cast<size_t> (index)].load (std::memory_order_relaxed); }
+    void setControl (int index, float value) noexcept;
+
     // Blocks without new audio from the other side before it counts as stopped rather than missed
     static constexpr int stallBlocks = 2;
 
 private:
     void unlink();
     void receive (juce::AudioBuffer<float>&);
+    void receiveControls (int32_t reader, juce::int64 position);
     void transmit (const juce::AudioBuffer<float>&);
     bool matchesOwnRate (double) const noexcept;
     void noteMiss (Miss) noexcept;
@@ -90,7 +102,8 @@ private:
     int panelStall = 0, receiverStall = 0;
 
     // Audio thread to message thread
-    std::atomic<bool> otherSideRunning { false }, sampleRateDiffers { false };
+    std::atomic<bool> otherSideRunning { false }, sampleRateDiffers { false }, controlsLive { false };
+    std::array<std::atomic<float>, numControls> controls {};
     std::atomic<juce::uint64> missed { 0 };
     std::atomic<Miss> lastMiss { Miss::none };
     bool streaming = false; // audio thread: only a block missing from a running stream counts as missed

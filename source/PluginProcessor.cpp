@@ -15,12 +15,15 @@ PluginProcessor::PluginProcessor()
     engine.build ({ juce::File (serum2Path), juce::File (sylenth1Path) }, { juce::File (eqPath) });
     engine.expose (2, eqLowGainID); // slot 2: the EQ, after the two generators
 
-    // Exposed parameter i is bound to host control i
+    // Exposed parameter i is bound to host control i, then the bay's controls follow
     const auto& exposed = engine.getExposedParameters();
-    jassert (exposed.size() <= HostControls::count);
+    jassert (exposed.size() + BayLink::numControls <= HostControls::count);
 
     for (size_t i = 0; i < exposed.size(); ++i)
         hostControls.bind (static_cast<int> (i), *exposed[i].parameter);
+
+    for (int i = 0; i < BayLink::numControls; ++i)
+        hostControls.bind (static_cast<int> (exposed.size()) + i, bayLink.getControl (i));
 
     applyLinkSettings();
     linkSettingsCheck.startTimerHz (2);
@@ -107,18 +110,19 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
 void PluginProcessor::applyLinkSettings()
 {
-    bayLink.setMissingBlocks (settings->getMissingReturnBlocks());
+    bayLink.setDropouts (settings->getBayDropouts());
+    bayLink.setCrossfadeMs (settings->getBypassCrossfadeMs());
 
     if (const auto blocks = settings->getRoundTripBlocks(); blocks != bayLink.getRoundTripBlocks())
-    {
         bayLink.setRoundTripBlocks (blocks);
-        reportLatency();
-    }
+
+    bayLink.updateRoundTrip();
+    reportLatency();
 }
 
 void PluginProcessor::reportLatency()
 {
-    // The bay's round trip delays everything we play, the direct sound included
+    // The bay's round trip delays everything we play, the direct sound included. Only a change reaches the host.
     setLatencySamples (engine.getLatencySamples() + bayLink.getRoundTripSamples());
 }
 
@@ -187,10 +191,15 @@ void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
     juce::XmlElement state ("HeartseekerPanelState");
     state.setAttribute ("editorPlaced", editorPlaced);
     state.setAttribute ("editorTab", editorTab);
-    state.setAttribute ("bayOutput", BayLink::toName (bayLink.getOutput()));
+    state.setAttribute ("bayBypass", bayLink.isBypassed());
 
     if (editorScale.has_value())
         state.setAttribute ("editorScale", *editorScale);
+
+    auto* controls = state.createNewChildElement (bayControlsTag);
+
+    for (int i = 0; i < BayLink::numControls; ++i)
+        controls->setAttribute ("control" + juce::String (i + 1), static_cast<double> (bayLink.getControl (i).getValue()));
 
     state.addChildElement (engine.createStateXml().release());
     copyXmlToBinary (state, destData);
@@ -203,10 +212,20 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
     {
         editorPlaced = state->getBoolAttribute ("editorPlaced");
         editorTab = juce::jlimit (0, numEditorTabs - 1, state->getIntAttribute ("editorTab"));
-        bayLink.setOutput (BayLink::outputFromName (state->getStringAttribute ("bayOutput")).value_or (BayLink::Output::direct));
+
+        // Projects saved before the bypass switch have the output switch instead
+        if (state->hasAttribute ("bayBypass"))
+            bayLink.setBypass (state->getBoolAttribute ("bayBypass"));
+        else
+            bayLink.setBypass (state->getStringAttribute ("bayOutput") == "direct");
 
         if (state->hasAttribute ("editorScale"))
             editorScale = EditorScale::constrain (state->getDoubleAttribute ("editorScale"), EditorScale::Resizing::smooth, 1.0);
+
+        if (auto* controls = state->getChildByName (bayControlsTag))
+            for (int i = 0; i < BayLink::numControls; ++i)
+                if (const auto name = "control" + juce::String (i + 1); controls->hasAttribute (name))
+                    bayLink.getControl (i).setValue (static_cast<float> (controls->getDoubleAttribute (name)));
 
         if (auto* engineState = state->getChildByName (Engine::stateTag))
             engine.restoreStateFromXml (*engineState);
@@ -231,6 +250,19 @@ std::vector<ControlSession::Parameter> PluginProcessor::createSessionParameters(
             parameter->getName (ControlSession::maxTextLength),
             hostControl.getName (ControlSession::maxTextLength),
             parameter,
+            &hostControl });
+    }
+
+    for (int i = 0; i < BayLink::numControls; ++i)
+    {
+        auto& control = bayLink.getControl (i);
+        auto& hostControl = hostControls[static_cast<int> (exposed.size()) + i];
+
+        parameters.push_back ({ "Bay 1",
+            "FL plugin, through relays",
+            control.getName (ControlSession::maxTextLength),
+            hostControl.getName (ControlSession::maxTextLength),
+            &control,
             &hostControl });
     }
 

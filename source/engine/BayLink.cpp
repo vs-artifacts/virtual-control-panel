@@ -1,6 +1,7 @@
 #include "BayLink.h"
 #include "../link/BayNames.h"
 #include <bit>
+#include <juce_dsp/juce_dsp.h>
 
 namespace
 {
@@ -48,11 +49,46 @@ namespace
     {
         return stored < 0.0f ? std::nullopt : std::optional<float> (stored);
     }
+
+    bool isFinite (float value) noexcept
+    {
+        return (std::bit_cast<juce::uint32> (value) & 0x7f800000u) != 0x7f800000u;
+    }
+}
+
+BayControl::BayControl (int numberToUse)
+    : number (numberToUse)
+{
+}
+
+void BayControl::setValue (float newValue)
+{
+    if (isFinite (newValue))
+        value.store (juce::jlimit (0.0f, 1.0f, newValue), std::memory_order_relaxed);
+}
+
+juce::String BayControl::getName (int maximumStringLength) const
+{
+    return ("Control " + juce::String (number)).substring (0, maximumStringLength);
+}
+
+juce::String BayControl::getText (float normalisedValue, int maximumStringLength) const
+{
+    return (juce::String (normalisedValue * 100.0f, 2) + "%").substring (0, maximumStringLength);
+}
+
+float BayControl::getValueForText (const juce::String& text) const
+{
+    const auto percent = text.upToFirstOccurrenceOf ("%", false, false).trim().getFloatValue();
+    return juce::jlimit (0.0f, 1.0f, percent / 100.0f);
 }
 
 BayLink::BayLink (HubLocator locatorToUse)
     : locator (std::move (locatorToUse))
 {
+    for (int number = 1; number <= numControls; ++number)
+        controls.push_back (std::make_unique<BayControl> (number));
+
     maintain();
     hubCheck.startTimer (1000);
 }
@@ -82,17 +118,25 @@ void BayLink::prepare (double newSampleRate, int maxBlockSize)
     for (auto* buffer : { &returnLeft, &returnRight, &directLeft, &directRight })
         buffer->assign (blockFrames, 0.0f);
 
-    history.allocate ((maxRoundTripBlocks + 1) * maxBlock + lagWindow + lagLatest + lagEarliest);
-    lagReturn.assign (static_cast<size_t> (lagWindow), 0.0f);
-    lagDirect.assign (static_cast<size_t> (lagWindow + lagLatest + lagEarliest), 0.0f);
-    lagStep.store (lagIdle);
-    lagCaptured = 0;
+    history.allocate ((maxRoundTripBlocks + 1) * maxBlock);
+
+    probeSettle = static_cast<int> (std::ceil (probeSettleSeconds * sampleRate));
+    probeBefore = static_cast<int> (std::ceil (probeBeforeSeconds * sampleRate));
+    probeAfter = static_cast<int> (std::ceil (probeAfterSeconds * sampleRate));
+    probeEnvelope.assign (static_cast<size_t> (probeSettle + maxBlock + probeAfter), -1.0f);
+    lagCapture.assign (static_cast<size_t> (lagEarliest + lagBurst + lagLatest), 0.0f);
+    testStep.store (testIdle);
+    muteUntil = 0;
+
+    if (probeResult.state == Probe::State::running)
+        probeResult = {};
 
     if (lagResult.state == Lag::State::measuring)
         lagResult = {};
 
     roundTrip.store (roundTripBlocks.load() * maxBlock);
-    returnStall = flowingBlocks = 0;
+    lastRoundTrip = -1;
+    returnStall = flowingRun = 0;
     blockMin.store (unset);
     blockMax.store (unset);
 
@@ -103,13 +147,103 @@ void BayLink::prepare (double newSampleRate, int maxBlockSize)
         linkIfReady();
 }
 
-void BayLink::setRoundTripBlocks (int blocks)
+void BayLink::setRoundTripBlocks (int blocksOrAuto)
 {
-    roundTripBlocks.store (juce::jlimit (minRoundTripBlocks, maxRoundTripBlocks, blocks));
-    roundTrip.store (roundTripBlocks.load() * maxBlock);
+    const auto setting = blocksOrAuto == autoRoundTrip ? autoRoundTrip : juce::jlimit (minRoundTripBlocks, maxRoundTripBlocks, blocksOrAuto);
+    roundTripSetting.store (setting);
+
+    // Switching to automatic checks 1 block afresh
+    if (setting == autoRoundTrip)
+        startAutoCheck();
+
+    updateRoundTrip();
+}
+
+bool BayLink::updateRoundTrip()
+{
+    const auto setting = roundTripSetting.load();
+
+    if (setting != autoRoundTrip)
+    {
+        autoCheckActive.store (false);
+        autoState.store (AutoState::off);
+        return applyRoundTrip (setting);
+    }
+
+    // A relay linking (a new one, or one switching modes) may run in a different order: check 1 block again
+    if (const auto* linkHub = hub.load(); linkHub != nullptr && sendHandle.load() >= 0)
+    {
+        auto sendInfo = emptyInfo();
+        auto backInfo = emptyInfo();
+
+        if (linkHub->get_info (sendHandle.load(), &sendInfo) == HS_LINK_OK && linkHub->get_info (returnHandle.load(), &backInfo) == HS_LINK_OK)
+        {
+            const auto claims = (juce::uint64 (sendInfo.reader_claims) << 32) | backInfo.writer_claims;
+
+            if (relayClaims != claims)
+            {
+                relayClaims = claims;
+                startAutoCheck();
+            }
+        }
+    }
+
+    if (autoState.load() == AutoState::checking && autoCheckActive.load() && sampleRate > 0.0)
+    {
+        if (autoCheckMisses.load() > 0)
+        {
+            autoBlocks = 2;
+            autoState.store (AutoState::fellBack);
+            autoCheckActive.store (false);
+        }
+        else if (static_cast<double> (autoCheckSamples.load()) >= autoCheckSeconds * sampleRate)
+        {
+            autoState.store (AutoState::oneBlock);
+        }
+    }
+    else if (autoState.load() == AutoState::oneBlock && autoCheckMisses.load() > 0)
+    {
+        // Still watching: e.g. the wire into the receiver was removed
+        autoBlocks = 2;
+        autoState.store (AutoState::fellBack);
+        autoCheckActive.store (false);
+    }
+
+    const auto changed = applyRoundTrip (autoBlocks);
+
+    // Counted only at the round trip being checked, so nothing from before the change gets in
+    if (autoState.load() == AutoState::checking && !autoCheckActive.load())
+    {
+        autoCheckMisses.store (0);
+        autoCheckSamples.store (0);
+        autoCheckRoundTrip.store (roundTrip.load());
+        autoCheckActive.store (true);
+    }
+
+    return changed;
+}
+
+void BayLink::startAutoCheck()
+{
+    autoBlocks = minRoundTripBlocks;
+    autoCheckActive.store (false);
+    autoState.store (AutoState::checking);
+}
+
+bool BayLink::applyRoundTrip (int blocks)
+{
+    roundTripBlocks.store (blocks);
+    const auto samples = blocks * maxBlock;
+
+    if (samples == roundTrip.load())
+        return false;
+
+    roundTrip.store (samples);
 
     if (const auto send = sendHandle.load(); send >= 0 && maxBlock > 0)
-        hub.load()->set_writer_details (send, sampleRate, maxBlock, roundTrip.load());
+        hub.load()->set_writer_details (send, sampleRate, maxBlock, samples);
+
+    return true;
 }
 
 void BayLink::maintain()
@@ -212,11 +346,25 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
     const auto start = position;
     const auto roundTripSamples = roundTrip.load (std::memory_order_relaxed);
 
+    if (roundTripSamples != lastRoundTrip)
+    {
+        lastRoundTrip = roundTripSamples;
+        roundTripRun = 0;
+    }
+    else
+    {
+        roundTripRun += numSamples;
+    }
+
     if (const auto minimum = minimumLinkPosition.load (std::memory_order_relaxed); start + linkOffset < minimum)
         linkOffset = minimum - start;
 
     const auto linkStart = start + linkOffset;
     history.write (start, left, right, numSamples);
+
+    // From here on the buffer only carries what's sent: the output is written last, from the history or the return
+    runTest (linkStart, numSamples, left, right);
+    const auto testing = testStep.load (std::memory_order_relaxed) == testRunning;
 
     const auto* linkHub = hub.load (std::memory_order_acquire);
     const auto send = sendHandle.load (std::memory_order_acquire);
@@ -226,14 +374,30 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
     {
         const float* channels[] { left, right };
         linkHub->write (send, linkStart, channels, 2, numSamples);
+        sendValues (*linkHub, send, linkStart);
+    }
+
+    // The receiver's misses since the last block: each leaves a gap in the return, which may still be far off
+    auto receiverMissed = false;
+
+    if (auto info = emptyInfo(); linkHub != nullptr && send >= 0 && linkHub->get_info (send, &info) == HS_LINK_OK)
+    {
+        if (send == receiverCountedOn && info.failed_reads > receiverFailures)
+        {
+            receiverMisses.fetch_add (info.failed_reads - receiverFailures, std::memory_order_relaxed);
+            receiverMissed = true;
+        }
+
+        receiverCountedOn = send;
+        receiverFailures = info.failed_reads;
     }
 
     auto result = int32_t { HS_LINK_CLOSED };
     auto flowing = false;
+    const auto returnStart = linkStart - roundTripSamples;
 
     if (linkHub != nullptr && back >= 0)
     {
-        const auto returnStart = linkStart - roundTripSamples;
         float* channels[] { returnLeft.data(), returnRight.data() };
         result = linkHub->read (back, returnStart, channels, 2, numSamples);
 
@@ -248,10 +412,12 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
             }
             else
             {
-                ++returnStall;
+                returnStall += numSamples;
             }
 
-            flowing = returnStall < stallBlocks;
+            // Measured in time: a receiver that misses now and then makes the return stop and start, which must
+            // still count as flowing
+            flowing = static_cast<double> (returnStall) < std::max (stallSeconds * sampleRate, 2.0 * maxBlock);
 
             if (flowing)
             {
@@ -262,106 +428,289 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
         }
     }
 
-    flowingBlocks = flowing ? std::min (flowingBlocks + 1, warmUpBlocks + 1) : 0;
-    history.read (start - roundTripSamples, directLeft.data(), directRight.data(), numSamples);
+    flowingRun = flowing ? flowingRun + numSamples : 0;
 
-    if (result == HS_LINK_OK)
+    // A newly flowing return fills the round trip first; counted in samples, since FL's blocks can be far smaller
+    // than it announced
+    const auto warmedUp = flowingRun > roundTripSamples + warmUpBlocks * maxBlock;
+    history.read (start - roundTripSamples, directLeft.data(), directRight.data(), numSamples);
+    const auto returned = result == HS_LINK_OK;
+
+    if (returned)
     {
         const auto badSamples = replaceNonFinite (returnLeft.data(), numSamples) + replaceNonFinite (returnRight.data(), numSamples);
 
         if (badSamples > 0)
             replaced.fetch_add (badSamples, std::memory_order_relaxed);
 
-        const auto difference = std::max (largestDifference (returnLeft.data(), directLeft.data(), numSamples),
-            largestDifference (returnRight.data(), directRight.data(), numSamples));
-        keepLargest (differenceNow, difference);
-        keepLargest (differenceLargest, difference);
-        captureLag (start - roundTripSamples, numSamples, start + numSamples);
+        // A test signal (or what's still coming back of it) isn't the sent audio, so the comparison waits
+        if (!testing && linkStart >= muteUntil)
+        {
+            const auto difference = std::max (largestDifference (returnLeft.data(), directLeft.data(), numSamples),
+                largestDifference (returnRight.data(), directRight.data(), numSamples));
+            keepLargest (differenceNow, difference);
+            keepLargest (differenceLargest, difference);
+        }
     }
     else
     {
         // A return that's flowing but late or broken; not while a new one fills the round trip
-        if (flowing && flowingBlocks > warmUpBlocks)
+        if (flowing && warmedUp)
             missing.fetch_add (1, std::memory_order_relaxed);
-
-        lagCaptured = 0;
     }
 
-    const float* fromLeft = directLeft.data();
-    const float* fromRight = directRight.data();
-
-    if (output.load (std::memory_order_relaxed) == Output::bayReturn)
+    // The automatic round trip's check, once the return flows and the relays have lined up at the round trip being
+    // checked. A miss on either side counts.
+    if (autoCheckActive.load (std::memory_order_relaxed) && roundTripSamples == autoCheckRoundTrip.load (std::memory_order_relaxed)
+        && flowing && warmedUp && static_cast<double> (roundTripRun) >= autoSettleSeconds * sampleRate)
     {
-        if (result == HS_LINK_OK)
-        {
-            fromLeft = returnLeft.data();
-            fromRight = returnRight.data();
-        }
-        else if (missingBlocks.load (std::memory_order_relaxed) == MissingBlocks::silence)
-        {
-            fromLeft = fromRight = nullptr;
-        }
+        if (returned && !receiverMissed)
+            autoCheckSamples.fetch_add (static_cast<juce::uint64> (numSamples), std::memory_order_relaxed);
+        else
+            autoCheckMisses.fetch_add (1, std::memory_order_relaxed);
     }
 
-    if (fromLeft == nullptr)
+    captureTest (returnStart, numSamples, returned, linkStart + numSamples);
+
+    // A test fades the output out before it starts, and back in once its signal has gone
+    const auto muted = testing || testStep.load (std::memory_order_relaxed) == testRequested || linkStart < muteUntil;
+
+    if (muted && outputGain <= 0.0f)
     {
         buffer.clear (0, 0, numSamples);
         buffer.clear (1, 0, numSamples);
+        returnMix = returned && !bypass.load (std::memory_order_relaxed) ? 1.0f : 0.0f;
     }
     else
     {
-        juce::FloatVectorOperations::copy (left, fromLeft, numSamples);
-        juce::FloatVectorOperations::copy (right, fromRight, numSamples);
+        mix (left, right, numSamples, returned);
+        fadeOutput (left, right, numSamples, muted ? 0.0f : 1.0f);
     }
 
     position = start + numSamples;
 }
 
-void BayLink::captureLag (juce::int64 returnStart, int numSamples, juce::int64 directEnd)
+void BayLink::fadeOutput (float* left, float* right, int numSamples, float target)
 {
-    if (lagStep.load (std::memory_order_acquire) != lagRequested)
+    if (juce::exactlyEqual (outputGain, target) && juce::exactlyEqual (target, 1.0f))
+        return;
+
+    const auto step = static_cast<float> (1.0 / std::max (1.0, muteFadeSeconds * sampleRate));
+
+    for (int i = 0; i < numSamples; ++i)
     {
-        lagCaptured = 0;
+        outputGain = target > outputGain ? std::min (target, outputGain + step) : std::max (target, outputGain - step);
+        left[i] *= outputGain;
+        right[i] *= outputGain;
+    }
+}
+
+void BayLink::mix (float* left, float* right, int numSamples, bool returned)
+{
+    const auto bypassed = bypass.load (std::memory_order_relaxed);
+
+    if (!returned)
+    {
+        // A dropout starts at once (fading out of it would need a block of lookahead). Silence mode comes back from
+        // it at once too, so dropouts stay plain to hear; safe mode fades back into the return.
+        if (!bypassed && dropouts.load (std::memory_order_relaxed) == Dropouts::silence)
+        {
+            juce::FloatVectorOperations::clear (left, numSamples);
+            juce::FloatVectorOperations::clear (right, numSamples);
+            returnMix = 1.0f;
+            return;
+        }
+
+        juce::FloatVectorOperations::copy (left, directLeft.data(), numSamples);
+        juce::FloatVectorOperations::copy (right, directRight.data(), numSamples);
+        returnMix = 0.0f;
         return;
     }
 
-    // The stretch must be unbroken
-    if (lagCaptured > 0 && returnStart != lagNext)
-        lagCaptured = 0;
+    const auto target = bypassed ? 0.0f : 1.0f;
 
-    const auto take = std::min (numSamples, lagWindow - lagCaptured);
+    if (juce::exactlyEqual (returnMix, target))
+    {
+        juce::FloatVectorOperations::copy (left, bypassed ? directLeft.data() : returnLeft.data(), numSamples);
+        juce::FloatVectorOperations::copy (right, bypassed ? directRight.data() : returnRight.data(), numSamples);
+        return;
+    }
 
-    for (int i = 0; i < take; ++i)
-        lagReturn[static_cast<size_t> (lagCaptured + i)] = returnLeft[static_cast<size_t> (i)] + returnRight[static_cast<size_t> (i)];
+    const auto fadeSamples = crossfadeMs.load (std::memory_order_relaxed) * sampleRate / 1000.0;
+    const auto step = fadeSamples > 1.0 ? static_cast<float> (1.0 / fadeSamples) : 1.0f;
 
-    lagCaptured += take;
-    lagNext = returnStart + take;
+    for (int i = 0; i < numSamples; ++i)
+    {
+        returnMix = target > returnMix ? std::min (target, returnMix + step) : std::max (target, returnMix - step);
+        const auto index = static_cast<size_t> (i);
+        left[i] = directLeft[index] + returnMix * (returnLeft[index] - directLeft[index]);
+        right[i] = directRight[index] + returnMix * (returnRight[index] - directRight[index]);
+    }
+}
 
-    if (lagCaptured < lagWindow)
+void BayLink::sendValues (const hs_link_api& linkHub, int32_t send, juce::int64 linkStart)
+{
+    std::array<float, numControls> values {};
+
+    for (size_t i = 0; i < values.size(); ++i)
+        values[i] = controls[i]->getValue();
+
+    if (testStep.load (std::memory_order_relaxed) == testRunning && testKind.load (std::memory_order_relaxed) == probeTest)
+        values[0] = probeStepAt >= 0 ? 1.0f : 0.0f;
+
+    // A set applies until the next, so only changes (and each new link's first set) are sent
+    const auto same = std::equal (values.begin(), values.end(), valuesSent.begin(), [] (float a, float b) { return juce::exactlyEqual (a, b); });
+
+    if (send == valuesSentTo && same)
         return;
 
-    // The sent audio around the same stretch: lagLatest samples before it, and as much after it as exists yet
-    lagCapturedEarliest = static_cast<int> (std::min<juce::int64> (lagEarliest, directEnd - lagNext));
-    history.readMono (lagNext - lagWindow - lagLatest, lagDirect.data(), lagWindow + lagLatest + lagCapturedEarliest);
-    lagCaptured = 0;
-    lagStep.store (lagReady, std::memory_order_release);
+    if (linkHub.write_values (send, linkStart, values.data(), numControls) == HS_LINK_OK)
+    {
+        valuesSent = values;
+        valuesSentTo = send;
+        valueSets.fetch_add (1, std::memory_order_relaxed);
+    }
+}
+
+void BayLink::runTest (juce::int64 linkStart, int numSamples, float* left, float* right)
+{
+    auto step = testStep.load (std::memory_order_acquire);
+
+    if (step == testRequested)
+    {
+        // Not until the output has faded out
+        if (outputGain > 0.0f)
+            return;
+
+        testStart = linkStart;
+        probeStepAt = -1;
+        std::fill (probeEnvelope.begin(), probeEnvelope.end(), -1.0f);
+        std::fill (lagCapture.begin(), lagCapture.end(), 0.0f);
+        lagCaptured = 0;
+        testStep.store (testRunning, std::memory_order_relaxed);
+        step = testRunning;
+    }
+
+    if (step != testRunning)
+        return;
+
+    if (testKind.load (std::memory_order_relaxed) == lagTest)
+    {
+        // Silence, the burst, then silence while it comes back
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const auto index = linkStart + i - testStart - lagEarliest;
+            left[i] = right[i] = index >= 0 && index < lagBurst ? lagBurstSamples[static_cast<size_t> (index)] : 0.0f;
+        }
+
+        return;
+    }
+
+    if (probeStepAt < 0 && linkStart >= testStart + probeSettle)
+        probeStepAt = linkStart;
+
+    // sin (pi/2 n + pi/4): a tone whose every sample has the same size, so the return's level shows sample by sample
+    for (int i = 0; i < numSamples; ++i)
+        left[i] = right[i] = ((linkStart + i) & 2) == 0 ? probeToneLevel : -probeToneLevel;
+}
+
+void BayLink::captureTest (juce::int64 returnStart, int numSamples, bool returned, juce::int64 linkEnd)
+{
+    if (testStep.load (std::memory_order_relaxed) != testRunning)
+        return;
+
+    if (testKind.load (std::memory_order_relaxed) == lagTest)
+    {
+        const auto length = static_cast<juce::int64> (lagCapture.size());
+
+        if (returned)
+        {
+            for (int i = 0; i < numSamples; ++i)
+            {
+                if (const auto index = returnStart + i - testStart; index >= 0 && index < length)
+                {
+                    const auto sample = static_cast<size_t> (i);
+                    lagCapture[static_cast<size_t> (index)] = 0.5f * (returnLeft[sample] + returnRight[sample]);
+                    ++lagCaptured;
+                }
+            }
+        }
+
+        // Done once the return has passed the stretch, or long after it should have
+        if (const auto end = testStart + length; returnStart + numSamples >= end || linkEnd >= end + lastRoundTrip + probeSettle)
+            finishTest (linkEnd);
+
+        return;
+    }
+
+    const auto capacity = static_cast<juce::int64> (probeEnvelope.size());
+
+    if (returned)
+    {
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const auto index = returnStart + i - testStart;
+
+            if (index >= 0 && index < capacity)
+                probeEnvelope[static_cast<size_t> (index)] = std::max (std::abs (returnLeft[static_cast<size_t> (i)]), std::abs (returnRight[static_cast<size_t> (i)]));
+        }
+    }
+
+    if (probeStepAt < 0)
+        return;
+
+    // Done once the return has passed the stretch after the step, or long after it should have
+    if (const auto end = probeStepAt + probeAfter; returnStart + numSamples >= end || linkEnd >= end + lastRoundTrip + probeSettle)
+        finishTest (linkEnd);
+}
+
+void BayLink::finishTest (juce::int64 linkEnd)
+{
+    // The test signal stops now; what's still on its way back is muted too
+    muteUntil = linkEnd + lastRoundTrip + maxBlock;
+    auto running = int { testRunning };
+    testStep.compare_exchange_strong (running, testReady, std::memory_order_release);
 }
 
 void BayLink::measureLag()
 {
-    if (lagStep.load() == lagReady)
-        return;
+    if (probeResult.state == Probe::State::running)
+        probeResult = {};
 
     lagResult = {};
     lagResult.state = Lag::State::measuring;
-    lagStep.store (lagRequested, std::memory_order_release);
+    startTest (lagTest);
+}
+
+void BayLink::startProbe()
+{
+    if (lagResult.state == Lag::State::measuring)
+        lagResult = {};
+
+    probeResult = {};
+    probeResult.state = Probe::State::running;
+    startTest (probeTest);
+}
+
+void BayLink::startTest (TestKind kind)
+{
+    // A finished test's capture is the message thread's until the next status takes it
+    if (probeEnvelope.empty() || testStep.load() == testReady)
+        return;
+
+    // Another test running (or this one again) starts over
+    testStep.store (testIdle, std::memory_order_release);
+    testKind.store (kind, std::memory_order_relaxed);
+    testStep.store (testRequested, std::memory_order_release);
 }
 
 void BayLink::resetCounters()
 {
     missing.store (0);
+    receiverMisses.store (0);
     replaced.store (0);
     oversized.store (0);
+    valueSets.store (0);
 
     for (auto* value : { &headroomNow, &headroomLowest, &blockMin, &blockMax })
         value->store (unset);
@@ -399,15 +748,20 @@ BayLink::Status BayLink::getStatus()
         }
     }
 
+    status.roundTripSetting = roundTripSetting.load();
+    status.autoState = autoState.load();
     status.roundTripBlocks = roundTripBlocks.load();
     status.roundTripSamples = roundTrip.load();
     status.maxBlock = maxBlock;
     status.sampleRate = sampleRate;
-    status.output = output.load();
-    status.missingBlocks = missingBlocks.load();
+    status.bypass = bypass.load();
+    status.dropouts = dropouts.load();
+    status.crossfadeMs = crossfadeMs.load();
     status.missing = missing.load();
+    status.receiverMisses = receiverMisses.load();
     status.replaced = replaced.load();
     status.oversized = oversized.load();
+    status.valueSets = valueSets.load();
     status.headroomNow = valueOf (headroomNow.exchange (unset));
     status.headroomLowest = valueOf (headroomLowest.load());
     status.blockMin = valueOf (blockMin.load());
@@ -415,134 +769,231 @@ BayLink::Status BayLink::getStatus()
     status.differenceNow = takeFloat (differenceNow.exchange (-1.0f));
     status.differenceLargest = takeFloat (differenceLargest.load());
 
-    if (lagStep.load (std::memory_order_acquire) == lagReady)
+    if (testStep.load (std::memory_order_acquire) == testReady)
     {
-        lagResult = findLag (lagReturn.data(), lagDirect.data(), lagWindow, lagCapturedEarliest, lagLatest);
-        lagStep.store (lagIdle, std::memory_order_release);
+        if (testKind.load() == lagTest)
+        {
+            // Most of the stretch must have come back to tell anything
+            if (static_cast<double> (lagCaptured) < 0.9 * static_cast<double> (lagCapture.size()))
+            {
+                lagResult = {};
+                lagResult.state = Lag::State::noReturn;
+                lagResult.earliest = lagEarliest;
+                lagResult.latest = lagLatest;
+            }
+            else
+            {
+                lagResult = findLag (lagCapture.data(), lagBurstSamples.data(), lagBurst, lagEarliest, lagLatest);
+            }
+        }
+        else
+        {
+            probeResult = findProbeResult (probeEnvelope.data(), static_cast<int> (probeStepAt - testStart), probeBefore, probeAfter);
+        }
+
+        testStep.store (testIdle, std::memory_order_release);
     }
 
     status.lag = lagResult;
+    status.probe = probeResult;
     return status;
 }
 
-BayLink::Lag BayLink::findLag (const float* returned, const float* direct, int window, int earliest, int latest)
+BayLink::Probe BayLink::findProbeResult (const float* envelope, int step, int before, int after)
+{
+    Probe probe;
+
+    // The average level over a stretch, from the samples that came back
+    const auto average = [envelope] (int from, int to, int& counted) {
+        auto sum = 0.0;
+        counted = 0;
+
+        for (int i = from; i < to; ++i)
+        {
+            if (envelope[i] >= 0.0f)
+            {
+                sum += envelope[i];
+                ++counted;
+            }
+        }
+
+        return counted > 0 ? static_cast<float> (sum / counted) : 0.0f;
+    };
+
+    auto countedBefore = 0, countedAfter = 0;
+    probe.before = average (step - before, step, countedBefore);
+    probe.after = average (step + after / 2, step + after, countedAfter);
+
+    if (countedBefore < before / 2 || countedAfter < after / 4)
+    {
+        probe.state = Probe::State::noReturn;
+        return probe;
+    }
+
+    const auto change = probe.after - probe.before;
+
+    // The first sample (from the start of the stretch before the step) past a fraction of the change
+    const auto crossing = [&] (float fraction) -> std::optional<int> {
+        const auto level = probe.before + fraction * change;
+
+        for (int i = step - before; i < step + after; ++i)
+            if (envelope[i] >= 0.0f && (change > 0.0f ? envelope[i] >= level : envelope[i] <= level))
+                return i - step;
+
+        return std::nullopt;
+    };
+
+    const auto low = crossing (0.1f);
+    const auto half = crossing (0.5f);
+    const auto high = crossing (0.9f);
+
+    if (std::abs (change) < 0.001f || !low.has_value() || !half.has_value() || !high.has_value())
+    {
+        probe.state = Probe::State::noChange;
+        return probe;
+    }
+
+    probe.state = Probe::State::found;
+    probe.delay = *half;
+    probe.rise = *high - *low;
+    return probe;
+}
+
+std::vector<float> BayLink::makeLagBurst()
+{
+    juce::Random random (0x5eed);
+    std::vector<float> burst (static_cast<size_t> (lagBurst));
+
+    for (auto& sample : burst)
+        sample = (2.0f * random.nextFloat() - 1.0f) * lagBurstLevel;
+
+    return burst;
+}
+
+BayLink::Lag BayLink::findLag (const float* captured, const float* burst, int burstLength, int earliest, int latest)
 {
     Lag lag;
     lag.earliest = earliest;
     lag.latest = latest;
 
-    auto returnedEnergy = 0.0;
+    // Every delay at once: the correlation of the capture with the burst, through the FFT
+    const auto capturedLength = earliest + burstLength + latest;
+    auto order = 0;
 
-    for (int i = 0; i < window; ++i)
-        returnedEnergy += static_cast<double> (returned[i]) * returned[i];
+    while ((1 << order) < capturedLength + burstLength)
+        ++order;
 
-    if (returnedEnergy < 1.0e-12)
+    const auto size = static_cast<size_t> (1) << order;
+    std::vector<float> spectrum (2 * size, 0.0f), burstSpectrum (2 * size, 0.0f);
+    std::copy_n (captured, capturedLength, spectrum.begin());
+    std::copy_n (burst, burstLength, burstSpectrum.begin());
+
+    juce::dsp::FFT fft (order);
+    fft.performRealOnlyForwardTransform (spectrum.data());
+    fft.performRealOnlyForwardTransform (burstSpectrum.data());
+
+    for (size_t bin = 0; bin < size; ++bin)
     {
-        lag.state = Lag::State::silent;
-        return lag;
+        const auto re = spectrum[2 * bin], im = spectrum[2 * bin + 1];
+        const auto burstRe = burstSpectrum[2 * bin], burstIm = burstSpectrum[2 * bin + 1];
+        spectrum[2 * bin] = re * burstRe + im * burstIm;
+        spectrum[2 * bin + 1] = im * burstRe - re * burstIm;
     }
 
-    // Candidate i is a return (i - earliest) samples late, matching the sent audio that many samples earlier
-    const auto numCandidates = earliest + latest + 1;
-    std::vector<double> similarities (static_cast<size_t> (numCandidates));
-    std::optional<int> exactLag;
-    auto sentEnergy = 0.0;
+    fft.performRealOnlyInverseTransform (spectrum.data());
 
-    for (int index = 0; index < numCandidates; ++index)
+    // spectrum[earliest + k] now follows the burst coming back k samples late (its scale doesn't matter here)
+    const auto span = earliest + latest + 1;
+    const auto strength = [&spectrum] (int index) { return std::abs (spectrum[static_cast<size_t> (index)]); };
+    auto strongest = 0.0f;
+
+    for (int index = 0; index < span; ++index)
+        strongest = std::max (strongest, strength (index));
+
+    std::vector<int> peaks;
+
+    for (int index = 0; index < span; ++index)
     {
-        const auto candidate = index - earliest;
-        const auto* sent = direct + (latest - candidate);
+        const auto value = strength (index);
 
-        // Each step moves the stretch one sample earlier; recomputed now and then so rounding can't build up
-        if (index % 512 == 0)
-        {
-            sentEnergy = 0.0;
+        if (value > 0.0f && value >= lagPathShare * strongest && (index == 0 || value > strength (index - 1)) && (index == span - 1 || value >= strength (index + 1)))
+            peaks.push_back (index);
+    }
 
-            for (int i = 0; i < window; ++i)
-                sentEnergy += static_cast<double> (sent[i]) * sent[i];
-        }
-        else
-        {
-            sentEnergy += static_cast<double> (sent[0]) * sent[0] - static_cast<double> (sent[window]) * sent[window];
-        }
+    std::sort (peaks.begin(), peaks.end(), [&strength] (int a, int b) { return strength (a) > strength (b); });
+
+    // The exact gain of each path; a filter's ringing next to a path isn't a path of its own
+    auto burstEnergy = 0.0;
+
+    for (int i = 0; i < burstLength; ++i)
+        burstEnergy += static_cast<double> (burst[i]) * burst[i];
+
+    constexpr int nearby = 16;
+    constexpr size_t mostPaths = 4;
+
+    for (const auto peak : peaks)
+    {
+        if (lag.paths.size() == mostPaths)
+            break;
+
+        const auto delay = peak - earliest;
+
+        if (std::any_of (lag.paths.begin(), lag.paths.end(), [delay] (const Lag::Path& path) { return std::abs (path.samples - delay) <= nearby; }))
+            continue;
 
         auto product = 0.0;
 
-        for (int i = 0; i < window; ++i)
-            product += static_cast<double> (returned[i]) * sent[i];
+        for (int i = 0; i < burstLength; ++i)
+            product += static_cast<double> (burst[i]) * captured[earliest + delay + i];
 
-        const auto similarity = sentEnergy > 0.0 ? product / std::sqrt (returnedEnergy * sentEnergy) : 0.0;
-        similarities[static_cast<size_t> (index)] = similarity;
-
-        if (similarity > 0.9999 && (!exactLag.has_value() || std::abs (candidate) < std::abs (*exactLag))
-            && std::equal (returned, returned + window, sent, [] (float a, float b) { return juce::exactlyEqual (a, b); }))
-            exactLag = candidate;
+        lag.paths.push_back ({ delay, static_cast<float> (product / burstEnergy) });
     }
 
-    if (exactLag.has_value())
+    // Unrelated sound correlates by chance at about 1 / sqrt (burst length) (0.011), up to some 0.05 at the luckiest delay
+    if (lag.paths.empty() || std::abs (lag.paths.front().gain) < 0.1f)
     {
-        lag.state = Lag::State::found;
-        lag.samples = *exactLag;
-        lag.exact = true;
-        lag.similarity = 1.0;
+        lag.paths.clear();
+        lag.state = Lag::State::noMatch;
         return lag;
     }
 
-    const auto best = static_cast<int> (std::max_element (similarities.begin(), similarities.end()) - similarities.begin());
-    lag.similarity = similarities[static_cast<size_t> (best)];
-    lag.samples = best - earliest;
-    lag.state = lag.similarity < 0.5 ? Lag::State::noMatch : Lag::State::found;
-
-    // The strongest other peak: a sound that repeats (a held note) matches at many delays about equally well
-    auto secondBest = -2.0;
-
-    for (int index = 0; index < numCandidates; ++index)
-    {
-        const auto value = similarities[static_cast<size_t> (index)];
-        const auto isPeak = (index == 0 || value > similarities[static_cast<size_t> (index - 1)])
-                            && (index == numCandidates - 1 || value >= similarities[static_cast<size_t> (index + 1)]);
-
-        if (isPeak && index != best && value > secondBest)
-        {
-            secondBest = value;
-            lag.alternative = index - earliest;
-        }
-    }
-
-    lag.ambiguous = lag.state == Lag::State::found && secondBest >= lag.similarity - ambiguityMargin;
+    const auto* firstPath = captured + earliest + lag.paths.front().samples;
+    lag.exact = std::equal (burst, burst + burstLength, firstPath, [] (float a, float b) { return juce::exactlyEqual (a, b); });
+    lag.state = Lag::State::found;
     return lag;
 }
 
-const char* BayLink::toName (Output value) noexcept
+const char* BayLink::toName (Dropouts value) noexcept
 {
-    return value == Output::bayReturn ? "return" : "direct";
+    return value == Dropouts::silence ? "silence" : "safe";
 }
 
-std::optional<BayLink::Output> BayLink::outputFromName (const juce::String& name)
+std::optional<BayLink::Dropouts> BayLink::dropoutsFromName (const juce::String& name)
 {
-    if (name == "direct")
-        return Output::direct;
+    if (name == "safe")
+        return Dropouts::safe;
 
-    if (name == "return")
-        return Output::bayReturn;
-
-    return std::nullopt;
-}
-
-const char* BayLink::toName (MissingBlocks value) noexcept
-{
-    return value == MissingBlocks::bypass ? "bypass" : "silence";
-}
-
-std::optional<BayLink::MissingBlocks> BayLink::missingBlocksFromName (const juce::String& name)
-{
     if (name == "silence")
-        return MissingBlocks::silence;
-
-    if (name == "bypass")
-        return MissingBlocks::bypass;
+        return Dropouts::silence;
 
     return std::nullopt;
+}
+
+const char* BayLink::toName (AutoState value) noexcept
+{
+    switch (value)
+    {
+        case AutoState::checking:
+            return "checking";
+        case AutoState::oneBlock:
+            return "oneBlock";
+        case AutoState::fellBack:
+            return "fellBack";
+        case AutoState::off:
+            break;
+    }
+
+    return "off";
 }
 
 void BayLink::History::allocate (int minimumFrames)
@@ -581,15 +1032,6 @@ void BayLink::History::read (juce::int64 position, float* toLeft, float* toRight
         const auto index = static_cast<size_t> ((position + i) & mask);
         toLeft[i] = left[index];
         toRight[i] = right[index];
-    }
-}
-
-void BayLink::History::readMono (juce::int64 position, float* mono, int numFrames) const
-{
-    for (int i = 0; i < numFrames; ++i)
-    {
-        const auto index = static_cast<size_t> ((position + i) & mask);
-        mono[i] = left[index] + right[index];
     }
 }
 

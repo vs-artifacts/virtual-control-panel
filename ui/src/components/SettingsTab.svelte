@@ -2,6 +2,7 @@
     import { view } from "../lib/display.svelte";
     import {
         changeSetting,
+        crossfadeRange,
         editor,
         resetSize,
         type Settings,
@@ -27,15 +28,22 @@
         { value: "windowCenter", text: "Window center" },
     ];
 
-    const missingModes: {
-        value: Settings["missingReturnBlocks"];
+    const dropoutModes: {
+        value: Settings["bayDropouts"];
         text: string;
     }[] = [
+        {
+            value: "safe",
+            text: "Safe (plays the audio that was sent, so only the bay is skipped)",
+        },
         { value: "silence", text: "Silence (makes dropouts audible)" },
-        { value: "bypass", text: "Bypass (plays the audio that was sent)" },
     ];
 
     const roundTrips: { value: Settings["roundTripBlocks"]; text: string }[] = [
+        {
+            value: 0,
+            text: "Automatic (1 block if the receiver runs after the panel, otherwise 2; checked when relays link)",
+        },
         {
             value: 1,
             text: "1 block (the receiver must run after the panel)",
@@ -43,6 +51,23 @@
         { value: 2, text: "2 blocks" },
         { value: 3, text: "3 blocks" },
     ];
+
+    // Typed values are rounded and kept in range; anything else puts the field back
+    function changeCrossfade(
+        event: Event & { currentTarget: HTMLInputElement },
+    ) {
+        const typed = event.currentTarget.valueAsNumber;
+
+        if (Number.isFinite(typed)) {
+            const milliseconds = Math.min(
+                crossfadeRange.max,
+                Math.max(crossfadeRange.min, Math.round(typed)),
+            );
+            changeSetting("bypassCrossfadeMs", milliseconds);
+        }
+
+        event.currentTarget.value = String(editor.settings.bypassCrossfadeMs);
+    }
 </script>
 
 <p class="title">{editor.title}</p>
@@ -113,15 +138,14 @@
 </fieldset>
 
 <fieldset>
-    <legend>Missing bay return blocks</legend>
-    {#each missingModes as option (option.value)}
+    <legend>Bay dropouts (missing return blocks)</legend>
+    {#each dropoutModes as option (option.value)}
         <label class="option">
             <input
                 type="radio"
-                name="missingReturnBlocks"
-                checked={editor.settings.missingReturnBlocks === option.value}
-                onchange={() =>
-                    changeSetting("missingReturnBlocks", option.value)}
+                name="bayDropouts"
+                checked={editor.settings.bayDropouts === option.value}
+                onchange={() => changeSetting("bayDropouts", option.value)}
             />
             {option.text}
         </label>
@@ -141,6 +165,23 @@
             {option.text}
         </label>
     {/each}
+</fieldset>
+
+<fieldset>
+    <legend>Bay bypass crossfade</legend>
+    <label class="option">
+        <input
+            id="bypass-crossfade"
+            class="milliseconds"
+            type="number"
+            min={crossfadeRange.min}
+            max={crossfadeRange.max}
+            step="1"
+            value={editor.settings.bypassCrossfadeMs}
+            onchange={changeCrossfade}
+        />
+        ms ({crossfadeRange.min} to {crossfadeRange.max}; 0 is off)
+    </label>
 </fieldset>
 
 <div class="size">
@@ -182,6 +223,10 @@
 
     input {
         margin: 0;
+    }
+
+    .milliseconds {
+        width: 4em;
     }
 
     .size {

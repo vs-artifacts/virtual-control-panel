@@ -3,9 +3,11 @@
         link,
         measureLag,
         resetLinkCounters,
-        setBayOutput,
+        setBayBypass,
+        startProbe,
         type Lag,
         type LinkStatus,
+        type Probe,
     } from "../lib/link.svelte";
 
     function milliseconds(samples: number, sampleRate: number): string {
@@ -54,9 +56,39 @@
         return `${samples > 0 ? "+" : ""}${samples}`;
     }
 
-    // Never rounds a near match up to 100%: only an exact match is that
-    function percent(similarity: number): string {
-        return `${Math.min(similarity * 100, 99.999).toFixed(3)}%`;
+    function describeAuto(status: LinkStatus): string {
+        switch (status.autoState) {
+            case "off":
+                return "fixed in Settings";
+            case "checking":
+                return "automatic: trying 1 block (waits for returned audio)";
+            case "oneBlock":
+                return "automatic: 1 block works (still watching: a miss on either side falls back to 2)";
+            case "fellBack":
+                return "automatic: 1 block missed, so 2. To try 1 again: wire the panel into the receiver, then switch the receiver's mode to Transmitter and back";
+        }
+    }
+
+    function describeProbe(
+        probe: Probe,
+        sampleRate: number,
+        maxBlock: number,
+    ): string {
+        switch (probe.state) {
+            case "notRun":
+                return "not run";
+            case "running":
+                return "running (output muted)…";
+            case "noReturn":
+                return "too little audio came back: are both relays linked?";
+            case "noChange":
+                return `the return's level didn't follow control 1 (before ${probe.before.toFixed(4)}, after ${probe.after.toFixed(4)}): link control 1 to a level knob in the bay`;
+            case "found": {
+                const blocks =
+                    maxBlock > 0 ? (probe.delay / maxBlock).toFixed(2) : "?";
+                return `${signed(probe.delay)} samples (${milliseconds(probe.delay, sampleRate)} ms, ${blocks} blocks) after the step; 10–90% in ${probe.rise} samples (${milliseconds(probe.rise, sampleRate)} ms)`;
+            }
+        }
     }
 
     function describeLag(lag: Lag): string {
@@ -64,19 +96,26 @@
             case "notMeasured":
                 return "not measured";
             case "measuring":
-                return "measuring (needs returned audio)…";
-            case "silent":
-                return "the return was silent: play something, then measure";
+                return "measuring (output muted)…";
+            case "noReturn":
+                return "too little audio came back: are both relays linked?";
             case "noMatch":
-                return `no match between −${lag.earliest} and +${lag.latest} samples`;
-            case "found":
-                if (lag.exact)
-                    return `exact match at ${signed(lag.samples)} samples`;
+                return `the burst didn't come back recognisably between −${lag.earliest} and +${lag.latest} samples`;
+            case "found": {
+                if (lag.exact && lag.paths.length === 1)
+                    return `${signed(lag.paths[0].samples)} samples (an exact copy)`;
 
-                if (lag.ambiguous)
-                    return `unclear: ${signed(lag.samples)} and ${signed(lag.alternative)} samples fit about equally (${percent(lag.similarity)}); the sound repeats, so measure with short, percussive notes`;
+                const paths = lag.paths
+                    .map(
+                        (path) =>
+                            `${signed(path.samples)} samples (gain ${path.gain.toFixed(2)})`,
+                    )
+                    .join("; ");
 
-                return `closest match at ${signed(lag.samples)} samples (${percent(lag.similarity)} similar)`;
+                return lag.paths.length > 1
+                    ? `${lag.paths.length} paths: ${paths}`
+                    : paths;
+            }
         }
     }
 </script>
@@ -101,31 +140,39 @@
                 {status.roundTripBlocks} × {status.maxBlock}); host told {status.latency}
             </dd>
 
-            <dt>Output</dt>
+            <dt></dt>
+            <dd id="link-auto">{describeAuto(status)}</dd>
+
+            <dt>Bypass</dt>
             <dd class="choices">
                 <label>
                     <input
-                        type="radio"
-                        name="bayOutput"
-                        checked={status.output === "direct"}
-                        onchange={() => setBayOutput("direct")}
+                        id="link-bypass"
+                        type="checkbox"
+                        checked={status.bypass}
+                        onchange={(event) =>
+                            setBayBypass(event.currentTarget.checked)}
                     />
-                    Direct
-                </label>
-                <label>
-                    <input
-                        type="radio"
-                        name="bayOutput"
-                        checked={status.output === "return"}
-                        onchange={() => setBayOutput("return")}
-                    />
-                    Bay return
+                    Play the sent audio instead of the return (crossfade {status.crossfadeMs}
+                    ms)
                 </label>
             </dd>
 
             <dt>Missing blocks</dt>
             <dd id="link-missing">
-                {status.missing} (played as {status.missingBlocks})
+                {status.missing} (dropouts play {status.dropouts === "safe"
+                    ? "the sent audio"
+                    : "silence"})
+            </dd>
+
+            <dt>Receiver missed</dt>
+            <dd id="link-receiver-missed">
+                {status.receiverMisses} blocks (each leaves a gap in the return)
+            </dd>
+
+            <dt>Controls</dt>
+            <dd>
+                {status.valueSets} value sets sent (sent when a value changes)
             </dd>
 
             <dt>Headroom</dt>
@@ -150,7 +197,29 @@
             <dt>Lag</dt>
             <dd class="choices">
                 <span id="link-lag">{describeLag(status.lag)}</span>
-                <button type="button" onclick={measureLag}>Measure</button>
+                <button
+                    type="button"
+                    onclick={measureLag}
+                    title="Sends a short noise burst through the bay instead of the panel's sound (output muted) and finds every delay at which it comes back. Nothing needs to be playing."
+                    >Measure</button
+                >
+            </dd>
+
+            <dt>Control timing</dt>
+            <dd class="choices">
+                <span id="link-probe"
+                    >{describeProbe(
+                        status.probe,
+                        status.sampleRate,
+                        status.maxBlock,
+                    )}</span
+                >
+                <button
+                    type="button"
+                    onclick={startProbe}
+                    title="Sends a steady tone instead of the panel's sound, holds control 1 at 0, steps it to 100%, and times the change in the return. Control 1 must drive a level knob in the bay."
+                    >Probe</button
+                >
             </dd>
         </dl>
 
@@ -206,6 +275,10 @@
         display: flex;
         align-items: center;
         gap: 5px;
+    }
+
+    .choices button {
+        flex-shrink: 0;
     }
 
     input {

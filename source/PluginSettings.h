@@ -43,13 +43,17 @@ public:
     bool getFlOutputCorrection() const;
     void setFlOutputCorrection (bool);
 
-    // What plays when a bay's return block is missing: silence (makes dropouts audible) or the audio that was sent
-    BayLink::MissingBlocks getMissingReturnBlocks() const;
-    void setMissingReturnBlocks (BayLink::MissingBlocks);
+    // What plays when a bay's return block is missing: the audio that was sent (safe), or silence (makes dropouts audible)
+    BayLink::Dropouts getBayDropouts() const;
+    void setBayDropouts (BayLink::Dropouts);
 
-    // A bay's round trip, in blocks of the host's largest block size; reported to the host as latency
+    // A bay's round trip: BayLink::autoRoundTrip, or blocks of the host's largest block size. Reported to the host as latency.
     int getRoundTripBlocks() const;
     void setRoundTripBlocks (int);
+
+    // How long a bay's bypass switch fades between the return and the sent audio; 0 switches at once
+    int getBypassCrossfadeMs() const;
+    void setBypassCrossfadeMs (int);
 
 private:
     static juce::PropertiesFile::Options createOptions();
