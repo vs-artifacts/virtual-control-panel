@@ -13,6 +13,27 @@ let rendering: Rendering = 'smooth'
 // The editor's size in pixels, and its size relative to the design size (for the Settings tab)
 export const view = $state({ width: 1120, height: 600, uiScale: 1 })
 
+// In smooth rendering the page is drawn once into an image (a layer), which the browser then stretches, so text moves
+// in proportion with everything else; drawn directly at each size, text snaps to whole pixels. The image keeps the
+// resolution it was drawn at, so it's drawn again at the new size once resizing pauses.
+const redrawAfterMs = 250
+let redrawTimer: ReturnType<typeof setTimeout> | undefined
+
+function scheduleRedraw(root: HTMLElement): void {
+    clearTimeout(redrawTimer)
+    redrawTimer = setTimeout(() => {
+        if (rendering !== 'smooth') return
+
+        // One frame without the layer drops its image; the next draws a new one at the current size
+        root.style.willChange = 'auto'
+        requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+                if (rendering === 'smooth') root.style.willChange = 'transform'
+            }),
+        )
+    }, redrawAfterMs)
+}
+
 function readPositive(value: unknown, limit: number): number | null {
     return typeof value === 'number' && Number.isFinite(value) && value > 0 && value < limit ? value : null
 }
@@ -35,7 +56,7 @@ function applyZoom(): void {
     if (rendering === 'sharp' || root === null) {
         document.documentElement.style.zoom = String(factor)
 
-        if (root !== null) for (const property of ['position', 'left', 'top', 'width', 'height', 'transform', 'transform-origin']) root.style.removeProperty(property)
+        if (root !== null) for (const property of ['position', 'left', 'top', 'width', 'height', 'transform', 'transform-origin', 'will-change']) root.style.removeProperty(property)
 
         return
     }
@@ -50,6 +71,8 @@ function applyZoom(): void {
     root.style.height = `${height}px`
     root.style.transformOrigin = '0 0'
     root.style.transform = `scale(${factor})`
+    root.style.willChange = 'transform'
+    scheduleRedraw(root)
 }
 
 export function setRendering(next: Rendering): void {

@@ -18,10 +18,22 @@
         },
     ];
 
+    const attachedPlacements: {
+        value: Settings["attachedPlacement"];
+        text: string;
+    }[] = [
+        { value: "off", text: "Off" },
+        { value: "workspace", text: "Centered in FL's workspace" },
+        {
+            value: "hostMonitor",
+            text: "Centered on the monitor where FL is open (kept inside the workspace)",
+        },
+    ];
+
     const renderings: { value: Settings["resizeRendering"]; text: string }[] = [
         {
             value: "smooth",
-            text: "Smooth (scales like a picture: everything keeps its proportions, edges soften between sizes)",
+            text: "Smooth (scales like a picture: everything keeps its proportions, text included; soft while resizing, sharp again when it stops)",
         },
         {
             value: "sharp",
@@ -94,7 +106,7 @@
 </label>
 
 <fieldset>
-    <legend>Center the window when it first opens on</legend>
+    <legend>Center a separate window when it first opens on</legend>
     {#each placements as option (option.value)}
         <label class="option">
             <input
@@ -102,6 +114,24 @@
                 name="editorPlacement"
                 checked={editor.settings.editorPlacement === option.value}
                 onchange={() => changeSetting("editorPlacement", option.value)}
+            />
+            {option.text}
+        </label>
+    {/each}
+</fieldset>
+
+<fieldset>
+    <legend
+        >Center a window attached inside FL Studio when it first opens</legend
+    >
+    {#each attachedPlacements as option (option.value)}
+        <label class="option">
+            <input
+                type="radio"
+                name="attachedPlacement"
+                checked={editor.settings.attachedPlacement === option.value}
+                onchange={() =>
+                    changeSetting("attachedPlacement", option.value)}
             />
             {option.text}
         </label>
@@ -132,7 +162,8 @@
     </label>
     <p class="hint">
         Corner grips: drag keeps the opposite corner in place, Alt+drag the
-        window's center (separate windows only). Add Ctrl for 25% steps.
+        window's center (separate windows, and windows attached inside FL). Add
+        Ctrl for 25% steps.
     </p>
 </fieldset>
 

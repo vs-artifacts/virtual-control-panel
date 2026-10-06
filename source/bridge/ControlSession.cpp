@@ -55,6 +55,7 @@ juce::var ControlSession::catalog()
         object->setProperty ("plugin", parameter.plugin);
         object->setProperty ("name", parameter.name);
         object->setProperty ("host", parameter.hostName);
+        object->setProperty ("d", static_cast<double> (parameter.source->getDefaultValue()));
         entries.add (entry);
     }
 

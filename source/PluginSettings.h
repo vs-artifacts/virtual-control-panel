@@ -24,6 +24,10 @@ public:
     EditorPlacement::Monitor getEditorPlacement() const;
     void setEditorPlacement (EditorPlacement::Monitor);
 
+    // Where a window attached inside FL Studio's workspace is centred the first time it opens
+    EditorPlacement::Attached getAttachedPlacement() const;
+    void setAttachedPlacement (EditorPlacement::Attached);
+
     // Whether the page scales like a picture while resizing (smooth) or is laid out again at every size (sharp)
     EditorScale::Rendering getResizeRendering() const;
     void setResizeRendering (EditorScale::Rendering);

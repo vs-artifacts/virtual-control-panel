@@ -78,9 +78,15 @@ export function onProcessing(listener: (message: unknown) => void): void {
     window.__JUCE__.backend.addEventListener('processing', listener)
 }
 
-// { keys, windows }: the last forwarded keys and the windows around the editor (test-build diagnostics)
+// { keys, keyRoute, windows }: the last forwarded keys, the route keys take while a mouse button is held, and the
+// windows around the editor (test-build diagnostics)
 export function onHostDiagnostics(listener: (message: unknown) => void): void {
     window.__JUCE__.backend.addEventListener('hostDiagnostics', listener)
+}
+
+// Test build: how keys reach FL Studio while a mouse button is held
+export function sendKeyRoute(route: string): void {
+    window.__JUCE__.backend.emitEvent('keyRoute', { route })
 }
 
 // The bay link's status (see LinkStatus), about 4 times a second while the editor shows

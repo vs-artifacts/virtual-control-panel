@@ -8,6 +8,7 @@ export interface Param {
     host: string
     value: number
     text: string
+    defaultValue: number
 }
 
 export const controls = $state({ params: [] as Param[] })
@@ -28,12 +29,12 @@ function isNormalised(value: unknown): value is number {
 function parseEntry(raw: unknown): Param | null {
     if (!isRecord(raw)) return null
 
-    const { h, slot, plugin, name, host, v, t } = raw
+    const { h, slot, plugin, name, host, v, t, d } = raw
 
-    if (typeof h !== 'number' || !Number.isInteger(h) || !isNormalised(v) || typeof t !== 'string') return null
+    if (typeof h !== 'number' || !Number.isInteger(h) || !isNormalised(v) || !isNormalised(d) || typeof t !== 'string') return null
     if (typeof slot !== 'string' || typeof plugin !== 'string' || typeof name !== 'string' || typeof host !== 'string') return null
 
-    return { h, slot, plugin, name, host, value: v, text: t }
+    return { h, slot, plugin, name, host, value: v, text: t, defaultValue: d }
 }
 
 export function loadCatalog(raw: unknown): boolean {
@@ -108,4 +109,15 @@ export function endGesture(h: number): void {
 
     flush()
     sendGesture(h, false)
+}
+
+// One gesture, so the host records it like any other change
+export function resetToDefault(h: number): void {
+    const index = indexByHandle.get(h)
+
+    if (index === undefined) return
+
+    beginGesture(h)
+    setValue(h, controls.params[index].defaultValue)
+    endGesture(h)
 }

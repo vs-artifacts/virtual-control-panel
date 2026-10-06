@@ -1,4 +1,4 @@
-import { fetchEditorState, onHostDiagnostics, onProcessing, sendDiagnostics, sendMutePlugin, sendOpenPlugin, sendResetSize, sendScroll, sendSetting, sendTab } from './bridge'
+import { fetchEditorState, onHostDiagnostics, onProcessing, sendDiagnostics, sendKeyRoute, sendMutePlugin, sendOpenPlugin, sendResetSize, sendScroll, sendSetting, sendTab } from './bridge'
 import { link, listenForLink, readLink } from './link.svelte'
 import { asRecord, oneOf } from './read'
 
@@ -15,9 +15,11 @@ export function tabScrollArea(tab: number, layout: TabLayout): string {
 }
 
 const placements = ['off', 'hostPlaced', 'mouse', 'hostMainWindow'] as const
+const attachedPlacements = ['off', 'workspace', 'hostMonitor'] as const
 export const renderings = ['smooth', 'sharp'] as const
 const dropoutModes = ['safe', 'silence'] as const
 const roundTrips = [0, 1, 2, 3] as const
+export const keyRoutes = ['A', 'B', 'C', 'D'] as const
 
 // The bay bypass crossfade: whole milliseconds, 0 is off
 export const crossfadeRange = { min: 0, max: 50 } as const
@@ -30,6 +32,7 @@ function isCrossfadeMs(value: unknown): value is number {
 export interface Settings {
     keepWebViewWarm: boolean
     editorPlacement: (typeof placements)[number]
+    attachedPlacement: (typeof attachedPlacements)[number]
     resizeRendering: (typeof renderings)[number]
     resizeFlipAlt: boolean
     flOutputCorrection: boolean
@@ -58,6 +61,7 @@ export const editor = $state({
     settings: {
         keepWebViewWarm: false,
         editorPlacement: 'off',
+        attachedPlacement: 'off',
         resizeRendering: 'smooth',
         resizeFlipAlt: false,
         flOutputCorrection: true,
@@ -70,6 +74,7 @@ export const editor = $state({
     processing: null as boolean | null,
     // Test-build diagnostics: the last forwarded keys (newest first) and the windows around the editor
     keyLog: [] as string[],
+    keyRoute: 'A' as (typeof keyRoutes)[number],
     windows: [] as string[],
 })
 
@@ -113,6 +118,7 @@ function readSettings(raw: unknown): void {
     if (typeof fields.resizeFlipAlt === 'boolean') settings.resizeFlipAlt = fields.resizeFlipAlt
 
     settings.editorPlacement = oneOf(placements, fields.editorPlacement) ?? settings.editorPlacement
+    settings.attachedPlacement = oneOf(attachedPlacements, fields.attachedPlacement) ?? settings.attachedPlacement
     settings.resizeRendering = oneOf(renderings, fields.resizeRendering) ?? settings.resizeRendering
     settings.bayDropouts = oneOf(dropoutModes, fields.bayDropouts) ?? settings.bayDropouts
     settings.roundTripBlocks = roundTrips.find((blocks) => blocks === fields.roundTripBlocks) ?? settings.roundTripBlocks
@@ -133,6 +139,7 @@ export async function loadEditorState(): Promise<void> {
     onHostDiagnostics((message) => {
         const fields = asRecord(message) ?? {}
         editor.keyLog = readLines(fields.keys, 32)
+        editor.keyRoute = oneOf(keyRoutes, fields.keyRoute) ?? editor.keyRoute
         editor.windows = readLines(fields.windows, 32)
     })
 
@@ -195,6 +202,12 @@ export function showDiagnostics(open: boolean): void {
     editor.diagnostics = open
 
     if (connected) sendDiagnostics(open)
+}
+
+export function chooseKeyRoute(route: (typeof keyRoutes)[number]): void {
+    editor.keyRoute = route
+
+    if (connected) sendKeyRoute(route)
 }
 
 export function saveScroll(area: string, top: number): void {

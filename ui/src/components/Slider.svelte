@@ -4,6 +4,7 @@
     import {
         beginGesture,
         endGesture,
+        resetToDefault,
         setValue,
         type Param,
     } from "../lib/params.svelte";
@@ -65,6 +66,7 @@
         value={param.value}
         onpointerdown={startDragging}
         oninput={(event) => changed(event.currentTarget.valueAsNumber)}
+        ondblclick={() => resetToDefault(param.h)}
     />
     <span class="value-text">{param.text}</span>
     {#if param.host}

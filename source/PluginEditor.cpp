@@ -53,7 +53,7 @@ namespace
 PluginEditor::PluginEditor (PluginProcessor& p)
     : AudioProcessorEditor (&p),
       pluginProcessor (p),
-      keyForwarder (settings->getForwardedKeys(), KeyForwarder::postToHostOf (*this, [this] (const juce::String& line) { logKey (line); }), KeyForwarder::readPhysicalModifiers),
+      keyForwarder (settings->getForwardedKeys(), KeyForwarder::postToHostOf (*this, [this] (const juce::String& line) { logKey (line); }, [this] { return keyRoute; }), KeyForwarder::readPhysicalModifiers),
       session (p.createSessionParameters()),
       hostMenus (*this, session)
 {
@@ -77,7 +77,7 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     }
 
     if (!p.isEditorPlaced())
-        placement = std::make_unique<EditorPlacement> (*this, settings->getEditorPlacement(), [&p] { p.setEditorPlaced(); });
+        placement = std::make_unique<EditorPlacement> (*this, settings->getEditorPlacement(), settings->getAttachedPlacement(), [&p] { p.setEditorPlaced(); });
 
     // Only our own corner handles resize the window (not the host's window frame), always at the design's aspect ratio
     setScale (p.getEditorScale().value_or (settings->getLastEditorScale()));
@@ -104,6 +104,7 @@ WebUi::Handlers PluginEditor::createPageHandlers()
         { "diagnostics", [this] (const juce::var& message) { handleDiagnostics (message); } },
         { "scroll", [this] (const juce::var& message) { handleScroll (message); } },
         { "bayBypass", [this] (const juce::var& message) { handleBayBypass (message); } },
+        { "keyRoute", [this] (const juce::var& message) { handleKeyRoute (message); } },
         { "measureLag", [this] (const juce::var&) { pluginProcessor.getBayLink().measureLag(); } },
         { "startProbe", [this] (const juce::var&) { pluginProcessor.getBayLink().startProbe(); } },
         { "resetLinkCounters", [this] (const juce::var&) { pluginProcessor.getBayLink().resetCounters(); } },
@@ -116,6 +117,7 @@ juce::var PluginEditor::describeEditor() const
     auto* current = new juce::DynamicObject();
     current->setProperty ("keepWebViewWarm", settings->getKeepWebViewWarm());
     current->setProperty ("editorPlacement", EditorPlacement::toSettingsValue (settings->getEditorPlacement()));
+    current->setProperty ("attachedPlacement", EditorPlacement::toSettingsValue (settings->getAttachedPlacement()));
     current->setProperty ("resizeRendering", EditorScale::toSettingsValue (settings->getResizeRendering()));
     current->setProperty ("resizeFlipAlt", settings->getFlipAltResize());
     current->setProperty ("flOutputCorrection", settings->getFlOutputCorrection());
@@ -235,6 +237,11 @@ void PluginEditor::handleSetting (const juce::var& message)
         if (const auto monitor = EditorPlacement::fromSettingsValue (value.toString()))
             settings->setEditorPlacement (*monitor);
     }
+    else if (name == "attachedPlacement" && value.isString())
+    {
+        if (const auto attached = EditorPlacement::attachedFromSettingsValue (value.toString()))
+            settings->setAttachedPlacement (*attached);
+    }
     else if (name == "resizeRendering" && value.isString())
     {
         if (const auto rendering = EditorScale::renderingFromSettingsValue (value.toString()))
@@ -333,6 +340,17 @@ void PluginEditor::handleBayBypass (const juce::var& message)
         pluginProcessor.getBayLink().setBypass (static_cast<bool> (value));
 }
 
+void PluginEditor::handleKeyRoute (const juce::var& message)
+{
+    const auto& name = message["route"];
+
+    if (!name.isString())
+        return;
+
+    if (const auto route = KeyForwarder::heldMouseRouteFromName (name.toString()))
+        keyRoute = *route;
+}
+
 void PluginEditor::reportLink()
 {
     if (webUi != nullptr && webUi->isShowing())
@@ -352,6 +370,7 @@ void PluginEditor::reportHostDiagnostics()
 
     auto* message = new juce::DynamicObject();
     message->setProperty ("keys", keyLog);
+    message->setProperty ("keyRoute", KeyForwarder::toName (keyRoute));
     message->setProperty ("windows", EditorPlacement::describeWindows (*this));
     const juce::var diagnostics (message);
 
@@ -403,7 +422,7 @@ PluginEditor::Drag PluginEditor::startDrag (Corner corner, bool aroundCenter) co
         juce::Desktop::getInstance().getMainMouseSource().getScreenPosition(),
         getScale(),
         { getWidth(), getHeight() },
-        EditorPlacement::getFloatingWindowBounds (*this),
+        EditorPlacement::getMovableWindowBounds (*this),
         aroundCenter,
         std::nullopt };
 }
@@ -439,7 +458,7 @@ void PluginEditor::continueResize()
     const auto dy = static_cast<double> (isTop (drag->corner) ? -moved.y : moved.y);
 
     // Growing around its center, the window grows on both sides, so twice as fast keeps the corner under the pointer.
-    // Only separate floating windows can move; attached ones grow down and to the right.
+    // Only windows we can move (floating ones, and FL's attached ones) can grow that way; others grow down and to the right.
     const auto aroundCenter = drag->aroundCenter && drag->startWindow.has_value();
     const auto speed = aroundCenter ? 2.0 : 1.0;
 
@@ -468,7 +487,7 @@ void PluginEditor::continueResize()
                                       : juce::Point<int> (isLeft (drag->corner) ? start.getRight() - width : start.getX(),
                                             isTop (drag->corner) ? start.getBottom() - height : start.getY());
 
-    EditorPlacement::moveFloatingWindowTo (*this, topLeft);
+    EditorPlacement::moveWindowTo (*this, topLeft);
 }
 
 void PluginEditor::endResize()

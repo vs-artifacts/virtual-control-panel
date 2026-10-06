@@ -33,8 +33,9 @@ TEST_CASE ("A control session", "[control]")
         CHECK (session->poll().isVoid());
     }
 
-    SECTION ("the catalog lists every parameter with its handle, names, value and display text")
+    SECTION ("the catalog lists every parameter with its handle, names, value, display text and default")
     {
+        b.setValueNotifyingHost (0.25f);
         const auto catalog = session->catalog();
         REQUIRE (catalog.size() == 2);
         CHECK (static_cast<int> (catalog[0]["h"]) == 0);
@@ -44,8 +45,11 @@ TEST_CASE ("A control session", "[control]")
         CHECK (catalog[0]["host"] == "Param 1");
         CHECK_THAT (static_cast<double> (catalog[0]["v"]), WithinAbs (0.5, 1e-6));
         CHECK (catalog[0]["t"] == a.getCurrentValueAsText());
+        CHECK_THAT (static_cast<double> (catalog[0]["d"]), WithinAbs (0.5, 1e-6));
         CHECK (static_cast<int> (catalog[1]["h"]) == 1);
         CHECK (catalog[1]["host"] == "");
+        CHECK_THAT (static_cast<double> (catalog[1]["v"]), WithinAbs (0.25, 1e-6));
+        CHECK_THAT (static_cast<double> (catalog[1]["d"]), WithinAbs (0.5, 1e-6));
     }
 
     SECTION ("polls report only what changed since the last poll")

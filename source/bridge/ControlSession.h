@@ -24,7 +24,7 @@ public:
     explicit ControlSession (std::vector<Parameter>);
     ~ControlSession();
 
-    // Starts or restarts the session: [{ h, slot, plugin, name, host, v, t }, ...]
+    // Starts or restarts the session: [{ h, slot, plugin, name, host, v, t, d }, ...], d the default value
     juce::var catalog();
 
     // A "set" message from the page: [{ h, v }, ...] with v from 0 to 1. Anything malformed is ignored.

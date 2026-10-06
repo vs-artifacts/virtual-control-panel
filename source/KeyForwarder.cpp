@@ -68,6 +68,13 @@ namespace
 
     constexpr auto ctrlPrefix = "Ctrl+";
 
+    constexpr std::pair<KeyForwarder::HeldMouseRoute, const char*> routeNames[] {
+        { KeyForwarder::HeldMouseRoute::panelControl, "A" },
+        { KeyForwarder::HeldMouseRoute::chainControl, "B" },
+        { KeyForwarder::HeldMouseRoute::panelDirect, "C" },
+        { KeyForwarder::HeldMouseRoute::mainDirect, "D" },
+    };
+
 #if JUCE_WINDOWS
     juce::String classNameOf (HWND window)
     {
@@ -88,7 +95,35 @@ namespace
 
         return false;
     }
+
+    // A window's parent, or a top-level window's owner
+    HWND nextWindowUp (HWND window)
+    {
+        if ((GetWindowLongPtrW (window, GWL_STYLE) & WS_CHILD) != 0)
+            return GetAncestor (window, GA_PARENT);
+
+        return GetWindow (window, GW_OWNER);
+    }
 #endif
+}
+
+juce::String KeyForwarder::toName (HeldMouseRoute route)
+{
+    for (const auto& [value, name] : routeNames)
+        if (value == route)
+            return name;
+
+    jassertfalse;
+    return {};
+}
+
+std::optional<KeyForwarder::HeldMouseRoute> KeyForwarder::heldMouseRouteFromName (const juce::String& text)
+{
+    for (const auto& [value, name] : routeNames)
+        if (text == name)
+            return value;
+
+    return std::nullopt;
 }
 
 juce::String KeyForwarder::nameOf (std::uint32_t scanCode)
@@ -172,14 +207,14 @@ void KeyForwarder::releaseAll()
     heldKeys.clear();
 }
 
-KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor, std::function<void (const juce::String&)> log)
+KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor, std::function<void (const juce::String&)> log, std::function<HeldMouseRoute()> route)
 {
 #if JUCE_WINDOWS
     // Remembered, so key releases still arrive after the editor's own window has gone
     auto host = std::make_shared<HWND> (nullptr);
     const auto isFlStudio = juce::PluginHostType().isFruityLoops();
 
-    return [&editor, host, isFlStudio, log] (std::uint32_t scanCode, bool down, bool isRepeat) {
+    return [&editor, host, isFlStudio, log, route] (std::uint32_t scanCode, bool down, bool isRepeat) {
         if (down)
             if (auto* peer = editor.getPeer())
                 *host = GetParent (static_cast<HWND> (peer->getNativeHandle()));
@@ -198,18 +233,62 @@ KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor, std::fun
             flags |= 0x40000000u;
 
         // FL Studio's Delphi message loop hands keys to FL's own controls (as VCL "control notifications", CN_BASE + message)
-        // unless a window has captured the mouse, as during a drag. Then only direct delivery reaches them. The web view
-        // may hold the mouse from a window our thread can't see, so a held button counts too.
+        // unless a window it didn't create has captured the mouse, as the web view does while a button is held on the page.
+        // Which route still reaches FL's typing keyboard then is being tested (routes A to D).
         const auto ourCapture = GetCapture();
         const auto mouseHeld = isMouseButtonDown();
-        auto route = juce::String ("posted");
+        auto described = juce::String ("posted");
         auto delivered = false;
 
         if (isFlStudio && (ourCapture != nullptr || mouseHeld))
         {
             constexpr UINT vclControlNotificationBase = 0xBC00;
-            delivered = SendMessageW (*host, vclControlNotificationBase + message, virtualKey, static_cast<LPARAM> (flags)) != 0;
-            route = delivered ? "FL's control route" : "FL's control route refused, posted";
+            const auto controlMessage = vclControlNotificationBase + message;
+            const auto chosen = route != nullptr ? route() : HeldMouseRoute::panelControl;
+            described = "route " + toName (chosen) + ": ";
+
+            switch (chosen)
+            {
+                case HeldMouseRoute::panelControl:
+                    delivered = SendMessageW (*host, controlMessage, virtualKey, static_cast<LPARAM> (flags)) != 0;
+                    described += delivered ? "control message taken by " + classNameOf (*host) : "control message refused by " + classNameOf (*host) + ", posted";
+                    break;
+
+                case HeldMouseRoute::chainControl:
+                {
+                    juce::StringArray refused;
+
+                    for (auto window = *host; window != nullptr && window != GetDesktopWindow() && refused.size() < 16; window = nextWindowUp (window))
+                    {
+                        if (SendMessageW (window, controlMessage, virtualKey, static_cast<LPARAM> (flags)) != 0)
+                        {
+                            delivered = true;
+                            described += "control message taken by " + classNameOf (window);
+                            break;
+                        }
+
+                        refused.add (classNameOf (window));
+                    }
+
+                    if (!delivered)
+                        described += "control message refused by all, posted";
+
+                    if (!refused.isEmpty())
+                        described += " (refused: " + refused.joinIntoString (", ") + ")";
+
+                    break;
+                }
+
+                case HeldMouseRoute::panelDirect:
+                case HeldMouseRoute::mainDirect:
+                {
+                    const auto target = chosen == HeldMouseRoute::panelDirect ? *host : GetAncestor (*host, GA_ROOTOWNER);
+                    const auto result = target != nullptr ? SendMessageW (target, message, virtualKey, static_cast<LPARAM> (flags)) : 0;
+                    delivered = target != nullptr;
+                    described += "key message sent to " + classNameOf (target) + ", returned " + juce::String (static_cast<juce::int64> (result));
+                    break;
+                }
+            }
         }
 
         if (!delivered)
@@ -224,11 +303,11 @@ KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor, std::fun
             log (nameOf (scanCode) + (down ? (isRepeat ? " repeat" : " down") : " up")
                  + "; mouse " + (mouseHeld ? "held" : "up")
                  + "; capture: ours " + classNameOf (ourCapture) + ", foreground " + classNameOf (foregroundCapture)
-                 + "; " + route);
+                 + "; " + described);
         }
     };
 #else
-    juce::ignoreUnused (editor, log);
+    juce::ignoreUnused (editor, log, route);
     return [] (std::uint32_t, bool, bool) {};
 #endif
 }

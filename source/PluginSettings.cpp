@@ -6,6 +6,7 @@ namespace
     constexpr auto keepWebViewWarmKey = "keepWebViewWarm";
     constexpr auto forwardedKeysKey = "forwardedKeys";
     constexpr auto editorPlacementKey = "editorPlacement";
+    constexpr auto attachedPlacementKey = "attachedPlacement";
     constexpr auto resizeRenderingKey = "resizeRendering";
     constexpr auto flipAltResizeKey = "resizeFlipAlt";
     constexpr auto lastEditorScaleKey = "lastEditorScale";
@@ -48,6 +49,16 @@ EditorPlacement::Monitor PluginSettings::getEditorPlacement() const
 void PluginSettings::setEditorPlacement (EditorPlacement::Monitor monitor)
 {
     file.setValue (editorPlacementKey, EditorPlacement::toSettingsValue (monitor));
+}
+
+EditorPlacement::Attached PluginSettings::getAttachedPlacement() const
+{
+    return EditorPlacement::attachedFromSettingsValue (file.getValue (attachedPlacementKey)).value_or (EditorPlacement::Attached::workspace);
+}
+
+void PluginSettings::setAttachedPlacement (EditorPlacement::Attached attached)
+{
+    file.setValue (attachedPlacementKey, EditorPlacement::toSettingsValue (attached));
 }
 
 EditorScale::Rendering PluginSettings::getResizeRendering() const

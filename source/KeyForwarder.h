@@ -16,6 +16,17 @@ public:
     using Post = std::function<void (std::uint32_t scanCode, bool down, bool isRepeat)>;
     using ReadModifiers = std::function<Modifiers()>;
 
+    // Test build: how keys reach FL Studio while a mouse button is held (see docs/decisions.md, "FL check of the resizing build")
+    enum class HeldMouseRoute {
+        panelControl, // A: FL's control message to the plugin panel, else posted
+        chainControl, // B: FL's control message up the window chain, to the first that takes it, else posted
+        panelDirect, // C: the plain key message, delivered at once to the plugin panel
+        mainDirect, // D: the plain key message, delivered at once to FL's main window
+    };
+
+    static juce::String toName (HeldMouseRoute);
+    static std::optional<HeldMouseRoute> heldMouseRouteFromName (const juce::String&);
+
     // Comma-separated chords using KeyboardEvent.code names, optionally prefixed with "Ctrl+"
     static constexpr auto defaultChords =
         "KeyQ,KeyW,KeyE,KeyR,KeyT,KeyY,KeyU,KeyI,KeyO,KeyP,KeyA,KeyS,KeyD,KeyF,KeyG,KeyH,KeyJ,KeyK,KeyL,"
@@ -35,8 +46,8 @@ public:
     const juce::StringArray& getAllowedChords() const noexcept { return allowedChords; }
 
     // Delivers keys to the window that hosts the given editor, as if typed there (Windows only for now). Each delivery
-    // is described to log, if given (a diagnostic).
-    static Post postToHostOf (juce::Component& editor, std::function<void (const juce::String&)> log = {});
+    // is described to log, if given (a diagnostic). route is asked for each key while a mouse button is held in FL Studio.
+    static Post postToHostOf (juce::Component& editor, std::function<void (const juce::String&)> log = {}, std::function<HeldMouseRoute()> route = {});
     static Modifiers readPhysicalModifiers();
 
     // The KeyboardEvent.code name of a forwarded key, or its scan code in hex

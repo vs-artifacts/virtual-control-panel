@@ -2,27 +2,50 @@
 
 The live handover: where things stand, what's next, and exactly what to read for it. Rewritten at the end of every session. Lasting decisions belong in `docs/decisions.md`; this file only points to them.
 
-**Last updated:** 2026-10-05, end of session. Everything since commit `c0ef24f` is **not committed yet** (Diagnostics panel, mute, scroll memory, resizing chords, smooth rendering, key log, window list); ask the user whether to commit before starting.
+**Last updated:** 2026-10-05, end of session. The previous work is committed and pushed (`b03af29`). This session's build (below) is **not committed yet**; ask the user whether to commit it after the FL check.
 
 ## Where things stand
 - **Slice 1b.4, external module bays:** control outputs, automatic round trip, bypass and dropouts, probe and Lag > Measure all **passed the FL re-check** (2026-10-03). **The merge experiment showed Patcher lines up paths that merge, so the position marker works.** Regression findings and likely causes: `decisions.md`, "FL re-check, merge experiment, Diagnostics panel" > "Regression stages 1 and 4".
-- **UI work for testing (all FL-checked):** the wider window with two columns, Diagnostics beside the tabs, scroll memory saved with the project, generator mutes, and resizing chords (drag, Alt+drag around the center, a flip setting, Ctrl 25% steps with a virtual step; Shift a placeholder) all passed. Smooth and Sharp rendering work, **except that text in Smooth mode still snaps to whole pixels**.
-- **Keys while a mouse button is held still fail** in FL. The key log shows FL's plugin panel now refuses our control route while the web view's window holds the mouse. Details and the plan: `decisions.md`, "FL check of the resizing build (2026-10-05) and the next session's plan".
-- **The window list told us which of FL's windows moves** when attached (`TPluginForm`, a child of FL's workspace `TWPControl`).
-- **FL's real block size follows the tempo** (215 at 140 BPM, 167 at 180, 435 at 70): about one sequencer tick.
-- **Automated tests pass in Debug and Release** (62 test cases), warning-free.
+- **Built 2026-10-05, awaiting the user's FL check** (`decisions.md`, "Keys route test, attached windows, smooth text, double-click reset"):
+  1. **Keys route test:** Diagnostics > "Key route while a mouse button is held", routes A to D, each key logged with its route and result.
+  2. **Smooth text:** the scaled page is a layer image while resizing (text moves in proportion; measured in the browser preview), redrawn sharp 250 ms after resizing stops.
+  3. **Attached windows in FL** move within FL's workspace: drag, Alt+drag and the flip setting work for them; a new setting centers them on first open (default: FL's workspace).
+  4. **Double-click a slider** resets it to its default, as one gesture.
+- **Automated tests pass in Debug and Release** (63 test cases), warning-free.
 
-## Next (confirmed by the user, 2026-10-05)
-All four in one build, then the user's FL check. Details for each: `decisions.md`, "FL check of the resizing build (2026-10-05) and the next session's plan".
-1. **Keys test build:** a temporary "Key route while the mouse is held" choice in Diagnostics (routes A to D), every key logged with its route and result. The route that plays becomes the only one afterwards.
-2. **Smooth rendering, text included:** soft, unsnapped everything. Try CSS first, then a single scaled layer; verify in the browser preview pixel by pixel before the FL check.
-3. **Attached windows in FL:** center-anchored resizing moves `TPluginForm` within FL's workspace. First-open centering for attached windows too, distinguishing "centered in FL's workspace" from "centered on the monitor where FL is open": **propose the placement setting's new options to the user before building that part.**
-4. **Double-click a parameter control to reset it** to its default (one gesture, so the host records it).
+## Next
+1. **The user's FL check** of this build (checklist below). Then: the winning key route becomes the only one (the choice and its UI go); the Smooth text result decides whether the redraw delay or the layer approach needs tuning.
+2. **The settings defaults file** (soon, user 2026-10-05; see Open items).
+3. Then, each with the user's go: the regression findings' candidate fixes; counting the round trip in FL's real blocks (following what FL delivers). Then **a bay plugin's own latency with the position marker** (before 1b.5). After 1b.4: 1b.5 plugin swap.
 
-Then, each with the user's go: **the settings defaults file** (soon; see Open items); the regression findings' candidate fixes; counting the round trip in FL's real blocks (following what FL delivers). Then **a bay plugin's own latency with the position marker** (before 1b.5). After 1b.4: 1b.5 plugin swap.
+## FL check: this build
+Before starting: close FL during builds; the panel junction points at the Debug build. Use a fresh project. The plugin's Settings tab should show two placement groups ("Center a separate window…" and "Center a window attached inside FL Studio…").
 
-## FL check: next build
-Write this checklist when the build is done (keys: each route with the mouse held on a slider, a tab, a grip and empty space; Smooth text while resizing slowly; attached windows resizing around the center and staying inside FL's workspace, first-open centering options; double-click reset, also recorded as automation; regression of resizing chords, scroll memory, mute, Diagnostics).
+### 1. Keys while a mouse button is held
+For each route A, B, C, D (Diagnostics > "Key route while a mouse button is held"):
+1. Hold the left mouse button on a slider, type a few notes (e.g. Z, X, C), release the keys, then the mouse. Repeat with the mouse held on a tab, on a corner grip, and on empty page space.
+2. **Record:** whether FL's typing keyboard plays each time, and the key log lines (route, which window took or refused the key, return values).
+3. Also check per route: no stuck notes (release the mouse before the key, and the key before the mouse); keys still play with the mouse up.
+4. Try at least the winning route detached, attached, and inside Patcher.
+- Expect A to fail (as before). Report which of B, C, D play; if several do, say which feels right (e.g. no side effects such as FL shortcuts firing).
+
+### 2. Smooth text
+1. Settings > Resizing: Smooth. Drag a corner slowly and watch the text: it should move in step with everything else (no whole-pixel jumps), softly while moving, and sharpen about a quarter second after you stop.
+2. Grow the window a lot in one drag (e.g. 100% to 300%): it may look blurry until you pause, then sharp.
+3. Compare with Sharp mode. Note anything odd: flicker or a visible jump when it sharpens, and slider thumbs or text that look wrong.
+
+### 3. Attached windows (FL)
+1. Attach the panel's window (not inside Patcher). Drag each corner: the opposite corner stays put. Alt+drag: the center stays put. Turn on "flip drag and alt+drag": the two swap.
+2. Drag towards FL's workspace edges: the window stays inside the workspace, and doesn't jump.
+3. First-open centering: add a **new** panel instance for each setting ("Centered in FL's workspace", "Centered on the monitor where FL is open", Off) with its window attached. Expect: centered in the workspace; centered on the monitor that shows most of FL's workspace; left where FL puts it. Instances that were already opened before keep their place (by design).
+4. Detached windows and Patcher: as before (regression).
+
+### 4. Double-click reset
+1. Double-click a slider's thumb: it returns to its default (the EQ's Low Gain to 0 dB; bay controls to 0). Double-clicking the track first jumps to the click (the browser slider's known limit), then resets.
+2. With an automation clip recording on Param 1: the reset is recorded like a normal move.
+
+### 5. Regression
+Resizing chords (Ctrl steps, Ctrl+Alt), scroll memory, mute, Diagnostics, tab memory.
 
 ## Bay link FL checklist (for regression runs when bays change)
 Before starting: the panel and relay junctions in the system VST3 folder point at the Debug builds, so FL picks up this build. If FL was open during the build, restart it. Note FL's sample rate and buffer length (Options > Audio settings). Terms changed after these were written: "Bay return" is now Bypass off, "Direct" is Bypass on, and "Missing bay return blocks" is now Bay dropouts (Safe was "Bypass").
@@ -93,14 +116,14 @@ Before starting: the panel and relay junctions in the system VST3 folder point a
 ## Current test builds
 - **Panel:**
   - Window 1,120 × 600 at 100%; each tab in two columns (one beside Diagnostics).
-  - Panel tab: 17 sliders (the EQ's Low as Param 1; Bay 1 Control 1 to 16 as Param 2 to 17), the bridge line and "Audio: running".
+  - Panel tab: 17 sliders (the EQ's Low as Param 1; Bay 1 Control 1 to 16 as Param 2 to 17), the bridge line and "Audio: running". Double-click a slider to reset it to its default.
   - Plugins tab: as before, plus a Mute checkbox on each generator row (30 ms fade; saved with the project).
   - Diagnostics (toggle at the right end of the tab row):
     - The "Bay link (test build)" section: link, relays, round trip and how Automatic chose it; Bypass (with the crossfade length), missing blocks, receiver missed, value sets; headroom, block sizes (since the last reset), return vs sent; Lag > Measure, Control timing > Probe, Reset counters.
-    - "Keys forwarded to the host": the last 12 keys, newest first (mouse held or not, capture windows, route).
+    - "Keys forwarded to the host": "Key route while a mouse button is held (FL only)" (A to D, default A, not saved), then the last 12 keys, newest first (mouse held or not, capture windows, route and its result).
     - "Windows around the editor": the window chain from the editor's own window to the top.
-  - Settings tab: "Resizing" (Smooth, Sharp; "Window resize: flip drag and alt+drag"), "Bay dropouts" (Safe, Silence), "Bay round trip" (Automatic, 1, 2, 3 blocks), "Bay bypass crossfade" (a number field, 0 to 50 ms, default 30). "Resize from" is gone.
-  - Corner grips: drag (opposite corner), Alt+drag (center, separate windows only), Ctrl adds 25% steps; Shift does nothing yet.
+  - Settings tab: "Center a separate window when it first opens on" (as before), "Center a window attached inside FL Studio when it first opens" (Off, FL's workspace (default), the monitor where FL is open), "Resizing" (Smooth, Sharp; "Window resize: flip drag and alt+drag"), "Bay dropouts" (Safe, Silence), "Bay round trip" (Automatic, 1, 2, 3 blocks), "Bay bypass crossfade" (a number field, 0 to 50 ms, default 30).
+  - Corner grips: drag (opposite corner), Alt+drag (center; separate windows and, in FL, attached ones), Ctrl adds 25% steps; Shift does nothing yet. Smooth mode is a layer image while resizing, redrawn sharp 250 ms after it stops.
   - Saved with the instance and the project: the tab, whether Diagnostics is open, every scroll position, the size, Bypass, control values, mutes.
   - New instances start with Bypass off; the panel's own sound only plays when the return is missing (Safe) or Bypass is on.
   - Unchanged: the fixed test routing, the FL gain correction setting. The panel always reports the round trip as latency, even with no relays.
@@ -111,9 +134,9 @@ Before starting: the panel and relay junctions in the system VST3 folder point a
   - `source/engine/BayLink` (`process`: flowing, warm-up, headroom and the Automatic check; `mix` for bypass and dropouts; `runTest` / `captureTest`; `findLag`)
   - `source/engine/Engine` (`MuteStage`, `setMuted`)
   - `source/PluginProcessor` (saved state: editor view, scroll areas), `source/PluginEditor` (`describeEditor`, `describeLink`, the page's events, `continueResize` with the chords, `reportHostDiagnostics`)
-  - `source/KeyForwarder` (`postToHostOf`: FL's control route and the key log), `source/EditorPlacement` (`describeWindows`), `source/EditorScale.h` (`snap`)
-  - `ui/src/App.svelte` (layout), `ui/src/lib/layout.ts` (`columnFlow`, `scrollMemory`), `ui/src/lib/display.svelte.ts` (smooth and sharp rendering), `ui/src/lib/editor.svelte.ts`, `ui/src/components/LinkStatus.svelte`, `ui/src/components/HostDiagnostics.svelte`, `ui/src/components/ResizeGrips.svelte`, `ui/src/components/PluginsTab.svelte`
-  - Tests: `tests/LinkHubTests.cpp`, `tests/LinkTests.cpp`, `tests/RelayTests.cpp`, `tests/WebUiTests.cpp`, `tests/EditorTests.cpp`, `tests/HostingTests.cpp`
+  - `source/KeyForwarder` (`postToHostOf`: routes A to D and the key log), `source/EditorPlacement` (`findMovableWindow`: FL's attached `TPluginForm`, `tryToPlace`, `describeWindows`), `source/EditorScale.h` (`snap`), `source/bridge/ControlSession` (the catalog's `d`)
+  - `ui/src/App.svelte` (layout), `ui/src/lib/layout.ts` (`columnFlow`, `scrollMemory`), `ui/src/lib/display.svelte.ts` (smooth and sharp rendering, the layer redraw), `ui/src/lib/editor.svelte.ts`, `ui/src/lib/params.svelte.ts` (`resetToDefault`), `ui/src/components/LinkStatus.svelte`, `ui/src/components/HostDiagnostics.svelte`, `ui/src/components/ResizeGrips.svelte`, `ui/src/components/PluginsTab.svelte`, `ui/src/components/Slider.svelte`
+  - Tests: `tests/LinkHubTests.cpp`, `tests/LinkTests.cpp`, `tests/RelayTests.cpp`, `tests/WebUiTests.cpp`, `tests/EditorTests.cpp`, `tests/HostingTests.cpp`, `tests/ControlTests.cpp`, `tests/KeyForwarderTests.cpp` (also the settings file)
 
 ## Open items
 - **The regression findings' candidate fixes** (`decisions.md`, "Regression stages 1 and 4"): Safe dropouts with hysteresis; Automatic counting receiver misses without a flowing return; matching receiver miss counts (and maybe playing the newest block on skip-ahead); headroom only from arriving blocks; optionally a "return silent while the sent audio isn't" line.
@@ -122,7 +145,7 @@ Before starting: the panel and relay junctions in the system VST3 folder point a
 - **Pops (polish, later):** adding or removing relays, cutting wires inside the bay, switching relay modes or the round trip, a new transmitter's first audio. See `decisions.md`, "FL check (2026-10-02) and fixes".
 - Counting the round trip in FL's real blocks rather than the announced buffer: the largest real block follows the tempo (about one tick), so it must follow what FL delivers.
 - Fixed buffer sizes in the Fruity Wrapper: a measured test after the position marker.
-- Attached windows, first-open centering and the keys route: this step (see Next).
+- Attached windows, first-open centering and the keys route: built, awaiting the FL check (see Next).
 - Shift+drag: free aspect ratio (each axis stepped with Ctrl), once the panel's layout can follow.
 - **A settings defaults file (JSON): to be implemented soon** (user, 2026-10-05), right after this step's FL check. Open question for its proposal: edited in the source only, or also a file beside the settings file (then it's untrusted input, validated like the settings file).
 - Optional: a panel-side "check 1 block again" button for Automatic.
@@ -132,9 +155,8 @@ Before starting: the panel and relay junctions in the system VST3 folder point a
 
 ## Read for this step
 In `docs/decisions.md`, by heading:
-- **"FL re-check, merge experiment, Diagnostics panel"** > **"FL check of the resizing build (2026-10-05) and the next session's plan"** (the plan for this step), **"Resizing chords, smooth rendering, key and window diagnostics"** and **"FL check of the Diagnostics build"**.
+- **"FL re-check, merge experiment, Diagnostics panel"** > **"Keys route test, attached windows, smooth text, double-click reset"** (what this build does), **"FL check of the resizing build (2026-10-05) and the next session's plan"** (why), and **"Resizing chords, smooth rendering, key and window diagnostics"**.
 - **"1b.2 wrap-up"** > **"Keys"** (FL's Delphi key route) and **"Scaling and resizing"**.
-- **"Slice 1b.2: one slider, two-way"** > **"Parameter model"** and **"Protocol"**, for the double-click reset.
 - For the later bay work: **"Bay control outputs, automatic round trip, bypass"**, **"Bay link: the audio round-trip test"** > **"Timing"**, and the rest of "FL re-check, merge experiment, Diagnostics panel".
 - **"Platforms and toolchain"**: macOS is required (keep the Windows window and key code isolated).
 

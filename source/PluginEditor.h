@@ -68,6 +68,7 @@ private:
     void handleDiagnostics (const juce::var&);
     void handleScroll (const juce::var&);
     void handleBayBypass (const juce::var&);
+    void handleKeyRoute (const juce::var&);
     void reportProcessing();
     void reportLink();
     void logKey (const juce::String&);
@@ -81,6 +82,9 @@ private:
     juce::StringArray keyLog;
     static constexpr int maxKeyLogLines = 12;
     juce::String sentHostDiagnostics;
+
+    // Test build: chosen in Diagnostics, kept in memory only
+    KeyForwarder::HeldMouseRoute keyRoute = KeyForwarder::HeldMouseRoute::panelControl;
 
     KeyForwarder keyForwarder;
     ControlSession session;
