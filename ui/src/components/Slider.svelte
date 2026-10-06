@@ -1,5 +1,6 @@
 <script lang="ts">
     import { onDestroy } from "svelte";
+    import { editor } from "../lib/editor.svelte";
     import { openParameterMenu } from "../lib/menu.svelte";
     import {
         beginGesture,
@@ -12,6 +13,32 @@
     let { param }: { param: Param } = $props();
 
     let dragging = false;
+
+    // Our own double-click detection, so its speed is a setting rather than the system's
+    const doubleClickDistance = 6;
+    let lastClick: { time: number; x: number; y: number } | null = null;
+
+    function clicked(event: MouseEvent) {
+        const previous = lastClick;
+        lastClick = {
+            time: event.timeStamp,
+            x: event.clientX,
+            y: event.clientY,
+        };
+
+        if (
+            previous === null ||
+            event.timeStamp - previous.time > editor.settings.doubleClickMs ||
+            Math.hypot(event.clientX - previous.x, event.clientY - previous.y) >
+                doubleClickDistance
+        )
+            return;
+
+        lastClick = null;
+
+        // The "double-click sets" setting is a placeholder for a value entry; until then both reset
+        resetToDefault(param.h);
+    }
 
     function stopDragging() {
         if (!dragging) return;
@@ -66,7 +93,7 @@
         value={param.value}
         onpointerdown={startDragging}
         oninput={(event) => changed(event.currentTarget.valueAsNumber)}
-        ondblclick={() => resetToDefault(param.h)}
+        onclick={clicked}
     />
     <span class="value-text">{param.text}</span>
     {#if param.host}

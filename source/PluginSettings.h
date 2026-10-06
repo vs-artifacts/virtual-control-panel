@@ -59,6 +59,15 @@ public:
     int getBypassCrossfadeMs() const;
     void setBypassCrossfadeMs (int);
 
+    // The longest gap between the two clicks of a double-click on the page's controls
+    static constexpr int minDoubleClickMs = 1, maxDoubleClickMs = 2000, defaultDoubleClickMs = 500;
+    int getDoubleClickMs() const;
+    void setDoubleClickMs (int);
+
+    // Placeholder (not built yet): double-click opens a value entry instead of resetting to the default
+    bool getDoubleClickSets() const;
+    void setDoubleClickSets (bool);
+
 private:
     static juce::PropertiesFile::Options createOptions();
 

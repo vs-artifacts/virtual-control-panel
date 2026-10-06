@@ -3,6 +3,7 @@
     import {
         changeSetting,
         crossfadeRange,
+        doubleClickRange,
         editor,
         resetSize,
         type Settings,
@@ -80,6 +81,22 @@
         }
 
         event.currentTarget.value = String(editor.settings.bypassCrossfadeMs);
+    }
+
+    function changeDoubleClick(
+        event: Event & { currentTarget: HTMLInputElement },
+    ) {
+        const typed = event.currentTarget.valueAsNumber;
+
+        if (Number.isFinite(typed)) {
+            const milliseconds = Math.min(
+                doubleClickRange.max,
+                Math.max(doubleClickRange.min, Math.round(typed)),
+            );
+            changeSetting("doubleClickMs", milliseconds);
+        }
+
+        event.currentTarget.value = String(editor.settings.doubleClickMs);
     }
 </script>
 
@@ -165,6 +182,33 @@
         window's center (separate windows, and windows attached inside FL). Add
         Ctrl for 25% steps.
     </p>
+</fieldset>
+
+<fieldset>
+    <legend>Double-click on a control</legend>
+    <label class="option">
+        <input
+            id="double-click-ms"
+            class="milliseconds"
+            type="number"
+            min={doubleClickRange.min}
+            max={doubleClickRange.max}
+            step="1"
+            value={editor.settings.doubleClickMs}
+            onchange={changeDoubleClick}
+        />
+        ms at most between the clicks ({doubleClickRange.min} to {doubleClickRange.max})
+    </label>
+    <label class="option">
+        <input
+            type="checkbox"
+            checked={editor.settings.doubleClickSets}
+            onchange={(event) =>
+                changeSetting("doubleClickSets", event.currentTarget.checked)}
+        />
+        Double-click sets a value instead of resetting to the default (not built
+        yet: still resets)
+    </label>
 </fieldset>
 
 <fieldset>

@@ -169,20 +169,6 @@ TEST_CASE ("The key log names keys by their page code", "[keys]")
     CHECK (KeyForwarder::nameOf (0x99) == "0x99");
 }
 
-TEST_CASE ("Key routes for a held mouse button go by name", "[keys]")
-{
-    using Route = KeyForwarder::HeldMouseRoute;
-
-    for (const auto route : { Route::panelControl, Route::chainControl, Route::panelDirect, Route::mainDirect })
-        CHECK (KeyForwarder::heldMouseRouteFromName (KeyForwarder::toName (route)) == route);
-
-    CHECK (KeyForwarder::toName (Route::panelControl) == "A");
-    CHECK (KeyForwarder::toName (Route::mainDirect) == "D");
-    CHECK_FALSE (KeyForwarder::heldMouseRouteFromName ("E").has_value());
-    CHECK_FALSE (KeyForwarder::heldMouseRouteFromName ("a").has_value());
-    CHECK_FALSE (KeyForwarder::heldMouseRouteFromName ("").has_value());
-}
-
 TEST_CASE ("Plugin settings persist in their file", "[settings]")
 {
     const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getNonexistentChildFile ("heartseeker-settings-test", ".settings");
@@ -200,6 +186,8 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
         CHECK (settings.getBypassCrossfadeMs() == BayLink::defaultCrossfadeMs);
         CHECK (settings.getEditorPlacement() == EditorPlacement::Monitor::hostPlaced);
         CHECK (settings.getAttachedPlacement() == EditorPlacement::Attached::workspace);
+        CHECK (settings.getDoubleClickMs() == PluginSettings::defaultDoubleClickMs);
+        CHECK_FALSE (settings.getDoubleClickSets());
 
         settings.setKeepWebViewWarm (false);
         settings.setResizeRendering (EditorScale::Rendering::sharp);
@@ -211,6 +199,8 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
         settings.setBypassCrossfadeMs (50);
         settings.setEditorPlacement (EditorPlacement::Monitor::mouse);
         settings.setAttachedPlacement (EditorPlacement::Attached::hostMonitor);
+        settings.setDoubleClickMs (5000);
+        settings.setDoubleClickSets (true);
     }
 
     PluginSettings reloaded (file);
@@ -224,5 +214,7 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
     CHECK (reloaded.getBypassCrossfadeMs() == 50);
     CHECK (reloaded.getEditorPlacement() == EditorPlacement::Monitor::mouse);
     CHECK (reloaded.getAttachedPlacement() == EditorPlacement::Attached::hostMonitor);
+    CHECK (reloaded.getDoubleClickMs() == PluginSettings::maxDoubleClickMs);
+    CHECK (reloaded.getDoubleClickSets());
     file.deleteFile();
 }

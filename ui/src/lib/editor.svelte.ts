@@ -1,4 +1,4 @@
-import { fetchEditorState, onHostDiagnostics, onProcessing, sendDiagnostics, sendKeyRoute, sendMutePlugin, sendOpenPlugin, sendResetSize, sendScroll, sendSetting, sendTab } from './bridge'
+import { fetchEditorState, onHostDiagnostics, onProcessing, sendDiagnostics, sendMutePlugin, sendOpenPlugin, sendResetSize, sendScroll, sendSetting, sendTab } from './bridge'
 import { link, listenForLink, readLink } from './link.svelte'
 import { asRecord, oneOf } from './read'
 
@@ -19,13 +19,19 @@ const attachedPlacements = ['off', 'workspace', 'hostMonitor'] as const
 export const renderings = ['smooth', 'sharp'] as const
 const dropoutModes = ['safe', 'silence'] as const
 const roundTrips = [0, 1, 2, 3] as const
-export const keyRoutes = ['A', 'B', 'C', 'D'] as const
 
 // The bay bypass crossfade: whole milliseconds, 0 is off
 export const crossfadeRange = { min: 0, max: 50 } as const
 
 function isCrossfadeMs(value: unknown): value is number {
     return typeof value === 'number' && Number.isInteger(value) && value >= crossfadeRange.min && value <= crossfadeRange.max
+}
+
+// The longest gap between the clicks of a double-click, in whole milliseconds
+export const doubleClickRange = { min: 1, max: 2000 } as const
+
+function isDoubleClickMs(value: unknown): value is number {
+    return typeof value === 'number' && Number.isInteger(value) && value >= doubleClickRange.min && value <= doubleClickRange.max
 }
 
 // Plugin-wide preferences, stored by the plugin
@@ -40,6 +46,9 @@ export interface Settings {
     // 0: automatic
     roundTripBlocks: (typeof roundTrips)[number]
     bypassCrossfadeMs: number
+    doubleClickMs: number
+    // Placeholder: double-click will open a value entry instead of resetting
+    doubleClickSets: boolean
 }
 
 export interface HostedPlugin {
@@ -68,13 +77,14 @@ export const editor = $state({
         bayDropouts: 'safe',
         roundTripBlocks: 0,
         bypassCrossfadeMs: 30,
+        doubleClickMs: 500,
+        doubleClickSets: false,
     } as Settings,
     plugins: [] as HostedPlugin[],
     // Unknown (null) until the plugin says
     processing: null as boolean | null,
     // Test-build diagnostics: the last forwarded keys (newest first) and the windows around the editor
     keyLog: [] as string[],
-    keyRoute: 'A' as (typeof keyRoutes)[number],
     windows: [] as string[],
 })
 
@@ -116,6 +126,8 @@ function readSettings(raw: unknown): void {
     if (typeof fields.keepWebViewWarm === 'boolean') settings.keepWebViewWarm = fields.keepWebViewWarm
     if (typeof fields.flOutputCorrection === 'boolean') settings.flOutputCorrection = fields.flOutputCorrection
     if (typeof fields.resizeFlipAlt === 'boolean') settings.resizeFlipAlt = fields.resizeFlipAlt
+    if (typeof fields.doubleClickSets === 'boolean') settings.doubleClickSets = fields.doubleClickSets
+    if (isDoubleClickMs(fields.doubleClickMs)) settings.doubleClickMs = fields.doubleClickMs
 
     settings.editorPlacement = oneOf(placements, fields.editorPlacement) ?? settings.editorPlacement
     settings.attachedPlacement = oneOf(attachedPlacements, fields.attachedPlacement) ?? settings.attachedPlacement
@@ -139,7 +151,6 @@ export async function loadEditorState(): Promise<void> {
     onHostDiagnostics((message) => {
         const fields = asRecord(message) ?? {}
         editor.keyLog = readLines(fields.keys, 32)
-        editor.keyRoute = oneOf(keyRoutes, fields.keyRoute) ?? editor.keyRoute
         editor.windows = readLines(fields.windows, 32)
     })
 
@@ -202,12 +213,6 @@ export function showDiagnostics(open: boolean): void {
     editor.diagnostics = open
 
     if (connected) sendDiagnostics(open)
-}
-
-export function chooseKeyRoute(route: (typeof keyRoutes)[number]): void {
-    editor.keyRoute = route
-
-    if (connected) sendKeyRoute(route)
 }
 
 export function saveScroll(area: string, top: number): void {

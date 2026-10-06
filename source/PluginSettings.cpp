@@ -14,6 +14,8 @@ namespace
     constexpr auto dropoutModeKey = "bayDropouts";
     constexpr auto roundTripBlocksKey = "bayRoundTrip";
     constexpr auto bypassCrossfadeKey = "bayBypassCrossfadeMs";
+    constexpr auto doubleClickMsKey = "doubleClickMs";
+    constexpr auto doubleClickSetsKey = "doubleClickSets";
 }
 
 PluginSettings::PluginSettings()
@@ -130,6 +132,26 @@ int PluginSettings::getBypassCrossfadeMs() const
 void PluginSettings::setBypassCrossfadeMs (int milliseconds)
 {
     file.setValue (bypassCrossfadeKey, juce::jlimit (0, BayLink::maxCrossfadeMs, milliseconds));
+}
+
+int PluginSettings::getDoubleClickMs() const
+{
+    return juce::jlimit (minDoubleClickMs, maxDoubleClickMs, file.getIntValue (doubleClickMsKey, defaultDoubleClickMs));
+}
+
+void PluginSettings::setDoubleClickMs (int milliseconds)
+{
+    file.setValue (doubleClickMsKey, juce::jlimit (minDoubleClickMs, maxDoubleClickMs, milliseconds));
+}
+
+bool PluginSettings::getDoubleClickSets() const
+{
+    return file.getBoolValue (doubleClickSetsKey, false);
+}
+
+void PluginSettings::setDoubleClickSets (bool sets)
+{
+    file.setValue (doubleClickSetsKey, sets);
 }
 
 juce::PropertiesFile::Options PluginSettings::createOptions()

@@ -1,30 +1,9 @@
 <script lang="ts">
-    import { chooseKeyRoute, editor, keyRoutes } from "../lib/editor.svelte";
-
-    const routeTexts: Record<(typeof keyRoutes)[number], string> = {
-        A: "A: FL's control message to the plugin panel, else posted",
-        B: "B: FL's control message up the window chain",
-        C: "C: the key message, delivered at once to the plugin panel",
-        D: "D: the key message, delivered at once to FL's main window",
-    };
+    import { editor } from "../lib/editor.svelte";
 </script>
 
 <section>
     <h2>Keys forwarded to the host (test build)</h2>
-    <fieldset>
-        <legend>Key route while a mouse button is held (FL only)</legend>
-        {#each keyRoutes as route (route)}
-            <label class="option">
-                <input
-                    type="radio"
-                    name="keyRoute"
-                    checked={editor.keyRoute === route}
-                    onchange={() => chooseKeyRoute(route)}
-                />
-                {routeTexts[route]}
-            </label>
-        {/each}
-    </fieldset>
     {#if editor.keyLog.length > 0}
         <ol id="key-log">
             {#each editor.keyLog as line, index (index)}
@@ -70,27 +49,6 @@
         font-size: 13px;
         font-variant-numeric: tabular-nums;
         overflow-wrap: anywhere;
-    }
-
-    fieldset {
-        margin: 0 0 8px;
-        padding: 0;
-        border: none;
-    }
-
-    legend {
-        padding: 0 0 2px;
-    }
-
-    .option {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 1px 0;
-    }
-
-    input {
-        margin: 0;
     }
 
     .waiting {

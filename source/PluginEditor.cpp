@@ -53,7 +53,7 @@ namespace
 PluginEditor::PluginEditor (PluginProcessor& p)
     : AudioProcessorEditor (&p),
       pluginProcessor (p),
-      keyForwarder (settings->getForwardedKeys(), KeyForwarder::postToHostOf (*this, [this] (const juce::String& line) { logKey (line); }, [this] { return keyRoute; }), KeyForwarder::readPhysicalModifiers),
+      keyForwarder (settings->getForwardedKeys(), KeyForwarder::postToHostOf (*this, [this] (const juce::String& line) { logKey (line); }), KeyForwarder::readPhysicalModifiers),
       session (p.createSessionParameters()),
       hostMenus (*this, session)
 {
@@ -104,7 +104,6 @@ WebUi::Handlers PluginEditor::createPageHandlers()
         { "diagnostics", [this] (const juce::var& message) { handleDiagnostics (message); } },
         { "scroll", [this] (const juce::var& message) { handleScroll (message); } },
         { "bayBypass", [this] (const juce::var& message) { handleBayBypass (message); } },
-        { "keyRoute", [this] (const juce::var& message) { handleKeyRoute (message); } },
         { "measureLag", [this] (const juce::var&) { pluginProcessor.getBayLink().measureLag(); } },
         { "startProbe", [this] (const juce::var&) { pluginProcessor.getBayLink().startProbe(); } },
         { "resetLinkCounters", [this] (const juce::var&) { pluginProcessor.getBayLink().resetCounters(); } },
@@ -124,6 +123,8 @@ juce::var PluginEditor::describeEditor() const
     current->setProperty ("bayDropouts", BayLink::toName (settings->getBayDropouts()));
     current->setProperty ("roundTripBlocks", settings->getRoundTripBlocks());
     current->setProperty ("bypassCrossfadeMs", settings->getBypassCrossfadeMs());
+    current->setProperty ("doubleClickMs", settings->getDoubleClickMs());
+    current->setProperty ("doubleClickSets", settings->getDoubleClickSets());
 
     const auto& engine = pluginProcessor.getEngine();
     juce::Array<juce::var> plugins;
@@ -283,6 +284,17 @@ void PluginEditor::handleSetting (const juce::var& message)
             pluginProcessor.applyLinkSettings();
         }
     }
+    else if (name == "doubleClickMs" && value.isInt())
+    {
+        const auto milliseconds = static_cast<int> (value);
+
+        if (milliseconds >= PluginSettings::minDoubleClickMs && milliseconds <= PluginSettings::maxDoubleClickMs)
+            settings->setDoubleClickMs (milliseconds);
+    }
+    else if (name == "doubleClickSets" && value.isBool())
+    {
+        settings->setDoubleClickSets (static_cast<bool> (value));
+    }
 }
 
 void PluginEditor::handleTab (const juce::var& message)
@@ -340,17 +352,6 @@ void PluginEditor::handleBayBypass (const juce::var& message)
         pluginProcessor.getBayLink().setBypass (static_cast<bool> (value));
 }
 
-void PluginEditor::handleKeyRoute (const juce::var& message)
-{
-    const auto& name = message["route"];
-
-    if (!name.isString())
-        return;
-
-    if (const auto route = KeyForwarder::heldMouseRouteFromName (name.toString()))
-        keyRoute = *route;
-}
-
 void PluginEditor::reportLink()
 {
     if (webUi != nullptr && webUi->isShowing())
@@ -370,7 +371,6 @@ void PluginEditor::reportHostDiagnostics()
 
     auto* message = new juce::DynamicObject();
     message->setProperty ("keys", keyLog);
-    message->setProperty ("keyRoute", KeyForwarder::toName (keyRoute));
     message->setProperty ("windows", EditorPlacement::describeWindows (*this));
     const juce::var diagnostics (message);
 
