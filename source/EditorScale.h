@@ -5,59 +5,43 @@
 // The editor's size relative to its design size; the whole UI scales with it rather than rearranging
 namespace EditorScale
 {
-    constexpr int designWidth = 560;
+    constexpr int designWidth = 1120;
     constexpr int designHeight = 600;
     constexpr double minimum = 0.5;
     constexpr double maximum = 5.0;
 
-    enum class Resizing {
-        smooth,
-        sharp, // the scale on screen (physical pixels per design pixel) stays a whole number, so 1-pixel lines stay crisp
-    };
+    // Ctrl+drag steps, as a share of the design size
+    constexpr double step = 0.25;
 
-    // What stays put while a corner is dragged
-    enum class Anchor {
-        oppositeCorner,
-        windowCenter,
+    // How the page follows the editor's size (the page does it; C++ only stores the choice)
+    enum class Rendering {
+        smooth, // laid out once and scaled like a picture: everything keeps its proportions, edges soften
+        sharp, // laid out again at every size: crisp, but elements can shift by a pixel against each other
     };
 
     // Values in the settings file and in messages from the page
-    inline juce::String toSettingsValue (Resizing resizing) { return resizing == Resizing::sharp ? "sharp" : "smooth"; }
-    inline juce::String toSettingsValue (Anchor anchor) { return anchor == Anchor::windowCenter ? "windowCenter" : "oppositeCorner"; }
+    inline juce::String toSettingsValue (Rendering rendering) { return rendering == Rendering::sharp ? "sharp" : "smooth"; }
 
-    inline std::optional<Resizing> resizingFromSettingsValue (const juce::String& value)
+    inline std::optional<Rendering> renderingFromSettingsValue (const juce::String& value)
     {
         if (value == "smooth")
-            return Resizing::smooth;
+            return Rendering::smooth;
 
         if (value == "sharp")
-            return Resizing::sharp;
+            return Rendering::sharp;
 
         return std::nullopt;
     }
 
-    inline std::optional<Anchor> anchorFromSettingsValue (const juce::String& value)
+    inline double constrain (double scale)
     {
-        if (value == "oppositeCorner")
-            return Anchor::oppositeCorner;
-
-        if (value == "windowCenter")
-            return Anchor::windowCenter;
-
-        return std::nullopt;
+        return std::isfinite (scale) ? juce::jlimit (minimum, maximum, scale) : 1.0;
     }
 
-    inline double constrain (double scale, Resizing resizing, double physicalPixelsPerPixel)
+    // The nearest step, or the virtual step (the size when Ctrl went down) if that's nearer
+    inline double snap (double scale, double virtualStep)
     {
-        if (!std::isfinite (scale))
-            return 1.0;
-
-        if (resizing == Resizing::smooth || !(physicalPixelsPerPixel > 0.0))
-            return juce::jlimit (minimum, maximum, scale);
-
-        const auto smallest = std::ceil (minimum * physicalPixelsPerPixel - 1.0e-9);
-        const auto largest = std::floor (maximum * physicalPixelsPerPixel + 1.0e-9);
-        const auto steps = juce::jlimit (std::max (1.0, smallest), std::max (1.0, largest), std::round (scale * physicalPixelsPerPixel));
-        return steps / physicalPixelsPerPixel;
+        const auto nearestStep = juce::jlimit (minimum, maximum, std::round (scale / step) * step);
+        return std::abs (scale - virtualStep) < std::abs (scale - nearestStep) ? virtualStep : nearestStep;
     }
 }

@@ -33,7 +33,7 @@ export function fetchDisplay(timeoutMs = 2000): Promise<unknown> {
     return callNative('display', timeoutMs)
 }
 
-// { title, tab, settings, plugins }: what the Plugins and Settings tabs show, and which tab was showing
+// { title, tab, diagnostics, scroll, settings, plugins }: what the tabs show, and how the editor was left
 export function fetchEditorState(timeoutMs = 2000): Promise<unknown> {
     return callNative('editorState', timeoutMs)
 }
@@ -55,6 +55,20 @@ export function sendOpenPlugin(slot: number): void {
     window.__JUCE__.backend.emitEvent('openPlugin', { slot })
 }
 
+// Silences a generator (it keeps running)
+export function sendMutePlugin(slot: number, muted: boolean): void {
+    window.__JUCE__.backend.emitEvent('mutePlugin', { slot, muted })
+}
+
+export function sendDiagnostics(open: boolean): void {
+    window.__JUCE__.backend.emitEvent('diagnostics', { open })
+}
+
+// Where a scrolling area was left, so the editor reopens there
+export function sendScroll(area: string, top: number): void {
+    window.__JUCE__.backend.emitEvent('scroll', { area, top })
+}
+
 export function onDisplay(listener: (display: unknown) => void): void {
     window.__JUCE__.backend.addEventListener('display', listener)
 }
@@ -62,6 +76,11 @@ export function onDisplay(listener: (display: unknown) => void): void {
 // { running }: whether the host is running the plugin's audio (FL's smart disable stops it)
 export function onProcessing(listener: (message: unknown) => void): void {
     window.__JUCE__.backend.addEventListener('processing', listener)
+}
+
+// { keys, windows }: the last forwarded keys and the windows around the editor (test-build diagnostics)
+export function onHostDiagnostics(listener: (message: unknown) => void): void {
+    window.__JUCE__.backend.addEventListener('hostDiagnostics', listener)
 }
 
 // The bay link's status (see LinkStatus), about 4 times a second while the editor shows

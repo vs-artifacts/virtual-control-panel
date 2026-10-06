@@ -48,7 +48,12 @@ private:
         double startScale;
         juce::Point<int> startSize;
         std::optional<juce::Rectangle<int>> startWindow;
+        bool aroundCenter;
+        std::optional<double> virtualStep; // with Ctrl: the size when Ctrl went down, a step of its own
     };
+
+    Drag startDrag (Corner, bool aroundCenter) const;
+    bool wantsCenterAnchor() const;
 
     double getPhysicalPixelsPerPixel() const;
     double constrainScale (double) const;
@@ -59,13 +64,24 @@ private:
     void handleSetting (const juce::var&);
     void handleTab (const juce::var&);
     void handleOpenPlugin (const juce::var&);
+    void handleMutePlugin (const juce::var&);
+    void handleDiagnostics (const juce::var&);
+    void handleScroll (const juce::var&);
     void handleBayBypass (const juce::var&);
     void reportProcessing();
     void reportLink();
+    void logKey (const juce::String&);
+    void reportHostDiagnostics();
 
     PluginProcessor& pluginProcessor;
     juce::SharedResourcePointer<PluginSettings> settings;
     juce::SharedResourcePointer<WebViewKeepAlive> webViewKeepAlive;
+
+    // Newest first (diagnostic); before the key forwarder, which still releases keys as it goes
+    juce::StringArray keyLog;
+    static constexpr int maxKeyLogLines = 12;
+    juce::String sentHostDiagnostics;
+
     KeyForwarder keyForwarder;
     ControlSession session;
     HostMenus hostMenus;
@@ -78,6 +94,7 @@ private:
     juce::TimedCallback processingCheck { [this] {
         reportProcessing();
         reportLink();
+        reportHostDiagnostics();
     } };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)

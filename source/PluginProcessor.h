@@ -79,6 +79,26 @@ public:
     std::optional<double> getEditorScale() const noexcept { return editorScale; }
     void setEditorScale (double scale) noexcept { editorScale = scale; }
 
+    // Whether the editor shows the Diagnostics panel beside the tabs; saved with the instance
+    bool isDiagnosticsOpen() const noexcept { return diagnosticsOpen; }
+    void setDiagnosticsOpen (bool open) noexcept { diagnosticsOpen = open; }
+
+    // Where each of the editor's scrolling areas was left, in page pixels, by the page's names: every tab with two
+    // columns, every tab beside Diagnostics (one column), and Diagnostics. Saved with the instance.
+    static constexpr std::array<const char*, 2 * numEditorTabs + 1> editorScrollAreas {
+        "tab0.columns",
+        "tab0.single",
+        "tab1.columns",
+        "tab1.single",
+        "tab2.columns",
+        "tab2.single",
+        "diagnostics"
+    };
+    static constexpr int maxEditorScroll = 1000000;
+    static std::optional<size_t> findEditorScrollArea (const juce::String& name);
+    int getEditorScroll (size_t area) const noexcept { return editorScroll[area]; }
+    void setEditorScroll (size_t area, int top) noexcept { editorScroll[area] = juce::jlimit (0, maxEditorScroll, top); }
+
     // Whether the host has run our audio in the last half second; false while it doesn't (e.g. FL's smart disable)
     bool isBeingProcessed() const noexcept;
 
@@ -86,12 +106,15 @@ private:
     void reportLatency();
 
     static constexpr auto bayControlsTag = "BayControls";
+    static constexpr auto editorScrollTag = "EditorScroll";
 
     Engine engine;
     HostControls hostControls { *this };
     bool editorPlaced = false;
     int editorTab = 0;
     std::optional<double> editorScale;
+    bool diagnosticsOpen = false;
+    std::array<int, editorScrollAreas.size()> editorScroll {};
 
     std::atomic<juce::uint32> lastBlockTime { 0 }; // Time::getMillisecondCounter()
 

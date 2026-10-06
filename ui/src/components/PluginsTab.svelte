@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { editor, openPlugin } from "../lib/editor.svelte";
+    import { editor, mutePlugin, openPlugin } from "../lib/editor.svelte";
 </script>
 
 {#each editor.plugins as plugin (plugin.slot)}
@@ -8,6 +8,20 @@
             <span class="name">{plugin.label}: {plugin.name}</span>
             <span class="status">{plugin.status}</span>
         </div>
+        {#if plugin.canMute}
+            <label
+                class="mute"
+                title="Silences this generator's output (30 ms fade); it keeps running, so the load stays the same"
+            >
+                <input
+                    type="checkbox"
+                    checked={plugin.muted}
+                    onchange={(event) =>
+                        mutePlugin(plugin.slot, event.currentTarget.checked)}
+                />
+                Mute
+            </label>
+        {/if}
         <button
             type="button"
             disabled={!plugin.canOpen}
@@ -36,6 +50,16 @@
 
     .name {
         font-weight: 500;
+    }
+
+    .mute {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+    }
+
+    input {
+        margin: 0;
     }
 
     .status {

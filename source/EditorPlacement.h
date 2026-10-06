@@ -24,6 +24,10 @@ public:
     static std::optional<juce::Rectangle<int>> getFloatingWindowBounds (const juce::Component& editor);
     static void moveFloatingWindowTo (const juce::Component& editor, juce::Point<int> physicalTopLeft);
 
+    // Diagnostic: the windows from the editor's own up to the top, one line each (class, kind, size, position in its
+    // parent), to find which of the host's windows can move
+    static juce::StringArray describeWindows (const juce::Component& editor);
+
 private:
     void timerCallback() override;
 

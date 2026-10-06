@@ -6,8 +6,8 @@ namespace
     constexpr auto keepWebViewWarmKey = "keepWebViewWarm";
     constexpr auto forwardedKeysKey = "forwardedKeys";
     constexpr auto editorPlacementKey = "editorPlacement";
-    constexpr auto resizingKey = "resizing";
-    constexpr auto resizeAnchorKey = "resizeAnchor";
+    constexpr auto resizeRenderingKey = "resizeRendering";
+    constexpr auto flipAltResizeKey = "resizeFlipAlt";
     constexpr auto lastEditorScaleKey = "lastEditorScale";
     constexpr auto flOutputCorrectionKey = "flOutputCorrection";
     constexpr auto dropoutModeKey = "bayDropouts";
@@ -50,29 +50,29 @@ void PluginSettings::setEditorPlacement (EditorPlacement::Monitor monitor)
     file.setValue (editorPlacementKey, EditorPlacement::toSettingsValue (monitor));
 }
 
-EditorScale::Resizing PluginSettings::getResizing() const
+EditorScale::Rendering PluginSettings::getResizeRendering() const
 {
-    return EditorScale::resizingFromSettingsValue (file.getValue (resizingKey)).value_or (EditorScale::Resizing::smooth);
+    return EditorScale::renderingFromSettingsValue (file.getValue (resizeRenderingKey)).value_or (EditorScale::Rendering::smooth);
 }
 
-void PluginSettings::setResizing (EditorScale::Resizing resizing)
+void PluginSettings::setResizeRendering (EditorScale::Rendering rendering)
 {
-    file.setValue (resizingKey, EditorScale::toSettingsValue (resizing));
+    file.setValue (resizeRenderingKey, EditorScale::toSettingsValue (rendering));
 }
 
-EditorScale::Anchor PluginSettings::getResizeAnchor() const
+bool PluginSettings::getFlipAltResize() const
 {
-    return EditorScale::anchorFromSettingsValue (file.getValue (resizeAnchorKey)).value_or (EditorScale::Anchor::oppositeCorner);
+    return file.getBoolValue (flipAltResizeKey, false);
 }
 
-void PluginSettings::setResizeAnchor (EditorScale::Anchor anchor)
+void PluginSettings::setFlipAltResize (bool flip)
 {
-    file.setValue (resizeAnchorKey, EditorScale::toSettingsValue (anchor));
+    file.setValue (flipAltResizeKey, flip);
 }
 
 double PluginSettings::getLastEditorScale() const
 {
-    return EditorScale::constrain (file.getDoubleValue (lastEditorScaleKey, 1.0), EditorScale::Resizing::smooth, 1.0);
+    return EditorScale::constrain (file.getDoubleValue (lastEditorScaleKey, 1.0));
 }
 
 void PluginSettings::setLastEditorScale (double scale)

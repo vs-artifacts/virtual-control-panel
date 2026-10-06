@@ -184,7 +184,8 @@
 
             <dt>Block sizes</dt>
             <dd>
-                {orDash(status.blockMin)} to {orDash(status.blockMax)} samples
+                {orDash(status.blockMin)} to {orDash(status.blockMax)} samples (smallest
+                and largest since the counters were reset)
             </dd>
 
             <dt>Return vs sent</dt>
@@ -233,15 +234,11 @@
         <button type="button" onclick={resetLinkCounters}>Reset counters</button
         >
     </section>
+{:else}
+    <p class="waiting">No bay link status from the plugin</p>
 {/if}
 
 <style>
-    .link {
-        margin-top: 18px;
-        padding-top: 10px;
-        border-top: 1px solid rgba(255, 255, 255, 0.15);
-    }
-
     h2 {
         margin: 0 0 6px;
         font-size: 16px;
@@ -288,5 +285,10 @@
     .warning {
         margin: 0 0 8px;
         color: #ffb36b;
+    }
+
+    .waiting {
+        margin: 0;
+        opacity: 0.7;
     }
 </style>

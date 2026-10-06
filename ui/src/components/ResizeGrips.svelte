@@ -46,6 +46,16 @@
             sendResize(corner, "end");
         };
 
+        // Alt, Ctrl and Shift change the drag (anchor, steps) as they're pressed; a lone Alt mustn't reach the host's menu
+        const modifierChanged = (event: KeyboardEvent) => {
+            if (!dragging || !["Alt", "Control", "Shift"].includes(event.key))
+                return;
+
+            if (event.key === "Alt") event.preventDefault();
+
+            move();
+        };
+
         const events = [
             ["pointerdown", start],
             ["pointermove", move],
@@ -57,12 +67,22 @@
         for (const [type, listener] of events)
             node.addEventListener(type, listener as EventListener);
 
+        window.addEventListener("keydown", modifierChanged, { capture: true });
+        window.addEventListener("keyup", modifierChanged, { capture: true });
+
         return {
             destroy() {
                 end();
 
                 for (const [type, listener] of events)
                     node.removeEventListener(type, listener as EventListener);
+
+                window.removeEventListener("keydown", modifierChanged, {
+                    capture: true,
+                });
+                window.removeEventListener("keyup", modifierChanged, {
+                    capture: true,
+                });
             },
         };
     }

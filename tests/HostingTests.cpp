@@ -197,6 +197,68 @@ TEST_CASE ("Sylenth1 plays a note from MIDI", "[engine][synths]")
     checkSynthPlaysANote (sylenth1Path);
 }
 
+TEST_CASE ("Muting a generator fades it out while it keeps running", "[engine][synths]")
+{
+    if (!isInstalled (sylenth1Path))
+        SKIP ("Not installed: " << sylenth1Path);
+
+    // No FX after it, so the output is exactly what the mute stage passes
+    Engine engine;
+    engine.build ({ juce::File (sylenth1Path) }, {});
+    REQUIRE (engine.getPlugins()[0]->getInstance() != nullptr);
+
+    CHECK (engine.canMute (0));
+    CHECK_FALSE (engine.canMute (1)); // no such slot
+    CHECK_FALSE (engine.setMuted (1, true));
+    CHECK_FALSE (engine.isMuted (1));
+
+    engine.prepare (testSampleRate, testBlockSize, false);
+    juce::AudioBuffer<float> buffer (2, testBlockSize);
+
+    const auto renderBlock = [&] (juce::MidiBuffer midi = {}) {
+        buffer.clear();
+        engine.process (buffer, midi, nullptr);
+        return buffer.getMagnitude (0, testBlockSize);
+    };
+
+    renderBlock (noteOn());
+
+    for (int block = 0; block < 8; ++block)
+        renderBlock();
+
+    REQUIRE (renderBlock() > 0.001f);
+
+    REQUIRE (engine.setMuted (0, true));
+    CHECK (engine.isMuted (0));
+
+    // A fade, not a cut: the first muted block still starts at almost full level
+    renderBlock();
+    CHECK (buffer.getMagnitude (0, 0, 16) > 0.0f);
+
+    const auto fadeBlocks = static_cast<int> (std::ceil (Engine::muteFadeSeconds * testSampleRate / testBlockSize));
+
+    for (int block = 1; block < fadeBlocks; ++block)
+        renderBlock();
+
+    CHECK (juce::exactlyEqual (renderBlock(), 0.0f));
+
+    // Still running underneath: the held note is there again as soon as it's unmuted
+    REQUIRE (engine.setMuted (0, false));
+
+    for (int block = 0; block < fadeBlocks; ++block)
+        renderBlock();
+
+    CHECK (renderBlock() > 0.001f);
+    engine.release();
+
+    // Saved with the slot, and restored (after the audio: restoring a plugin's state may stop its notes)
+    REQUIRE (engine.setMuted (0, true));
+    const auto saved = engine.createStateXml();
+    REQUIRE (engine.setMuted (0, false));
+    engine.restoreStateFromXml (*saved);
+    CHECK (engine.isMuted (0));
+}
+
 TEST_CASE ("The fixed setup: both synths summed into the EQ", "[processor][synths]")
 {
     for (auto* path : { serum2Path, sylenth1Path, eqPath })
@@ -221,6 +283,9 @@ TEST_CASE ("The fixed setup: both synths summed into the EQ", "[processor][synth
     CHECK (engine.isConnected (serum, eq));
     CHECK (engine.isConnected (sylenth, eq));
     CHECK_FALSE (engine.isConnected (serum, sylenth));
+    CHECK (engine.canMute (0));
+    CHECK (engine.canMute (1));
+    CHECK_FALSE (engine.canMute (2)); // FX are never muted
 
     processor.prepareToPlay (testSampleRate, testBlockSize);
     const auto numChannels = processor.getTotalNumOutputChannels();

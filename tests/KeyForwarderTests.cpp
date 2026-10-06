@@ -162,6 +162,13 @@ TEST_CASE ("Forwarded key chords come from a list", "[keys]")
     }
 }
 
+TEST_CASE ("The key log names keys by their page code", "[keys]")
+{
+    CHECK (KeyForwarder::nameOf (0x2C) == "KeyZ");
+    CHECK (KeyForwarder::nameOf (0x39) == "Space");
+    CHECK (KeyForwarder::nameOf (0x99) == "0x99");
+}
+
 TEST_CASE ("Plugin settings persist in their file", "[settings]")
 {
     const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getNonexistentChildFile ("heartseeker-settings-test", ".settings");
@@ -170,17 +177,17 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
         PluginSettings settings (file);
         CHECK (settings.getKeepWebViewWarm());
         CHECK (settings.getForwardedKeys() == KeyForwarder::defaultChords);
-        CHECK (settings.getResizing() == EditorScale::Resizing::smooth);
+        CHECK (settings.getResizeRendering() == EditorScale::Rendering::smooth);
         CHECK (juce::exactlyEqual (settings.getLastEditorScale(), 1.0));
-        CHECK (settings.getResizeAnchor() == EditorScale::Anchor::oppositeCorner);
+        CHECK_FALSE (settings.getFlipAltResize());
         CHECK (settings.getFlOutputCorrection());
         CHECK (settings.getBayDropouts() == BayLink::Dropouts::safe);
         CHECK (settings.getRoundTripBlocks() == BayLink::autoRoundTrip);
         CHECK (settings.getBypassCrossfadeMs() == BayLink::defaultCrossfadeMs);
 
         settings.setKeepWebViewWarm (false);
-        settings.setResizing (EditorScale::Resizing::sharp);
-        settings.setResizeAnchor (EditorScale::Anchor::windowCenter);
+        settings.setResizeRendering (EditorScale::Rendering::sharp);
+        settings.setFlipAltResize (true);
         settings.setLastEditorScale (99.0);
         settings.setFlOutputCorrection (false);
         settings.setBayDropouts (BayLink::Dropouts::silence);
@@ -190,8 +197,8 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
 
     PluginSettings reloaded (file);
     CHECK_FALSE (reloaded.getKeepWebViewWarm());
-    CHECK (reloaded.getResizing() == EditorScale::Resizing::sharp);
-    CHECK (reloaded.getResizeAnchor() == EditorScale::Anchor::windowCenter);
+    CHECK (reloaded.getResizeRendering() == EditorScale::Rendering::sharp);
+    CHECK (reloaded.getFlipAltResize());
     CHECK (juce::exactlyEqual (reloaded.getLastEditorScale(), EditorScale::maximum));
     CHECK_FALSE (reloaded.getFlOutputCorrection());
     CHECK (reloaded.getBayDropouts() == BayLink::Dropouts::silence);

@@ -18,14 +18,15 @@
         },
     ];
 
-    const resizings: { value: Settings["resizing"]; text: string }[] = [
-        { value: "smooth", text: "Smooth" },
-        { value: "sharp", text: "Sharp steps (1-pixel lines stay crisp)" },
-    ];
-
-    const anchors: { value: Settings["resizeAnchor"]; text: string }[] = [
-        { value: "oppositeCorner", text: "Opposite corner" },
-        { value: "windowCenter", text: "Window center" },
+    const renderings: { value: Settings["resizeRendering"]; text: string }[] = [
+        {
+            value: "smooth",
+            text: "Smooth (scales like a picture: everything keeps its proportions, edges soften between sizes)",
+        },
+        {
+            value: "sharp",
+            text: "Sharp (laid out again at every size: crisp, but elements can shift by a pixel)",
+        },
     ];
 
     const dropoutModes: {
@@ -109,32 +110,30 @@
 
 <fieldset>
     <legend>Resizing</legend>
-    {#each resizings as option (option.value)}
+    {#each renderings as option (option.value)}
         <label class="option">
             <input
                 type="radio"
-                name="resizing"
-                checked={editor.settings.resizing === option.value}
-                onchange={() => changeSetting("resizing", option.value)}
+                name="resizeRendering"
+                checked={editor.settings.resizeRendering === option.value}
+                onchange={() => changeSetting("resizeRendering", option.value)}
             />
             {option.text}
         </label>
     {/each}
-</fieldset>
-
-<fieldset>
-    <legend>Resize from</legend>
-    {#each anchors as option (option.value)}
-        <label class="option">
-            <input
-                type="radio"
-                name="resizeAnchor"
-                checked={editor.settings.resizeAnchor === option.value}
-                onchange={() => changeSetting("resizeAnchor", option.value)}
-            />
-            {option.text}
-        </label>
-    {/each}
+    <label class="option">
+        <input
+            type="checkbox"
+            checked={editor.settings.resizeFlipAlt}
+            onchange={(event) =>
+                changeSetting("resizeFlipAlt", event.currentTarget.checked)}
+        />
+        Window resize: flip drag and alt+drag
+    </label>
+    <p class="hint">
+        Corner grips: drag keeps the opposite corner in place, Alt+drag the
+        window's center (separate windows only). Add Ctrl for 25% steps.
+    </p>
 </fieldset>
 
 <fieldset>
@@ -227,6 +226,11 @@
 
     .milliseconds {
         width: 4em;
+    }
+
+    .hint {
+        margin: 2px 0 0;
+        opacity: 0.7;
     }
 
     .size {

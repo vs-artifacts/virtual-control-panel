@@ -239,14 +239,34 @@ TEST_CASE ("The page matches the plugin's scale, whatever the web view's own", "
 
     KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
     ControlSession noParameters ({});
-    OffscreenWebUi page (keys, noParameters);
-    REQUIRE (page.waitFor (bridgeStatus, connected) == connected);
 
-    const auto pixelRatio = page.evaluate ("window.devicePixelRatio").getDoubleValue();
-    REQUIRE (pixelRatio > 0.0);
+    const auto expectedFactor = [] (OffscreenWebUi& page) {
+        const auto pixelRatio = page.evaluate ("window.devicePixelRatio").getDoubleValue();
+        REQUIRE (pixelRatio > 0.0);
+        return juce::String (page.webUi.getDisplayScale() / pixelRatio, 4);
+    };
 
-    const auto expectedZoom = juce::String (page.webUi.getDisplayScale() / pixelRatio, 4);
-    CHECK (page.waitFor ("Number (document.documentElement.style.zoom).toFixed (4)", expectedZoom) == expectedZoom);
+    SECTION ("smooth (the default): the whole page is scaled like a picture")
+    {
+        OffscreenWebUi page (keys, noParameters);
+        REQUIRE (page.waitFor (bridgeStatus, connected) == connected);
+
+        const auto expected = expectedFactor (page);
+        CHECK (page.waitFor ("Number (document.getElementById('app').style.transform.slice (6, -1)).toFixed (4)", expected) == expected);
+        CHECK (page.evaluate ("document.documentElement.style.zoom") == "");
+    }
+
+    SECTION ("sharp: the page is laid out again at the zoomed size")
+    {
+        WebUi::Handlers handlers;
+        handlers.describeEditor = [] { return juce::JSON::parse (R"({ "title": "test", "tab": 0, "settings": { "resizeRendering": "sharp" }, "plugins": [] })"); };
+        OffscreenWebUi page (keys, noParameters, std::move (handlers));
+        REQUIRE (page.waitFor (bridgeStatus, connected) == connected);
+
+        const auto expected = expectedFactor (page);
+        CHECK (page.waitFor ("Number (document.documentElement.style.zoom).toFixed (4)", expected) == expected);
+        CHECK (page.evaluate ("document.getElementById('app').style.transform") == "");
+    }
 }
 
 TEST_CASE ("Right-clicking a slider shows the host's options for its parameter", "[webui][webview]")
@@ -309,15 +329,16 @@ TEST_CASE ("The page's corner grips resize the plugin", "[webui][webview]")
     CHECK (messages == juce::StringArray { "topLeft start", "topLeft end" });
 }
 
-TEST_CASE ("The Panel tab shows the bay link and sends the bypass switch", "[webui][webview]")
+TEST_CASE ("Diagnostics shows the bay link beside the tabs and sends the bypass switch", "[webui][webview]")
 {
     if (!WebUi::isSupported())
         SKIP ("No supported web view on this system");
 
     juce::var chosen;
+    juce::var toggled;
     WebUi::Handlers handlers;
     handlers.describeEditor = [] {
-        return juce::JSON::parse (R"({ "title": "test", "tab": 0, "settings": {}, "plugins": [], "processing": true,
+        return juce::JSON::parse (R"({ "title": "test", "tab": 0, "diagnostics": false, "settings": {}, "plugins": [], "processing": true,
             "link": { "hubProblem": "", "name": "Panel 1", "linkProblem": "", "receiver": "playing", "transmitter": "returning",
                 "roundTripSetting": 0, "autoState": "oneBlock",
                 "roundTrip": 512, "roundTripBlocks": 1, "maxBlock": 512, "sampleRate": 48000, "latency": 512,
@@ -327,11 +348,21 @@ TEST_CASE ("The Panel tab shows the bay link and sends the bypass switch", "[web
                 "probe": { "state": "found", "delay": 480, "rise": 24, "before": 0, "after": 0.25 } } })");
     };
     handlers.events["bayBypass"] = [&chosen] (const juce::var& message) { chosen = message; };
+    handlers.events["diagnostics"] = [&toggled] (const juce::var& message) { toggled = message; };
 
     KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
     ControlSession noParameters ({});
     OffscreenWebUi page (keys, noParameters, std::move (handlers));
+    REQUIRE (page.waitFor (bridgeStatus, connected) == connected);
+    CHECK (page.evaluate ("String (document.getElementById('link-state') === null)") == "true");
+
+    page.evaluate ("document.querySelector('.diagnostics-toggle').click()");
+    page.pumpUntil ([&toggled] { return !toggled.isVoid(); });
+    CHECK (toggled["open"] == juce::var (true));
+
+    // The Panel tab stays, beside it
     CHECK (page.waitFor ("document.getElementById('link-state')?.textContent ?? ''", "Linked as Panel 1") == "Linked as Panel 1");
+    CHECK (page.evaluate (bridgeStatus) == connected);
     CHECK (page.evaluate ("document.getElementById('link-relays').textContent") == "receiver playing; transmitter returning");
     CHECK (page.evaluate ("document.getElementById('link-auto').textContent") == "automatic: 1 block works (still watching: a miss on either side falls back to 2)");
     CHECK (page.evaluate ("document.getElementById('link-missing').textContent.trim()") == "3 (dropouts play silence)");
@@ -342,4 +373,57 @@ TEST_CASE ("The Panel tab shows the bay link and sends the bypass switch", "[web
     page.evaluate ("document.getElementById('link-bypass').click()");
     page.pumpUntil ([&chosen] { return !chosen.isVoid(); });
     CHECK (chosen["value"] == juce::var (true));
+}
+
+TEST_CASE ("The page reopens scrolled where it was left, and reports new positions", "[webui][webview]")
+{
+    if (!WebUi::isSupported())
+        SKIP ("No supported web view on this system");
+
+    juce::Array<juce::var> reports;
+    WebUi::Handlers handlers;
+    handlers.describeEditor = [] {
+        return juce::JSON::parse (R"({ "title": "test", "tab": 2, "diagnostics": true, "settings": {}, "plugins": [],
+            "scroll": { "tab2.single": 60, "tab2.columns": 9999999, "diagnostics": 0, "elsewhere": 5 } })");
+    };
+    handlers.events["scroll"] = [&reports] (const juce::var& message) { reports.add (message); };
+
+    KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
+    ControlSession noParameters ({});
+    OffscreenWebUi page (keys, noParameters, std::move (handlers));
+
+    // The Settings tab, beside Diagnostics in this small window, is long enough to scroll
+    CHECK (page.waitFor ("String (Math.round (document.querySelector('main').scrollTop))", "60") == "60");
+
+    page.evaluate ("document.querySelector('main').scrollTop = 25");
+    page.pumpUntil ([&reports] { return !reports.isEmpty(); });
+    REQUIRE (reports.size() == 1);
+    CHECK (reports[0]["area"] == "tab2.single");
+    CHECK (reports[0]["top"] == juce::var (25));
+}
+
+TEST_CASE ("The Plugins tab mutes generators only", "[webui][webview]")
+{
+    if (!WebUi::isSupported())
+        SKIP ("No supported web view on this system");
+
+    juce::var muted;
+    WebUi::Handlers handlers;
+    handlers.describeEditor = [] {
+        return juce::JSON::parse (R"({ "title": "test", "tab": 1, "settings": {}, "plugins": [
+            { "slot": 0, "label": "Generator 1", "name": "Synth", "status": "", "canOpen": true, "canMute": true, "muted": false },
+            { "slot": 1, "label": "FX 1", "name": "EQ", "status": "", "canOpen": true, "canMute": false, "muted": false } ] })");
+    };
+    handlers.events["mutePlugin"] = [&muted] (const juce::var& message) { muted = message; };
+
+    KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
+    ControlSession noParameters ({});
+    OffscreenWebUi page (keys, noParameters, std::move (handlers));
+    REQUIRE (page.waitFor ("String (document.querySelectorAll('.row').length)", "2") == "2");
+    CHECK (page.evaluate ("String (document.querySelectorAll('.mute input').length)") == "1");
+
+    page.evaluate ("document.querySelector('.mute input').click()");
+    page.pumpUntil ([&muted] { return !muted.isVoid(); });
+    CHECK (static_cast<int> (muted["slot"]) == 0);
+    CHECK (muted["muted"] == juce::var (true));
 }

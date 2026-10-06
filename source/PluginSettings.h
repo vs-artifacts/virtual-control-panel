@@ -24,13 +24,13 @@ public:
     EditorPlacement::Monitor getEditorPlacement() const;
     void setEditorPlacement (EditorPlacement::Monitor);
 
-    // Whether dragging a corner resizes smoothly or in steps that keep lines sharp
-    EditorScale::Resizing getResizing() const;
-    void setResizing (EditorScale::Resizing);
+    // Whether the page scales like a picture while resizing (smooth) or is laid out again at every size (sharp)
+    EditorScale::Rendering getResizeRendering() const;
+    void setResizeRendering (EditorScale::Rendering);
 
-    // Whether the opposite corner or the window's center stays put while a corner is dragged
-    EditorScale::Anchor getResizeAnchor() const;
-    void setResizeAnchor (EditorScale::Anchor);
+    // Off: dragging a corner keeps the opposite corner in place and Alt+drag the window's center. On: the other way round.
+    bool getFlipAltResize() const;
+    void setFlipAltResize (bool);
 
     // The size new instances' editors open at: the last one used
     double getLastEditorScale() const;

@@ -7,27 +7,40 @@
 using Catch::Matchers::WithinAbs;
 
 // One run through, because every processor loads all three plugins
-TEST_CASE ("The editor reopens on its instance's tab, at its size", "[editor][processor]")
+TEST_CASE ("The editor reopens as its instance left it: tab, Diagnostics, scroll positions, size", "[editor][processor]")
 {
     // Opening an editor records its size as the one new instances use; this test mustn't change the user's
     juce::SharedResourcePointer<PluginSettings> settings;
     const auto previousScale = settings->getLastEditorScale();
-    const auto previousResizing = settings->getResizing();
-    settings->setResizing (EditorScale::Resizing::smooth);
 
     PluginProcessor processor;
     CHECK (processor.getEditorTab() == 0);
 
     processor.setEditorTab (2);
     processor.setEditorScale (1.5);
+    processor.setDiagnosticsOpen (true);
+    const auto panelBesideDiagnostics = PluginProcessor::findEditorScrollArea ("tab0.single");
+    const auto diagnostics = PluginProcessor::findEditorScrollArea ("diagnostics");
+    REQUIRE (panelBesideDiagnostics.has_value());
+    REQUIRE (diagnostics.has_value());
+    CHECK_FALSE (PluginProcessor::findEditorScrollArea ("tab3.single").has_value());
+    processor.setEditorScroll (*panelBesideDiagnostics, 340);
+    processor.setEditorScroll (*diagnostics, 75);
     juce::MemoryBlock saved;
     processor.getStateInformation (saved);
 
     processor.setEditorTab (1);
     processor.setEditorScale (0.75);
+    processor.setDiagnosticsOpen (false);
+    processor.setEditorScroll (*panelBesideDiagnostics, 0);
+    processor.setEditorScroll (*diagnostics, -5);
+    CHECK (processor.getEditorScroll (*diagnostics) == 0);
     processor.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
     CHECK (processor.getEditorTab() == 2);
     CHECK_THAT (processor.getEditorScale().value_or (0.0), WithinAbs (1.5, 1e-9));
+    CHECK (processor.isDiagnosticsOpen());
+    CHECK (processor.getEditorScroll (*panelBesideDiagnostics) == 340);
+    CHECK (processor.getEditorScroll (*diagnostics) == 75);
 
     {
         std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
@@ -44,35 +57,35 @@ TEST_CASE ("The editor reopens on its instance's tab, at its size", "[editor][pr
     }
 
     settings->setLastEditorScale (previousScale);
-    settings->setResizing (previousResizing);
 }
 
 TEST_CASE ("The editor's scale", "[editor]")
 {
     using EditorScale::constrain;
-    using EditorScale::Resizing;
+    using EditorScale::snap;
 
-    SECTION ("smooth resizing only keeps within 50% and 500%")
+    SECTION ("only kept within 50% and 500%")
     {
-        CHECK_THAT (constrain (1.37, Resizing::smooth, 1.0), WithinAbs (1.37, 1e-9));
-        CHECK_THAT (constrain (0.2, Resizing::smooth, 1.0), WithinAbs (0.5, 1e-9));
-        CHECK_THAT (constrain (80.0, Resizing::smooth, 2.0), WithinAbs (5.0, 1e-9));
-        CHECK_THAT (constrain (std::numeric_limits<double>::quiet_NaN(), Resizing::smooth, 1.0), WithinAbs (1.0, 1e-9));
+        CHECK_THAT (constrain (1.37), WithinAbs (1.37, 1e-9));
+        CHECK_THAT (constrain (0.2), WithinAbs (0.5, 1e-9));
+        CHECK_THAT (constrain (80.0), WithinAbs (5.0, 1e-9));
+        CHECK_THAT (constrain (std::numeric_limits<double>::quiet_NaN()), WithinAbs (1.0, 1e-9));
     }
 
-    SECTION ("sharp steps give a whole number of physical pixels per design pixel")
+    SECTION ("Ctrl snaps to the nearest 25% step, or back to the size Ctrl went down at if that's nearer")
     {
-        CHECK_THAT (constrain (1.37, Resizing::sharp, 1.0), WithinAbs (1.0, 1e-9));
-        CHECK_THAT (constrain (1.6, Resizing::sharp, 1.0), WithinAbs (2.0, 1e-9));
-        CHECK_THAT (constrain (0.2, Resizing::sharp, 1.0), WithinAbs (1.0, 1e-9));
-        CHECK_THAT (constrain (80.0, Resizing::sharp, 1.0), WithinAbs (5.0, 1e-9));
+        // Virtual step at 137%: between the 125% and 150% steps
+        CHECK_THAT (snap (1.37, 1.37), WithinAbs (1.37, 1e-9));
+        CHECK_THAT (snap (1.42, 1.37), WithinAbs (1.37, 1e-9));
+        CHECK_THAT (snap (1.45, 1.37), WithinAbs (1.5, 1e-9));
+        CHECK_THAT (snap (1.62, 1.37), WithinAbs (1.5, 1e-9));
+        CHECK_THAT (snap (1.64, 1.37), WithinAbs (1.75, 1e-9));
+        CHECK_THAT (snap (1.33, 1.37), WithinAbs (1.37, 1e-9));
+        CHECK_THAT (snap (1.3, 1.37), WithinAbs (1.25, 1e-9));
 
-        // On a 150% monitor: 2 physical pixels per design pixel at 133%
-        CHECK_THAT (constrain (1.2, Resizing::sharp, 1.5), WithinAbs (2.0 / 1.5, 1e-9));
-        CHECK_THAT (constrain (0.6, Resizing::sharp, 1.5), WithinAbs (1.0 / 1.5, 1e-9));
-
-        // On a 200% monitor even 50% is sharp
-        CHECK_THAT (constrain (0.5, Resizing::sharp, 2.0), WithinAbs (0.5, 1e-9));
+        // Steps stay within the limits
+        CHECK_THAT (snap (0.3, 1.0), WithinAbs (0.5, 1e-9));
+        CHECK_THAT (snap (9.0, 1.0), WithinAbs (5.0, 1e-9));
     }
 }
 

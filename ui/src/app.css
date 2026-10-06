@@ -8,3 +8,20 @@
 body {
   margin: 0;
 }
+
+/* Two columns (see columnFlow): the left one fills to the area's height first; balanced when that isn't enough */
+.flow.columns {
+  height: 100%;
+  columns: 2;
+  column-gap: 32px;
+  column-fill: auto;
+}
+
+.flow.columns.balanced {
+  height: auto;
+  column-fill: balance;
+}
+
+.flow.columns > * {
+  break-inside: avoid;
+}

@@ -31,6 +31,8 @@ namespace
         entry->setProperty ("slot", static_cast<int> (slot));
         entry->setProperty ("label", engine.getSlotLabel (slot));
         entry->setProperty ("name", plugin.getName());
+        entry->setProperty ("canMute", engine.canMute (slot));
+        entry->setProperty ("muted", engine.isMuted (slot));
 
         if (auto* instance = plugin.getInstance())
         {
@@ -51,7 +53,7 @@ namespace
 PluginEditor::PluginEditor (PluginProcessor& p)
     : AudioProcessorEditor (&p),
       pluginProcessor (p),
-      keyForwarder (settings->getForwardedKeys(), KeyForwarder::postToHostOf (*this), KeyForwarder::readPhysicalModifiers),
+      keyForwarder (settings->getForwardedKeys(), KeyForwarder::postToHostOf (*this, [this] (const juce::String& line) { logKey (line); }), KeyForwarder::readPhysicalModifiers),
       session (p.createSessionParameters()),
       hostMenus (*this, session)
 {
@@ -98,6 +100,9 @@ WebUi::Handlers PluginEditor::createPageHandlers()
         { "setting", [this] (const juce::var& message) { handleSetting (message); } },
         { "tab", [this] (const juce::var& message) { handleTab (message); } },
         { "openPlugin", [this] (const juce::var& message) { handleOpenPlugin (message); } },
+        { "mutePlugin", [this] (const juce::var& message) { handleMutePlugin (message); } },
+        { "diagnostics", [this] (const juce::var& message) { handleDiagnostics (message); } },
+        { "scroll", [this] (const juce::var& message) { handleScroll (message); } },
         { "bayBypass", [this] (const juce::var& message) { handleBayBypass (message); } },
         { "measureLag", [this] (const juce::var&) { pluginProcessor.getBayLink().measureLag(); } },
         { "startProbe", [this] (const juce::var&) { pluginProcessor.getBayLink().startProbe(); } },
@@ -111,8 +116,8 @@ juce::var PluginEditor::describeEditor() const
     auto* current = new juce::DynamicObject();
     current->setProperty ("keepWebViewWarm", settings->getKeepWebViewWarm());
     current->setProperty ("editorPlacement", EditorPlacement::toSettingsValue (settings->getEditorPlacement()));
-    current->setProperty ("resizing", EditorScale::toSettingsValue (settings->getResizing()));
-    current->setProperty ("resizeAnchor", EditorScale::toSettingsValue (settings->getResizeAnchor()));
+    current->setProperty ("resizeRendering", EditorScale::toSettingsValue (settings->getResizeRendering()));
+    current->setProperty ("resizeFlipAlt", settings->getFlipAltResize());
     current->setProperty ("flOutputCorrection", settings->getFlOutputCorrection());
     current->setProperty ("bayDropouts", BayLink::toName (settings->getBayDropouts()));
     current->setProperty ("roundTripBlocks", settings->getRoundTripBlocks());
@@ -124,9 +129,16 @@ juce::var PluginEditor::describeEditor() const
     for (size_t slot = 0; slot < engine.getPlugins().size(); ++slot)
         plugins.add (describePlugin (engine, slot));
 
+    auto* scroll = new juce::DynamicObject();
+
+    for (size_t area = 0; area < PluginProcessor::editorScrollAreas.size(); ++area)
+        scroll->setProperty (PluginProcessor::editorScrollAreas[area], pluginProcessor.getEditorScroll (area));
+
     auto* state = new juce::DynamicObject();
     state->setProperty ("title", pluginProcessor.getName() + " v" VERSION " (" CMAKE_BUILD_TYPE ")");
     state->setProperty ("tab", pluginProcessor.getEditorTab());
+    state->setProperty ("diagnostics", pluginProcessor.isDiagnosticsOpen());
+    state->setProperty ("scroll", scroll);
     state->setProperty ("settings", current);
     state->setProperty ("plugins", plugins);
     state->setProperty ("processing", pluginProcessor.isBeingProcessed());
@@ -223,18 +235,14 @@ void PluginEditor::handleSetting (const juce::var& message)
         if (const auto monitor = EditorPlacement::fromSettingsValue (value.toString()))
             settings->setEditorPlacement (*monitor);
     }
-    else if (name == "resizing" && value.isString())
+    else if (name == "resizeRendering" && value.isString())
     {
-        if (const auto resizing = EditorScale::resizingFromSettingsValue (value.toString()))
-        {
-            settings->setResizing (*resizing);
-            setScale (getScale());
-        }
+        if (const auto rendering = EditorScale::renderingFromSettingsValue (value.toString()))
+            settings->setResizeRendering (*rendering);
     }
-    else if (name == "resizeAnchor" && value.isString())
+    else if (name == "resizeFlipAlt" && value.isBool())
     {
-        if (const auto anchor = EditorScale::anchorFromSettingsValue (value.toString()))
-            settings->setResizeAnchor (*anchor);
+        settings->setFlipAltResize (static_cast<bool> (value));
     }
     else if (name == "flOutputCorrection" && value.isBool())
     {
@@ -287,6 +295,36 @@ void PluginEditor::handleOpenPlugin (const juce::var& message)
         hostedEditors.open (*plugins[static_cast<size_t> (static_cast<int> (slot))]);
 }
 
+void PluginEditor::handleMutePlugin (const juce::var& message)
+{
+    const auto& slot = message["slot"];
+    const auto& muted = message["muted"];
+
+    // The engine refuses slots that aren't generators
+    if (slot.isInt() && static_cast<int> (slot) >= 0 && muted.isBool())
+        pluginProcessor.getEngine().setMuted (static_cast<size_t> (static_cast<int> (slot)), static_cast<bool> (muted));
+}
+
+void PluginEditor::handleDiagnostics (const juce::var& message)
+{
+    const auto& open = message["open"];
+
+    if (open.isBool())
+        pluginProcessor.setDiagnosticsOpen (static_cast<bool> (open));
+}
+
+void PluginEditor::handleScroll (const juce::var& message)
+{
+    const auto& name = message["area"];
+    const auto& top = message["top"];
+
+    if (!name.isString() || !top.isInt() || !juce::isPositiveAndNotGreaterThan (static_cast<int> (top), PluginProcessor::maxEditorScroll))
+        return;
+
+    if (const auto area = PluginProcessor::findEditorScrollArea (name.toString()))
+        pluginProcessor.setEditorScroll (*area, static_cast<int> (top));
+}
+
 void PluginEditor::handleBayBypass (const juce::var& message)
 {
     const auto& value = message["value"];
@@ -299,6 +337,29 @@ void PluginEditor::reportLink()
 {
     if (webUi != nullptr && webUi->isShowing())
         webUi->emitEventIfBrowserIsVisible ("link", describeLink());
+}
+
+void PluginEditor::logKey (const juce::String& line)
+{
+    keyLog.insert (0, juce::Time::getCurrentTime().formatted ("%H:%M:%S ") + line);
+    keyLog.removeRange (maxKeyLogLines, keyLog.size());
+}
+
+void PluginEditor::reportHostDiagnostics()
+{
+    if (webUi == nullptr || !webUi->isShowing())
+        return;
+
+    auto* message = new juce::DynamicObject();
+    message->setProperty ("keys", keyLog);
+    message->setProperty ("windows", EditorPlacement::describeWindows (*this));
+    const juce::var diagnostics (message);
+
+    if (const auto text = juce::JSON::toString (diagnostics, true); text != sentHostDiagnostics)
+    {
+        sentHostDiagnostics = text;
+        webUi->emitEventIfBrowserIsVisible ("hostDiagnostics", diagnostics);
+    }
 }
 
 void PluginEditor::reportProcessing()
@@ -333,11 +394,23 @@ void PluginEditor::handleResize (const juce::var& message)
 
 void PluginEditor::beginResize (Corner corner)
 {
-    drag = Drag { corner,
+    drag = startDrag (corner, wantsCenterAnchor());
+}
+
+PluginEditor::Drag PluginEditor::startDrag (Corner corner, bool aroundCenter) const
+{
+    return { corner,
         juce::Desktop::getInstance().getMainMouseSource().getScreenPosition(),
         getScale(),
         { getWidth(), getHeight() },
-        EditorPlacement::getFloatingWindowBounds (*this) };
+        EditorPlacement::getFloatingWindowBounds (*this),
+        aroundCenter,
+        std::nullopt };
+}
+
+bool PluginEditor::wantsCenterAnchor() const
+{
+    return KeyForwarder::readPhysicalModifiers().alt != settings->getFlipAltResize();
 }
 
 void PluginEditor::continueResize()
@@ -345,21 +418,44 @@ void PluginEditor::continueResize()
     if (!drag.has_value())
         return;
 
+    const auto modifiers = KeyForwarder::readPhysicalModifiers();
+
+    // Alt pressed or released mid-drag: carry on from where the window is, so it doesn't jump
+    if (const auto aroundCenter = modifiers.alt != settings->getFlipAltResize(); aroundCenter != drag->aroundCenter)
+    {
+        const auto virtualStep = drag->virtualStep;
+        drag = startDrag (drag->corner, aroundCenter);
+        drag->virtualStep = virtualStep;
+    }
+
+    // Ctrl steps by 25%, and the size Ctrl went down at stays a step until Ctrl is released
+    if (!modifiers.ctrl)
+        drag->virtualStep.reset();
+    else if (!drag->virtualStep.has_value())
+        drag->virtualStep = getScale();
+
     const auto moved = (juce::Desktop::getInstance().getMainMouseSource().getScreenPosition() - drag->startMouse) / getApproximateScaleFactorForComponent (this);
     const auto dx = static_cast<double> (isLeft (drag->corner) ? -moved.x : moved.x);
     const auto dy = static_cast<double> (isTop (drag->corner) ? -moved.y : moved.y);
 
-    // Growing around its center, the window grows on both sides, so twice as fast keeps the corner under the pointer
-    const auto aroundCenter = settings->getResizeAnchor() == EditorScale::Anchor::windowCenter && drag->startWindow.has_value();
+    // Growing around its center, the window grows on both sides, so twice as fast keeps the corner under the pointer.
+    // Only separate floating windows can move; attached ones grow down and to the right.
+    const auto aroundCenter = drag->aroundCenter && drag->startWindow.has_value();
     const auto speed = aroundCenter ? 2.0 : 1.0;
 
     using namespace EditorScale;
     const auto widthScale = drag->startScale + speed * dx / designWidth;
     const auto heightScale = drag->startScale + speed * dy / designHeight;
-    setScale ((widthScale + heightScale) / 2.0);
 
-    // Hosts keep a window's top-left corner when it grows, so the window moves to keep the anchor in place.
-    // Only separate floating windows can move; attached ones grow down and to the right.
+    // Placeholder: Shift will set width and height apart (each stepped with Ctrl) once the panel's layout can follow
+    auto scale = (widthScale + heightScale) / 2.0;
+
+    if (drag->virtualStep.has_value())
+        scale = snap (scale, *drag->virtualStep);
+
+    setScale (scale);
+
+    // Hosts keep a window's top-left corner when it grows, so the window moves to keep the anchor in place
     if (!drag->startWindow.has_value() || !(aroundCenter || isLeft (drag->corner) || isTop (drag->corner)))
         return;
 
@@ -393,7 +489,7 @@ double PluginEditor::getScale() const
 
 double PluginEditor::constrainScale (double scale) const
 {
-    return EditorScale::constrain (scale, settings->getResizing(), getPhysicalPixelsPerPixel());
+    return EditorScale::constrain (scale);
 }
 
 double PluginEditor::getPhysicalPixelsPerPixel() const

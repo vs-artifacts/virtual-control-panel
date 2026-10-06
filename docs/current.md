@@ -2,48 +2,33 @@
 
 The live handover: where things stand, what's next, and exactly what to read for it. Rewritten at the end of every session. Lasting decisions belong in `docs/decisions.md`; this file only points to them.
 
-**Last updated:** 2026-10-02, end of session. Everything below is committed and pushed (the commit after `4d15293`).
+**Last updated:** 2026-10-05, end of session. Everything since commit `c0ef24f` is **not committed yet** (Diagnostics panel, mute, scroll memory, resizing chords, smooth rendering, key log, window list); ask the user whether to commit before starting.
 
 ## Where things stand
-- **Slice 1b.4, external module bays:** the link test passed its FL check. The rest was built this session and **FL-checked once** (results and fixes: `decisions.md`, "Bay control outputs" > "FL check (2026-10-02) and fixes"):
-  - **Passed:** control outputs (exact values, several at once, automation, holding, saved values).
-  - **Measured:** the Peak Controller's delay with the probe (about 300 to 550 samples, 10–90% in about 170; ramped about 1,600, 10–90% in about 1,100), whatever the buffer length. No control lead by default.
-  - **Changed after the check, not yet checked in FL:**
-    - Automatic round trip and the panel's missing-block count fixed; a new "Receiver missed" line.
-    - The probe fades the output out and in.
-    - The bypass crossfade is a number field (0 to 50 ms, default 30).
-    - Every tab keeps its scroll position.
-    - **Lag > Measure redesigned:** it sends a known noise burst (output muted) and lists every delay at which it comes back, with its gain.
-- **Automated tests pass in Debug and Release** (58 test cases), warning-free.
+- **Slice 1b.4, external module bays:** control outputs, automatic round trip, bypass and dropouts, probe and Lag > Measure all **passed the FL re-check** (2026-10-03). **The merge experiment showed Patcher lines up paths that merge, so the position marker works.** Regression findings and likely causes: `decisions.md`, "FL re-check, merge experiment, Diagnostics panel" > "Regression stages 1 and 4".
+- **UI work for testing (all FL-checked):** the wider window with two columns, Diagnostics beside the tabs, scroll memory saved with the project, generator mutes, and resizing chords (drag, Alt+drag around the center, a flip setting, Ctrl 25% steps with a virtual step; Shift a placeholder) all passed. Smooth and Sharp rendering work, **except that text in Smooth mode still snaps to whole pixels**.
+- **Keys while a mouse button is held still fail** in FL. The key log shows FL's plugin panel now refuses our control route while the web view's window holds the mouse. Details and the plan: `decisions.md`, "FL check of the resizing build (2026-10-05) and the next session's plan".
+- **The window list told us which of FL's windows moves** when attached (`TPluginForm`, a child of FL's workspace `TWPControl`).
+- **FL's real block size follows the tempo** (215 at 140 BPM, 167 at 180, 435 at 70): about one sequencer tick.
+- **Automated tests pass in Debug and Release** (62 test cases), warning-free.
 
-## Next
-1. **The user's FL session** (below): the re-check of the changes, the merge experiment, then the regression stages.
-2. Then: **a bay plugin's own latency, handled automatically** (before 1b.5), shaped by the merge experiment's result (`decisions.md`, "Bay control outputs" > "A bay plugin's latency: candidates"). After 1b.4: 1b.5 plugin swap (see the slice plan in `decisions.md`).
+## Next (confirmed by the user, 2026-10-05)
+All four in one build, then the user's FL check. Details for each: `decisions.md`, "FL check of the resizing build (2026-10-05) and the next session's plan".
+1. **Keys test build:** a temporary "Key route while the mouse is held" choice in Diagnostics (routes A to D), every key logged with its route and result. The route that plays becomes the only one afterwards.
+2. **Smooth rendering, text included:** soft, unsnapped everything. Try CSS first, then a single scaled layer; verify in the browser preview pixel by pixel before the FL check.
+3. **Attached windows in FL:** center-anchored resizing moves `TPluginForm` within FL's workspace. First-open centering for attached windows too, distinguishing "centered in FL's workspace" from "centered on the monitor where FL is open": **propose the placement setting's new options to the user before building that part.**
+4. **Double-click a parameter control to reset it** to its default (one gesture, so the host records it).
 
-## FL session: re-check, merge experiment, regression
-Before starting: restart FL (the Debug build is current). Setup as in the first check: Patcher with smart disable off, panel, receiver, FL plugin, transmitter, Control 1 to 4 through Peak Controllers.
+Then, each with the user's go: **the settings defaults file** (soon; see Open items); the regression findings' candidate fixes; counting the round trip in FL's real blocks (following what FL delivers). Then **a bay plugin's own latency with the position marker** (before 1b.5). After 1b.4: 1b.5 plugin swap.
 
-1. **Automatic round trip** (buffer length 512, then 288).
-   - With the wire into the receiver: **expect** "1 block works" and "Receiver missed" staying at 0.
-   - Remove the wire. **Expect** "1 block missed, so 2" within a second, and the Panel tab's missing blocks or "Receiver missed" counting what happened. After the fallback, no more pops.
-   - Put the wire back and switch the receiver to Transmitter and back. **Expect** 1 block again.
-   - With no wire at all from the start (new project). **Expect** it falls back to 2 instead of hanging on "trying 1 block".
-2. **Probe:** no pop at its start or end (a short fade instead).
-3. **Bypass crossfade:** type values into the field (e.g. 30, 0, 50, 75 → 50, "abc" → back to the last value). **Expect** each takes effect when you leave the field or press Enter.
-4. **Scroll:** scroll the Panel tab down, switch to Settings and back. **Expect** the same position (and likewise for Settings).
-5. **Lag > Measure** (nothing needs to be playing; the output is muted for about a second).
-   - A pass-through bay (no plugin, or a neutral one): **expect** "0 samples (an exact copy)" or one path at 0.
-   - FL's linear-phase EQ 2 at its highest setting: **expect** one path at about +12,288 (what FL reports for it). Try a few settings, and compare with FL's own figure.
-6. **The merge experiment.**
-   - EQ 2 at a high setting in the bay; wire the receiver's output both into the EQ and straight into the transmitter's input.
-   - Lag > Measure. **Either** one path at +L (Patcher compensates paths that merge: the "position marker" idea works), **or** two paths, at 0 and +L (it doesn't).
-7. **Regression:** stages 1 and 4 of the bay link checklist below.
+## FL check: next build
+Write this checklist when the build is done (keys: each route with the mouse held on a slider, a tab, a grip and empty space; Smooth text while resizing slowly; attached windows resizing around the center and staying inside FL's workspace, first-open centering options; double-click reset, also recorded as automation; regression of resizing chords, scroll memory, mute, Diagnostics).
 
 ## Bay link FL checklist (for regression runs when bays change)
 Before starting: the panel and relay junctions in the system VST3 folder point at the Debug builds, so FL picks up this build. If FL was open during the build, restart it. Note FL's sample rate and buffer length (Options > Audio settings). Terms changed after these were written: "Bay return" is now Bypass off, "Direct" is Bypass on, and "Missing bay return blocks" is now Bay dropouts (Safe was "Bypass").
 
 **Record for every stage:**
-- Panel tab: round trip, block sizes, headroom (lowest), missing blocks, return vs sent, lag.
+- Diagnostics: round trip, block sizes, headroom (lowest), missing blocks, return vs sent, lag.
 - Each relay window: link line, missed blocks (with the last reason), headroom (receiver), block sizes, "Audio: running".
 - Anything audible: clicks, gaps, stuck or repeated sound, timing shifts.
 - Any crash or hang.
@@ -55,7 +40,7 @@ Before starting: the panel and relay junctions in the system VST3 folder point a
 4. **Expect:**
    - Receiver: "Linked to Panel 1, panel running".
    - Transmitter: "Linked to Panel 1, receiver playing".
-   - Panel tab: "Linked as Panel 1", "receiver playing; transmitter returning".
+   - Diagnostics: "Linked as Panel 1", "receiver playing; transmitter returning".
 5. Play notes and set the panel's Output to **Bay return**. **Expect:** the same sound as Direct, "Return vs sent: now identical, largest identical", missing blocks 0. Press Lag > Measure: "0 samples (an exact copy)".
 6. Flip Direct and Bay return while playing. **Expect:** no audible difference, no timing jump.
 
@@ -107,43 +92,51 @@ Before starting: the panel and relay junctions in the system VST3 folder point a
 
 ## Current test builds
 - **Panel:**
-  - Panel tab: 17 sliders (the EQ's Low as Param 1; Bay 1 Control 1 to 16 as Param 2 to 17), then the "Bay link (test build)" section:
-    - Link, relays, round trip, and a line saying how Automatic chose it.
-    - Bypass checkbox (with the crossfade length), missing blocks (and what dropouts play), receiver missed, value sets sent.
-    - Headroom, block sizes, return vs sent.
-    - Lag > Measure (a noise burst, every path it comes back on), Control timing > Probe, Reset counters.
-  - Settings tab: "Bay dropouts" (Safe, Silence), "Bay round trip" (Automatic, 1, 2, 3 blocks), "Bay bypass crossfade" (a number field, 0 to 50 ms, default 30). These use new settings keys, so earlier choices don't carry over.
-  - Each tab keeps its scroll position while the page is open.
+  - Window 1,120 × 600 at 100%; each tab in two columns (one beside Diagnostics).
+  - Panel tab: 17 sliders (the EQ's Low as Param 1; Bay 1 Control 1 to 16 as Param 2 to 17), the bridge line and "Audio: running".
+  - Plugins tab: as before, plus a Mute checkbox on each generator row (30 ms fade; saved with the project).
+  - Diagnostics (toggle at the right end of the tab row):
+    - The "Bay link (test build)" section: link, relays, round trip and how Automatic chose it; Bypass (with the crossfade length), missing blocks, receiver missed, value sets; headroom, block sizes (since the last reset), return vs sent; Lag > Measure, Control timing > Probe, Reset counters.
+    - "Keys forwarded to the host": the last 12 keys, newest first (mouse held or not, capture windows, route).
+    - "Windows around the editor": the window chain from the editor's own window to the top.
+  - Settings tab: "Resizing" (Smooth, Sharp; "Window resize: flip drag and alt+drag"), "Bay dropouts" (Safe, Silence), "Bay round trip" (Automatic, 1, 2, 3 blocks), "Bay bypass crossfade" (a number field, 0 to 50 ms, default 30). "Resize from" is gone.
+  - Corner grips: drag (opposite corner), Alt+drag (center, separate windows only), Ctrl adds 25% steps; Shift does nothing yet.
+  - Saved with the instance and the project: the tab, whether Diagnostics is open, every scroll position, the size, Bypass, control values, mutes.
   - New instances start with Bypass off; the panel's own sound only plays when the return is missing (Safe) or Bypass is on.
-  - Unchanged: the fixed test routing, "Audio: running", the FL gain correction setting. The panel always reports the round trip as latency, even with no relays.
-- **Relay:** as before, plus 16 mono control outputs ("Control 1" to "Control 16") and window lines: "Control outputs: from the panel / holding the last values / silent (receivers only)", and all 16 exact values.
+  - Unchanged: the fixed test routing, the FL gain correction setting. The panel always reports the round trip as latency, even with no relays.
+- **Relay:** unchanged: 16 mono control outputs ("Control 1" to "Control 16") and window lines: "Control outputs: from the panel / holding the last values / silent (receivers only)", and all 16 exact values.
 - **Code to know:**
   - `source/link/` (`LinkApi.h` version 2 with value sets, `LinkHub.cpp`, `BayNames.h`)
-  - `source/relay/` (`RelayLink`, with `receiveControls` and the held values; `RelayProcessor`, filling the control outputs; `RelayEditor`)
-  - `source/engine/BayLink` (`BayControl`; `updateRoundTrip` for Automatic; `mix` for bypass and dropouts; `runTest` / `captureTest` for the probe and Lag > Measure; `findLag`)
-  - `source/RelayHubFinder`
-  - `source/PluginProcessor` (binding the bay controls, `createSessionParameters`, `applyLinkSettings`, saved state)
-  - `source/PluginEditor` (`describeLink`, the link events), `source/PluginSettings`
-  - `ui/src/lib/link.svelte.ts`, `ui/src/components/LinkStatus.svelte`, `ui/src/components/SettingsTab.svelte`
-  - Tests: `tests/LinkHubTests.cpp`, `tests/LinkTests.cpp`, `tests/RelayTests.cpp`
+  - `source/relay/` (`RelayLink`: `receive` with its skip-ahead and miss counting, `transmit` with its stamping; `RelayProcessor`; `RelayEditor`)
+  - `source/engine/BayLink` (`process`: flowing, warm-up, headroom and the Automatic check; `mix` for bypass and dropouts; `runTest` / `captureTest`; `findLag`)
+  - `source/engine/Engine` (`MuteStage`, `setMuted`)
+  - `source/PluginProcessor` (saved state: editor view, scroll areas), `source/PluginEditor` (`describeEditor`, `describeLink`, the page's events, `continueResize` with the chords, `reportHostDiagnostics`)
+  - `source/KeyForwarder` (`postToHostOf`: FL's control route and the key log), `source/EditorPlacement` (`describeWindows`), `source/EditorScale.h` (`snap`)
+  - `ui/src/App.svelte` (layout), `ui/src/lib/layout.ts` (`columnFlow`, `scrollMemory`), `ui/src/lib/display.svelte.ts` (smooth and sharp rendering), `ui/src/lib/editor.svelte.ts`, `ui/src/components/LinkStatus.svelte`, `ui/src/components/HostDiagnostics.svelte`, `ui/src/components/ResizeGrips.svelte`, `ui/src/components/PluginsTab.svelte`
+  - Tests: `tests/LinkHubTests.cpp`, `tests/LinkTests.cpp`, `tests/RelayTests.cpp`, `tests/WebUiTests.cpp`, `tests/EditorTests.cpp`, `tests/HostingTests.cpp`
 
 ## Open items
-- **A bay plugin's own latency (L), automatically:** for bypass and dropout alignment, the crossfade, the latency told to FL, and later the graph's compensation. Candidates: `decisions.md`, "Bay control outputs" > "A bay plugin's latency: candidates".
+- **The regression findings' candidate fixes** (`decisions.md`, "Regression stages 1 and 4"): Safe dropouts with hysteresis; Automatic counting receiver misses without a flowing return; matching receiver miss counts (and maybe playing the newest block on skip-ahead); headroom only from arriving blocks; optionally a "return silent while the sent audio isn't" line.
+- **A bay plugin's own latency (L), automatically, with the position marker:** for bypass and dropout alignment, the crossfade, the latency told to FL, and later the graph's compensation. To check in that slice: Patcher compensating a sidechain input, and whether the transmitter's wire to "To FL Studio" makes Patcher delay the panel's own output.
 - A control lead: not by default (it costs the same latency it cancels); maybe a setting later.
-- **Pops (polish, later):** adding or removing relays, cutting the wire into the receiver or its output, a new transmitter's first audio. See `decisions.md`, "FL check (2026-10-02) and fixes".
-- Lag > Measure on a schedule or on demand as the fallback for a bay plugin's latency, if the merge experiment rules out the position marker.
-- Counting the round trip in FL's real blocks (at most 215 samples) rather than the announced buffer: needs an FL check that FL never exceeds it.
+- **Pops (polish, later):** adding or removing relays, cutting wires inside the bay, switching relay modes or the round trip, a new transmitter's first audio. See `decisions.md`, "FL check (2026-10-02) and fixes".
+- Counting the round trip in FL's real blocks rather than the announced buffer: the largest real block follows the tempo (about one tick), so it must follow what FL delivers.
+- Fixed buffer sizes in the Fruity Wrapper: a measured test after the position marker.
+- Attached windows, first-open centering and the keys route: this step (see Next).
+- Shift+drag: free aspect ratio (each axis stepped with Ctrl), once the panel's layout can follow.
+- **A settings defaults file (JSON): to be implemented soon** (user, 2026-10-05), right after this step's FL check. Open question for its proposal: edited in the source only, or also a file beside the settings file (then it's untrusted input, validated like the settings file).
 - Optional: a panel-side "check 1 block again" button for Automatic.
 - Choosing and naming bay controls in the UI.
 - The macOS finder (written down, not built). Bays inside the panel's routing graph (now one bay after the engine's output). Relay naming beyond "first panel found".
+- The Plugins tab (with its Mute checkboxes) merges into the panel in a later slice.
 
 ## Read for this step
 In `docs/decisions.md`, by heading:
-- **"Bay control outputs, automatic round trip, bypass"**, all of it.
-- **"Module bays and relay nodes"** > **"What FL does"** (Peak Controller, outputs, smart disable).
-- **"Bay link: the audio round-trip test"** > **"Timing"** and **"FL check"**.
-- For the next step (a bay plugin's latency), also **"Module bays and relay nodes"** > **"Decided"** (bypass alignment) and **"Target production form"** > **"Architectural implications"**.
-- **"Platforms and toolchain"**: macOS is required.
+- **"FL re-check, merge experiment, Diagnostics panel"** > **"FL check of the resizing build (2026-10-05) and the next session's plan"** (the plan for this step), **"Resizing chords, smooth rendering, key and window diagnostics"** and **"FL check of the Diagnostics build"**.
+- **"1b.2 wrap-up"** > **"Keys"** (FL's Delphi key route) and **"Scaling and resizing"**.
+- **"Slice 1b.2: one slider, two-way"** > **"Parameter model"** and **"Protocol"**, for the double-click reset.
+- For the later bay work: **"Bay control outputs, automatic round trip, bypass"**, **"Bay link: the audio round-trip test"** > **"Timing"**, and the rest of "FL re-check, merge experiment, Diagnostics panel".
+- **"Platforms and toolchain"**: macOS is required (keep the Windows window and key code isolated).
 
 Read the rest of `decisions.md` only for questions these don't cover.
 
@@ -156,6 +149,11 @@ Read the rest of `decisions.md` only for questions these don't cover.
 - Latency matters for live playing: prefer 1 block per bay; several bays in series at large buffers is the worry. The zero-latency segments idea is only worth it if the numbers are bad, and only if it reassembles into one interface.
 - Nothing the user must re-measure and re-enter when slots move or plugins change (e.g. a bay plugin's latency must be found automatically).
 - Naming: "bypass" is the explicit switch of what plays; "safe" and "silence" are what dropouts play.
+- Reopening a saved project must restore the panel's UI exactly as it was left (tab, panels, scroll positions).
+- Fade times: 30 ms is the floor for anything switched while playing (10 ms still pops on the bass-heavy test material).
+- Testing uses a fresh blank project each time; save and reload only when a test calls for it.
+- Smooth rendering means soft, unsnapped everything (text included): proportional positions matter more than crispness there. Sharp is the crisp option.
+- Sessions get expensive when long: hand over through these docs at natural break points rather than carrying a huge context.
 
 ## Ending a session
 Rewrite this file: status, next step, the reading list (exact headings in `decisions.md`), current test builds, open items. Move anything decided into `decisions.md` first.

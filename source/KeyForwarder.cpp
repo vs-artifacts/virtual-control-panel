@@ -67,6 +67,37 @@ namespace
     }
 
     constexpr auto ctrlPrefix = "Ctrl+";
+
+#if JUCE_WINDOWS
+    juce::String classNameOf (HWND window)
+    {
+        if (window == nullptr)
+            return "none";
+
+        wchar_t name[128] {};
+        GetClassNameW (window, name, static_cast<int> (std::size (name)));
+        return juce::String (name);
+    }
+
+    // Physical buttons, so swapped mouse buttons count too
+    bool isMouseButtonDown()
+    {
+        for (const auto button : { VK_LBUTTON, VK_RBUTTON, VK_MBUTTON })
+            if ((GetAsyncKeyState (button) & 0x8000) != 0)
+                return true;
+
+        return false;
+    }
+#endif
+}
+
+juce::String KeyForwarder::nameOf (std::uint32_t scanCode)
+{
+    for (const auto& [name, code] : knownKeys)
+        if (code == scanCode)
+            return name;
+
+    return "0x" + juce::String::toHexString (static_cast<int> (scanCode));
 }
 
 KeyForwarder::KeyForwarder (const juce::String& chords, Post postIn, ReadModifiers readModifiersIn)
@@ -141,14 +172,14 @@ void KeyForwarder::releaseAll()
     heldKeys.clear();
 }
 
-KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor)
+KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor, std::function<void (const juce::String&)> log)
 {
 #if JUCE_WINDOWS
     // Remembered, so key releases still arrive after the editor's own window has gone
     auto host = std::make_shared<HWND> (nullptr);
     const auto isFlStudio = juce::PluginHostType().isFruityLoops();
 
-    return [&editor, host, isFlStudio] (std::uint32_t scanCode, bool down, bool isRepeat) {
+    return [&editor, host, isFlStudio, log] (std::uint32_t scanCode, bool down, bool isRepeat) {
         if (down)
             if (auto* peer = editor.getPeer())
                 *host = GetParent (static_cast<HWND> (peer->getNativeHandle()));
@@ -167,19 +198,37 @@ KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor)
             flags |= 0x40000000u;
 
         // FL Studio's Delphi message loop hands keys to FL's own controls (as VCL "control notifications", CN_BASE + message)
-        // unless a window has captured the mouse, as ours does during a drag. Then only direct delivery reaches them.
-        if (isFlStudio && GetCapture() != nullptr)
+        // unless a window has captured the mouse, as during a drag. Then only direct delivery reaches them. The web view
+        // may hold the mouse from a window our thread can't see, so a held button counts too.
+        const auto ourCapture = GetCapture();
+        const auto mouseHeld = isMouseButtonDown();
+        auto route = juce::String ("posted");
+        auto delivered = false;
+
+        if (isFlStudio && (ourCapture != nullptr || mouseHeld))
         {
             constexpr UINT vclControlNotificationBase = 0xBC00;
-
-            if (SendMessageW (*host, vclControlNotificationBase + message, virtualKey, static_cast<LPARAM> (flags)) != 0)
-                return;
+            delivered = SendMessageW (*host, vclControlNotificationBase + message, virtualKey, static_cast<LPARAM> (flags)) != 0;
+            route = delivered ? "FL's control route" : "FL's control route refused, posted";
         }
 
-        PostMessageW (*host, message, virtualKey, static_cast<LPARAM> (flags));
+        if (!delivered)
+            PostMessageW (*host, message, virtualKey, static_cast<LPARAM> (flags));
+
+        if (log != nullptr)
+        {
+            GUITHREADINFO foreground {};
+            foreground.cbSize = sizeof (foreground);
+            const auto foregroundCapture = GetGUIThreadInfo (0, &foreground) != 0 ? foreground.hwndCapture : nullptr;
+
+            log (nameOf (scanCode) + (down ? (isRepeat ? " repeat" : " down") : " up")
+                 + "; mouse " + (mouseHeld ? "held" : "up")
+                 + "; capture: ours " + classNameOf (ourCapture) + ", foreground " + classNameOf (foregroundCapture)
+                 + "; " + route);
+        }
     };
 #else
-    juce::ignoreUnused (editor);
+    juce::ignoreUnused (editor, log);
     return [] (std::uint32_t, bool, bool) {};
 #endif
 }

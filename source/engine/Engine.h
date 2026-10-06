@@ -10,7 +10,8 @@ struct ExposedParameter
 };
 
 // Runs every hosted plugin inside one routing graph. Knows nothing about plugin vs standalone shells.
-// Current fixed routing: MIDI in -> each generator -> (summed) -> FX chain in series -> audio out; MIDI in -> MIDI out.
+// Current fixed routing: MIDI in -> each generator -> its mute stage -> (summed) -> FX chain in series -> audio out;
+// MIDI in -> MIDI out.
 class Engine
 {
 public:
@@ -32,8 +33,15 @@ public:
     // Generators first, then the FX chain in order; failed loads keep their slot
     const std::vector<std::unique_ptr<HostedPlugin>>& getPlugins() const noexcept { return plugins; }
 
-    // True if source's audio feeds straight into destination
+    // True if source's audio reaches destination (through mute stages, never through another plugin)
     bool isConnected (const HostedPlugin& source, const HostedPlugin& destination) const;
+
+    // Generators only: fades the slot's output out (or back in) over muteFadeSeconds while the plugin keeps running,
+    // so the load and timing stay the same. Any thread. False if the slot has no generator.
+    bool setMuted (size_t slot, bool muted);
+    bool isMuted (size_t slot) const;
+    bool canMute (size_t slot) const;
+    static constexpr double muteFadeSeconds = 0.03;
 
     // People-facing slot name, numbered per role from 1: "Generator 2", "FX 1"
     juce::String getSlotLabel (size_t slot) const;
@@ -48,6 +56,7 @@ public:
 
 private:
     using NodeID = juce::AudioProcessorGraph::NodeID;
+    class MuteStage;
 
     void connectAudio (NodeID source, NodeID destination);
     void connectMidi (NodeID source, NodeID destination);
@@ -56,6 +65,15 @@ private:
     juce::AudioProcessorGraph graph;
     std::vector<std::unique_ptr<HostedPlugin>> plugins;
     std::vector<ExposedParameter> exposed;
+
+    // By slot; the graph owns the stage. No stage where there's nothing to mute.
+    struct MuteSlot
+    {
+        MuteStage* stage = nullptr;
+        NodeID nodeID;
+    };
+
+    std::vector<MuteSlot> muteSlots;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Engine)
 };

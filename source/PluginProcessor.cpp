@@ -174,6 +174,15 @@ bool PluginProcessor::isBeingProcessed() const noexcept
     return juce::Time::getMillisecondCounter() - lastBlockTime.load (std::memory_order_relaxed) < stallMs;
 }
 
+std::optional<size_t> PluginProcessor::findEditorScrollArea (const juce::String& name)
+{
+    for (size_t area = 0; area < editorScrollAreas.size(); ++area)
+        if (name == editorScrollAreas[area])
+            return area;
+
+    return std::nullopt;
+}
+
 //==============================================================================
 bool PluginProcessor::hasEditor() const
 {
@@ -191,10 +200,20 @@ void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
     juce::XmlElement state ("HeartseekerPanelState");
     state.setAttribute ("editorPlaced", editorPlaced);
     state.setAttribute ("editorTab", editorTab);
+    state.setAttribute ("diagnosticsOpen", diagnosticsOpen);
     state.setAttribute ("bayBypass", bayLink.isBypassed());
 
     if (editorScale.has_value())
         state.setAttribute ("editorScale", *editorScale);
+
+    auto* scroll = state.createNewChildElement (editorScrollTag);
+
+    for (size_t area = 0; area < editorScrollAreas.size(); ++area)
+    {
+        auto* entry = scroll->createNewChildElement ("Area");
+        entry->setAttribute ("name", editorScrollAreas[area]);
+        entry->setAttribute ("top", editorScroll[area]);
+    }
 
     auto* controls = state.createNewChildElement (bayControlsTag);
 
@@ -212,6 +231,13 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
     {
         editorPlaced = state->getBoolAttribute ("editorPlaced");
         editorTab = juce::jlimit (0, numEditorTabs - 1, state->getIntAttribute ("editorTab"));
+        diagnosticsOpen = state->getBoolAttribute ("diagnosticsOpen");
+        editorScroll.fill (0);
+
+        if (auto* scroll = state->getChildByName (editorScrollTag))
+            for (auto* entry : scroll->getChildWithTagNameIterator ("Area"))
+                if (const auto area = findEditorScrollArea (entry->getStringAttribute ("name")))
+                    setEditorScroll (*area, entry->getIntAttribute ("top"));
 
         // Projects saved before the bypass switch have the output switch instead
         if (state->hasAttribute ("bayBypass"))
@@ -220,7 +246,7 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
             bayLink.setBypass (state->getStringAttribute ("bayOutput") == "direct");
 
         if (state->hasAttribute ("editorScale"))
-            editorScale = EditorScale::constrain (state->getDoubleAttribute ("editorScale"), EditorScale::Resizing::smooth, 1.0);
+            editorScale = EditorScale::constrain (state->getDoubleAttribute ("editorScale"));
 
         if (auto* controls = state->getChildByName (bayControlsTag))
             for (int i = 0; i < BayLink::numControls; ++i)
