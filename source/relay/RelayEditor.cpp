@@ -61,6 +61,69 @@ namespace
 
         return *low == *high ? juce::String (*low) : juce::String (*low) + " to " + juce::String (*high);
     }
+
+    juce::String describeMarker (const RelayLink::Status& status)
+    {
+        using State = RelayLink::MarkerState;
+
+        if (status.mode == Mode::receiver)
+        {
+            switch (status.marker)
+            {
+                case State::noPin:
+                    return "Marker output: switched off";
+                case State::flowing:
+                    return "Marker output: sending positions";
+                case State::silent:
+                case State::unreadable:
+                    return "Marker output: silent (nothing played)";
+                case State::unknown:
+                    break;
+            }
+
+            return "Marker output: -";
+        }
+
+        const auto unreadable = ", unreadable blocks " + juce::String (status.markerUnreadable);
+
+        switch (status.marker)
+        {
+            case State::noPin:
+                return "Marker: the Marker input is switched off";
+            case State::silent:
+                return "Marker: nothing arriving" + unreadable;
+            case State::unreadable:
+                return "Marker: unreadable" + unreadable;
+            case State::flowing:
+                break;
+            case State::unknown:
+                return "Marker: -";
+        }
+
+        auto text = juce::String ("Marker: bay latency ");
+
+        if (status.bayLatencyNow.has_value() && status.sampleRate > 0.0)
+            text << *status.bayLatencyNow << " samples (" << juce::String (1000.0 * *status.bayLatencyNow / status.sampleRate, 1) << " ms)";
+        else
+            text << "- (no receiver playing)";
+
+        return text + ", range " + describeRange (status.bayLatencyLowest, status.bayLatencyHighest) + unreadable;
+    }
+
+    juce::String describePanels (const std::vector<RelayLink::PanelView>& panels, int linkedPanel)
+    {
+        if (panels.empty())
+            return "Panels in the hub: none yet";
+
+        const auto role = [] (bool present, bool running) { return present ? (running ? "running" : "stopped") : "none"; };
+        juce::String text ("Panels in the hub (* this relay's):");
+
+        for (const auto& view : panels)
+            text << "\n" << (view.number == linkedPanel ? "* " : "  ") << "Panel " << view.number << ": panel " << role (view.panel, view.panelRunning)
+                 << ", receiver " << role (view.receiver, view.receiverRunning) << ", transmitter " << role (view.transmitter, view.transmitterRunning);
+
+        return text;
+    }
 }
 
 RelayEditor::RelayEditor (RelayProcessor& p)
@@ -94,15 +157,17 @@ RelayEditor::RelayEditor (RelayProcessor& p)
 
     addAndMakeVisible (resetButton);
 
-    for (auto* label : { &title, &audioStatus, &inputLevel, &linkStatus, &roundTrip, &missed, &headroom, &blocks, &controlsStatus, &controlValues })
+    for (auto* label : { &title, &audioStatus, &inputLevel, &linkStatus, &roundTrip, &missed, &headroom, &blocks, &marker, &controlsStatus, &controlValues, &panels })
         addAndMakeVisible (label);
 
     controlValues.setJustificationType (juce::Justification::topLeft);
     controlValues.setFont (juce::Font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain)));
+    panels.setJustificationType (juce::Justification::topLeft);
+    panels.setFont (juce::Font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 13.0f, juce::Font::plain)));
 
     timerCallback();
     startTimerHz (4);
-    setSize (420, 440);
+    setSize (560, 640);
 }
 
 void RelayEditor::paint (juce::Graphics& g)
@@ -119,18 +184,19 @@ void RelayEditor::resized()
     receiverButton.setBounds (modes.removeFromTop (24));
     transmitterButton.setBounds (modes);
 
-    for (auto* label : { &linkStatus, &roundTrip, &missed, &headroom, &blocks, &audioStatus, &inputLevel, &controlsStatus })
+    for (auto* label : { &linkStatus, &roundTrip, &missed, &headroom, &blocks, &marker, &audioStatus, &inputLevel, &controlsStatus })
         label->setBounds (area.removeFromTop (26));
 
     controlValues.setBounds (area.removeFromTop (80));
     resetButton.setBounds (area.removeFromTop (30).removeFromLeft (130).reduced (0, 3));
+    panels.setBounds (area.removeFromTop (160));
 }
 
 juce::StringArray RelayEditor::getStatusLines() const
 {
     juce::StringArray lines;
 
-    for (const auto* label : { &linkStatus, &roundTrip, &missed, &headroom, &blocks, &audioStatus, &inputLevel, &controlsStatus, &controlValues })
+    for (const auto* label : { &linkStatus, &roundTrip, &missed, &headroom, &blocks, &marker, &audioStatus, &inputLevel, &controlsStatus, &controlValues, &panels })
         lines.add (label->getText());
 
     return lines;
@@ -158,6 +224,8 @@ void RelayEditor::timerCallback()
         headroom.setText ("Headroom: (receivers only)", juce::dontSendNotification);
 
     blocks.setText ("Block sizes: " + describeRange (status.blockMin, status.blockMax) + " samples", juce::dontSendNotification);
+    marker.setText (describeMarker (status), juce::dontSendNotification);
+    panels.setText (describePanels (relay.getLink().getPanels(), relay.getLink().getLinkedPanel()), juce::dontSendNotification);
     audioStatus.setText (relay.isBeingProcessed() ? "Audio: running" : "Audio: not running (stopped by the host)", juce::dontSendNotification);
     inputLevel.setText ("Input peak: " + juce::String (relay.getInputPeak(), 7), juce::dontSendNotification);
 

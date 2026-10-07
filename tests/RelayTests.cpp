@@ -10,11 +10,14 @@ namespace
 TEST_CASE ("The relay test build", "[relay]")
 {
     RelayProcessor relay;
-    REQUIRE (relay.getBusCount (true) == 1);
-    REQUIRE (relay.getBusCount (false) == 1 + RelayProcessor::numControlOutputs);
+    REQUIRE (relay.getBusCount (true) == 2);
+    REQUIRE (relay.getBusCount (false) == 1 + RelayProcessor::numControlOutputs + 1);
     CHECK (RelayProcessor::numControlOutputs == 16);
-    CHECK (relay.getTotalNumOutputChannels() == 2 + RelayProcessor::numControlOutputs); // mono, and all start active
+    CHECK (relay.getTotalNumOutputChannels() == 2 + RelayProcessor::numControlOutputs + 2); // controls mono, and all start active
+    CHECK (relay.getTotalNumInputChannels() == 4);
     CHECK (relay.getBus (false, 1)->getName() == "Control 1");
+    CHECK (relay.getBus (false, RelayProcessor::markerOutputBus)->getName() == "Marker");
+    CHECK (relay.getBus (true, RelayProcessor::markerInputBus)->getName() == "Marker");
     CHECK_FALSE (relay.isBeingProcessed());
     CHECK (relay.getMode() == RelayLink::Mode::receiver);
 
@@ -97,7 +100,8 @@ TEST_CASE ("The relay test build", "[relay]")
         CHECK (lines[0] == "Not linked: waiting for a panel");
         CHECK (lines[1] == "Round trip: -");
         CHECK (lines[2] == "Missed blocks: 0");
-        CHECK (lines[7] == "Control outputs: silent (receivers only)");
+        CHECK (lines[5] == "Marker: -");
+        CHECK (lines[8] == "Control outputs: silent (receivers only)");
         relay.editorBeingDeleted (editor.get());
         editor.reset();
 
@@ -105,10 +109,66 @@ TEST_CASE ("The relay test build", "[relay]")
         relay.getLink().setControl (0, 0.5f);
         editor.reset (relay.createEditorAndMakeActive());
         lines = dynamic_cast<RelayEditor&> (*editor).getStatusLines();
-        CHECK (lines[7] == "Control outputs: holding the last values");
-        CHECK (lines[8].startsWith (" 1: 0.5000000   2: 0.0000000"));
+        CHECK (lines[8] == "Control outputs: holding the last values");
+        CHECK (lines[9].startsWith (" 1: 0.5000000   2: 0.0000000"));
         relay.editorBeingDeleted (editor.get());
     }
 
+    SECTION ("a transmitter tells a marker from silence and from anything else on its Marker input, even without a panel")
+    {
+        relay.setMode (RelayLink::Mode::transmitter);
+        const auto feed = [&] (auto fill) {
+            buffer.clear();
+            fill (buffer.getWritePointer (2), buffer.getWritePointer (3));
+            relay.processBlock (buffer, midi);
+            return relay.getLink().getStatus().marker;
+        };
+
+        CHECK (feed ([] (float*, float*) {}) == RelayLink::MarkerState::silent);
+        CHECK (feed ([] (float* left, float* right) { RelayLink::writeMarker (left, right, 1000, relayBlockSize); }) == RelayLink::MarkerState::flowing);
+        CHECK (feed ([] (float* left, float*) { left[0] = 0.1f; }) == RelayLink::MarkerState::unreadable);
+        CHECK (relay.getLink().getStatus().markerUnreadable == 1);
+        CHECK_FALSE (relay.getLink().getStatus().bayLatencyLowest.has_value()); // no receiver to compare with
+
+        // Every channel is silent afterwards, the Marker input's included
+        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            CHECK (juce::exactlyEqual (buffer.getMagnitude (channel, 0, relayBlockSize), 0.0f));
+
+        relay.getBus (true, RelayProcessor::markerInputBus)->enable (false);
+        CHECK (feed ([] (float* left, float* right) { RelayLink::writeMarker (left, right, 1000, relayBlockSize); }) == RelayLink::MarkerState::noPin);
+    }
+
     relay.releaseResources();
+}
+
+TEST_CASE ("The position marker carries every sample's position exactly, and nothing else reads as one", "[relay][marker]")
+{
+    constexpr int length = 300;
+    std::array<float, length> left {}, right {};
+    constexpr auto period = juce::int64 (1) << RelayLink::markerBits;
+
+    for (const auto position : { juce::int64 (0), juce::int64 (123456789), period - 100, period * 5 + 7 })
+    {
+        RelayLink::writeMarker (left.data(), right.data(), position, length);
+        CHECK (RelayLink::readMarker (left.data(), right.data(), length) == position % period);
+        // Inaudible even if it ends up in audio: below 2^-18 (about -108 dB)
+        CHECK (*std::max_element (left.begin(), left.end()) < 1.0f / 262144.0f);
+        CHECK (*std::max_element (right.begin(), right.end()) < 1.0f / 262144.0f);
+    }
+
+    const auto changed = [&] (auto change) {
+        RelayLink::writeMarker (left.data(), right.data(), 5000, length);
+        change();
+        return RelayLink::readMarker (left.data(), right.data(), length).has_value();
+    };
+
+    CHECK_FALSE (changed ([&] { std::swap (left[10], left[11]); })); // a gap
+    CHECK_FALSE (changed ([&] { right[20] = 0.0f; })); // the complement doesn't match
+    CHECK_FALSE (changed ([&] { left[30] += 1.0f / 2199023255552.0f; })); // half a step (2^-41): not a marker value
+    CHECK_FALSE (changed ([&] { left[40] = -left[40]; }));
+    CHECK_FALSE (changed ([&] { left[50] = std::numeric_limits<float>::infinity(); }));
+    CHECK_FALSE (changed ([&] { left[60] = std::numeric_limits<float>::quiet_NaN(); }));
+    CHECK_FALSE (changed ([&] { juce::FloatVectorOperations::multiply (left.data(), 0.5f, length); juce::FloatVectorOperations::multiply (right.data(), 0.5f, length); }));
+    CHECK_FALSE (changed ([&] { std::fill (left.begin(), left.end(), 0.0f); std::fill (right.begin(), right.end(), 0.0f); }));
+    CHECK_FALSE (RelayLink::readMarker (left.data(), right.data(), 0).has_value());
 }

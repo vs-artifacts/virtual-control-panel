@@ -11,6 +11,8 @@ class RelayProcessor final : public juce::AudioProcessor
 {
 public:
     static constexpr int numControlOutputs = RelayLink::numControls;
+    static constexpr int markerInputBus = 1;
+    static constexpr int markerOutputBus = 1 + numControlOutputs;
 
     RelayProcessor();
 

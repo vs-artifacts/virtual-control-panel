@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../link/BayNames.h"
 #include "../link/LinkApi.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 
@@ -36,6 +37,16 @@ public:
         caughtUp, // receiver, 1-block round trip: skipped ahead to the panel's newest block
     };
 
+    // The position marker: a receiver plays the position of every sample it plays on its Marker output; wired straight
+    // into the transmitter's Marker input, beside the bay's FL plugin, it arrives as late as that plugin's audio
+    enum class MarkerState {
+        unknown,
+        noPin, // the Marker pin is switched off (or isn't stereo)
+        silent, // receiver: nothing played; transmitter: nothing arriving
+        unreadable, // transmitter: not a marker, or one with a gap or a change in it
+        flowing, // receiver: sending positions; transmitter: reading them
+    };
+
     struct Status
     {
         Mode mode = Mode::receiver;
@@ -51,10 +62,26 @@ public:
         std::optional<int> blockMin, blockMax;
         bool controlsLive = false; // receiver: the last block's values came from the panel (otherwise they're held)
         std::array<float, numControls> controls {};
+        MarkerState marker = MarkerState::unknown;
+        std::optional<int> bayLatencyNow, bayLatencyLowest, bayLatencyHighest; // transmitter: samples, from the marker
+        juce::uint64 markerUnreadable = 0; // transmitter: blocks
     };
 
     explicit RelayLink (const hs_link_api&);
     ~RelayLink();
+
+    // What the hub shows for one panel name in use (diagnostics). Running: its count moved since the last look.
+    struct PanelView
+    {
+        int number = 0;
+        bool panel = false, panelRunning = false;
+        bool receiver = false, receiverRunning = false;
+        bool transmitter = false, transmitterRunning = false;
+    };
+
+    // Message thread
+    std::vector<PanelView> getPanels();
+    int getLinkedPanel() const noexcept { return linkedPanel.load(); }
 
     // Message thread
     void setMode (Mode);
@@ -65,8 +92,9 @@ public:
     Status getStatus();
 
     // Audio thread, with the relay's whole buffer (main input and output on channels 0 and 1): a receiver fills the
-    // main output, a transmitter sends the main input. Every output channel ends up silent otherwise.
-    void process (juce::AudioBuffer<float>&);
+    // main output, a transmitter sends the main input. Every output channel ends up silent otherwise. The Marker pins
+    // are the first of two channels each, or -1 when off.
+    void process (juce::AudioBuffer<float>&, int markerInput = -1, int markerOutput = -1);
 
     // A control output's value: what the panel last sent (held through misses and without a link), kept with the
     // relay's state so knobs don't drop when a project opens. Any thread.
@@ -76,11 +104,21 @@ public:
     // Blocks without new audio from the other side before it counts as stopped rather than missed
     static constexpr int stallBlocks = 2;
 
+    // The marker's encoding: each sample's position modulo 2^22 (87 s at 48 kHz) times 2^-40 on the left, its
+    // complement on the right. Every value is exact in a float and below 2^-18 (inaudible), so any gain or mixing makes
+    // it unreadable.
+    static constexpr int markerBits = 22;
+    static void writeMarker (float* left, float* right, juce::int64 position, int numSamples) noexcept;
+
+    // The first sample's position modulo 2^markerBits, if every sample is a marker and they run on without a gap
+    static std::optional<juce::int64> readMarker (const float* left, const float* right, int numSamples) noexcept;
+
 private:
     void unlink();
-    void receive (juce::AudioBuffer<float>&);
+    void receive (juce::AudioBuffer<float>&, int markerOutput);
     void receiveControls (int32_t reader, juce::int64 position);
-    void transmit (const juce::AudioBuffer<float>&);
+    void transmit (const juce::AudioBuffer<float>&, int markerInput);
+    std::optional<juce::int64> readMarkerInput (const juce::AudioBuffer<float>&, int markerInput) noexcept;
     bool matchesOwnRate (double) const noexcept;
     void noteMiss (Miss) noexcept;
 
@@ -94,6 +132,9 @@ private:
     std::atomic<int> ownMaxBlock { 0 };
     std::atomic<bool> audioInUse { false };
 
+    // Message thread: each panel's send writes, send reads and return writes at the last look
+    std::array<std::array<juce::uint64, 3>, BayNames::maxPanels + 1> panelCounts {};
+
     // Audio thread only
     juce::uint32 seenLinks = 0;
     bool synced = false, primed = false;
@@ -106,6 +147,8 @@ private:
     std::array<std::atomic<float>, numControls> controls {};
     std::atomic<juce::uint64> missed { 0 };
     std::atomic<Miss> lastMiss { Miss::none };
+    std::atomic<MarkerState> markerState { MarkerState::unknown };
+    std::atomic<juce::uint64> markerUnreadable { 0 };
     bool streaming = false; // audio thread: only a block missing from a running stream counts as missed
 
     static constexpr int unset = std::numeric_limits<int>::min();
@@ -113,6 +156,7 @@ private:
     static void raise (std::atomic<int>&, int) noexcept;
     static std::optional<int> valueOf (int) noexcept;
     std::atomic<int> headroomNow { unset }, headroomLowest { unset }, blockMin { unset }, blockMax { unset };
+    std::atomic<int> bayLatencyNow { unset }, bayLatencyLowest { unset }, bayLatencyHighest { unset };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RelayLink)
 };

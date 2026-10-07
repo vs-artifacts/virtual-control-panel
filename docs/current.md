@@ -2,24 +2,25 @@
 
 The live handover: where things stand, what's next, and exactly what to read for it. Rewritten at the end of every session. Lasting decisions belong in `docs/decisions.md`; this file only points to them.
 
-**Last updated:** 2026-10-05, end of session. Everything is committed and pushed.
+**Last updated:** 2026-10-07, end of session. Everything is committed and pushed.
 
 ## Where things stand
-- **Slice 1b.4, external module bays:** control outputs, automatic round trip, bypass and dropouts, probe and Lag > Measure all **passed the FL re-check** (2026-10-03). **The merge experiment showed Patcher lines up paths that merge, so the position marker works.** Regression findings and likely causes: `decisions.md`, "FL re-check, merge experiment, Diagnostics panel" > "Regression stages 1 and 4".
-- **The UI wrap-up passed the FL check (2026-10-05)** (`decisions.md`, "FL check of that build (2026-10-05) and follow-ups"): keys while the mouse is held work again (route B: FL's control message up the window chain; route D, the key message straight to FL's main window, also worked and is the fallback); Smooth text moves in proportion (tune later with the real fonts); attached windows in FL resize around any anchor and center on first open; double-click resets a control.
-- **Built after the check, not FL-checked (small):** route B is now the only route (the choice is gone); "Double-click on a control" settings: speed (1 to 2,000 ms, default 500, the page's own detection) and a no-op "double-click sets a value" placeholder.
-- **Automated tests pass in Debug and Release** (62 test cases), warning-free.
+- **Slice 1b.4, the rest (planned 2026-10-06):** C (a bay plugin's own latency via the position marker) in two builds, then A (regression fixes), then B (real blocks). The settings defaults file is postponed. Plan and reasons: `decisions.md`, "The rest of 1b.4: plan, and the position marker".
+- **C1 (relay side) passed the FL check (2026-10-07):** Patcher lines up the transmitter's second input pin, so the marker reads the bay plugin's latency exactly (12,288 / 192 / 0, as FL reports). Since the check, the marker is written about −108 dB at most (inaudible if it ends up in audio), and the relay window has a "Panels in the hub" section for link problems.
+- **Link problems seen during that check didn't come back** in a fresh project (details and the open sleep test: "FL check of C1").
+- **Automated tests pass in Debug and Release** (65 test cases), warning-free.
 
 ## Next
-1. **Next session: the settings defaults file** (user: soon). Propose first: one place for every setting's default (now spread over `PluginSettings.cpp` and `ui/src/lib/editor.svelte.ts`); source-only, or also a file beside the settings file (then untrusted input). A quick look in FL that the double-click speed field works can ride along.
-2. **Then back to slice 1b.4,** each with the user's go:
-   - the regression findings' candidate fixes (`decisions.md`, "Regression stages 1 and 4");
-   - counting the round trip in FL's real blocks (following what FL delivers);
-   - **a bay plugin's own latency with the position marker** (the last part of 1b.4).
-3. **After 1b.4: slice 1b.5, plugin swap.**
+1. **Next session: C2, the panel uses the bay latency** (`decisions.md`, "C2: the panel uses the bay latency (settled for the next session)"). Propose first, then build with the user's go:
+   - how the transmitter publishes L through the hub (hub version 3), and what the panel shows;
+   - the settle rule's setting (name, default about 50 ms, range) and where it lives (Settings tab);
+   - the cap (32,768 proposed) and the history size;
+   - the FL checklist for C2.
+2. **Then A: the regression fixes,** then **B: real blocks** (both specified in "Plan (user, 2026-10-06)").
+3. **Then the settings defaults file** (postponed), then **slice 1b.5, plugin swap.**
 
 ## FL check: next build
-Write it when the next build is done. Carry over: the double-click speed field (a fast and a slow setting both behave) and the placeholder toggle (double-click still resets).
+Write it with C2. Carry over (optional): a sleep and wake test with a working bay (play, sleep the PC, wake it, read every relay's Panels section and the panel's Diagnostics before touching anything).
 
 ## Bay link FL checklist (for regression runs when bays change)
 Before starting: the panel and relay junctions in the system VST3 folder point at the Debug builds, so FL picks up this build. If FL was open during the build, restart it. Note FL's sample rate and buffer length (Options > Audio settings). Terms changed after these were written: "Bay return" is now Bypass off, "Direct" is Bypass on, and "Missing bay return blocks" is now Bay dropouts (Safe was "Bypass").
@@ -32,8 +33,8 @@ Before starting: the panel and relay junctions in the system VST3 folder point a
 
 ### 1. Link alone (no FL plugin)
 1. New project. Patcher on a channel, with **Patcher's smart disable off**. Inside it: the panel (MIDI from "From FL Studio", audio to "To FL Studio"), relay A set to **Receiver** in its window, relay B set to **Transmitter**.
-2. Wire the receiver's main output into the transmitter's main input. No wire into the receiver yet.
-3. If the transmitter's window shows "Audio: not running", wire its output to "To FL Studio" too (it outputs silence).
+2. Wire the receiver's main output into the transmitter's main input, and its Marker output into the transmitter's Marker input (assign the Marker pins in each wrapper's Connections; target 1 is enough for the Marker output, with one pin added on the node). No wire into the receiver yet.
+3. (Dropped: wiring the transmitter to "To FL Studio" makes no difference.)
 4. **Expect:**
    - Receiver: "Linked to Panel 1, panel running".
    - Transmitter: "Linked to Panel 1, receiver playing".
@@ -101,28 +102,29 @@ Before starting: the panel and relay junctions in the system VST3 folder point a
   - Saved with the instance and the project: the tab, whether Diagnostics is open, every scroll position, the size, Bypass, control values, mutes.
   - New instances start with Bypass off; the panel's own sound only plays when the return is missing (Safe) or Bypass is on.
   - Unchanged: the fixed test routing, the FL gain correction setting. The panel always reports the round trip as latency, even with no relays.
-- **Relay:** unchanged: 16 mono control outputs ("Control 1" to "Control 16") and window lines: "Control outputs: from the panel / holding the last values / silent (receivers only)", and all 16 exact values.
+- **Relay:** 16 mono control outputs ("Control 1" to "Control 16"), then a stereo **"Marker" output** (at most about −108 dB); a stereo **"Marker" input** as its second input pin. Window lines: link, round trip, missed blocks, headroom, block sizes, **Marker** (receiver: sending / silent / switched off; transmitter: bay latency now, range since reset, unreadable blocks), audio running, input peak, "Control outputs: from the panel / holding the last values / silent (receivers only)", all 16 exact values, Reset counters, and **"Panels in the hub"** (each panel name with its panel, receiver and transmitter: none / stopped / running; * marks this relay's). Window 560 × 640. The panel's return is still L late with a latent bay plugin (C2 fixes that).
 - **Code to know:**
   - `source/link/` (`LinkApi.h` version 2 with value sets, `LinkHub.cpp`, `BayNames.h`)
-  - `source/relay/` (`RelayLink`: `receive` with its skip-ahead and miss counting, `transmit` with its stamping; `RelayProcessor`; `RelayEditor`)
+  - `source/relay/` (`RelayLink`: `receive` with its skip-ahead and miss counting, `transmit` with its stamping, `writeMarker` / `readMarker` / `readMarkerInput` and the bay latency in `transmit`, `getPanels`; `RelayProcessor`: the buses, `markerInputBus`, `markerOutputBus`; `RelayEditor`: `describeMarker`, `describePanels`)
   - `source/engine/BayLink` (`process`: flowing, warm-up, headroom and the Automatic check; `mix` for bypass and dropouts; `runTest` / `captureTest`; `findLag`)
   - `source/engine/Engine` (`MuteStage`, `setMuted`)
   - `source/PluginProcessor` (saved state: editor view, scroll areas), `source/PluginEditor` (`describeEditor`, `describeLink`, the page's events, `continueResize` with the chords, `reportHostDiagnostics`)
   - `source/KeyForwarder` (`postToHostOf`: route B and the key log), `source/EditorPlacement` (`findMovableWindow`: FL's attached `TPluginForm`, `tryToPlace`, `describeWindows`), `source/EditorScale.h` (`snap`), `source/bridge/ControlSession` (the catalog's `d`)
   - `ui/src/App.svelte` (layout), `ui/src/lib/layout.ts` (`columnFlow`, `scrollMemory`), `ui/src/lib/display.svelte.ts` (smooth and sharp rendering, the layer redraw), `ui/src/lib/editor.svelte.ts`, `ui/src/lib/params.svelte.ts` (`resetToDefault`), `ui/src/components/LinkStatus.svelte`, `ui/src/components/HostDiagnostics.svelte`, `ui/src/components/ResizeGrips.svelte`, `ui/src/components/PluginsTab.svelte`, `ui/src/components/Slider.svelte`
-  - Tests: `tests/LinkHubTests.cpp`, `tests/LinkTests.cpp`, `tests/RelayTests.cpp`, `tests/WebUiTests.cpp`, `tests/EditorTests.cpp`, `tests/HostingTests.cpp`, `tests/ControlTests.cpp`, `tests/KeyForwarderTests.cpp` (also the settings file)
+  - Tests: `tests/LinkHubTests.cpp`, `tests/LinkTests.cpp` (the simulated `Patcher` has a marker wire: `markerDelay`, `markerGain`; test "A transmitter reads the bay plugin's latency…"), `tests/RelayTests.cpp` (the marker's encoding), `tests/WebUiTests.cpp`, `tests/EditorTests.cpp`, `tests/HostingTests.cpp`, `tests/ControlTests.cpp`, `tests/KeyForwarderTests.cpp` (also the settings file)
 
 ## Open items
-- **The regression findings' candidate fixes** (`decisions.md`, "Regression stages 1 and 4"): Safe dropouts with hysteresis; Automatic counting receiver misses without a flowing return; matching receiver miss counts (and maybe playing the newest block on skip-ahead); headroom only from arriving blocks; optionally a "return silent while the sent audio isn't" line.
-- **A bay plugin's own latency (L), automatically, with the position marker:** for bypass and dropout alignment, the crossfade, the latency told to FL, and later the graph's compensation. To check in that slice: Patcher compensating a sidechain input, and whether the transmitter's wire to "To FL Studio" makes Patcher delay the panel's own output.
+- **C2, then A and B** (`decisions.md`, "The rest of 1b.4: plan, and the position marker"). A: headroom from arriving blocks; Safe fade-back hold (toggle + time setting); Automatic counting receiver misses without a flowing return; matching miss counts (skip-ahead plays the newest block); the "return silent while the sent audio isn't" line. B: real blocks with a lowest-tempo floor (empty by default; FL's block is exactly 30,000 / BPM at 48 kHz).
+- **Unexplained link problems** from the C1 check (a re-added panel not relinking; a second panel's link carrying the first receiver's marker as audio after the PC had slept). Not reproduced; the Panels section will show it if it returns. Optional sleep and wake test.
+- **FL's "Use time offset"** (wrapper option): a thread for tempo-synced effects in a bay, which may act off the grid by the receiver's lead. Not investigated yet.
 - A control lead: not by default (it costs the same latency it cancels); maybe a setting later.
 - **Pops (polish, later):** adding or removing relays, cutting wires inside the bay, switching relay modes or the round trip, a new transmitter's first audio. See `decisions.md`, "FL check (2026-10-02) and fixes".
-- Counting the round trip in FL's real blocks rather than the announced buffer: the largest real block follows the tempo (about one tick), so it must follow what FL delivers.
+- Counting the round trip in FL's real blocks: planned as B.
 - Fixed buffer sizes in the Fruity Wrapper: a measured test after the position marker.
 - Attached windows, first-open centering and the keys route: done (FL-checked 2026-10-05).
 - Double-click "sets a value": a popup with a text entry (and possibly more); the setting exists as a placeholder.
 - Shift+drag: free aspect ratio (each axis stepped with Ctrl), once the panel's layout can follow.
-- **A settings defaults file (JSON): to be implemented soon** (user, 2026-10-05), right after this step's FL check. Open question for its proposal: edited in the source only, or also a file beside the settings file (then it's untrusted input, validated like the settings file).
+- **The settings defaults file (JSON): postponed** (user, 2026-10-06) until after 1b.4. Open question for its proposal: edited in the source only, or also a file beside the settings file (then it's untrusted input, validated like the settings file).
 - Optional: a panel-side "check 1 block again" button for Automatic.
 - Choosing and naming bay controls in the UI.
 - The macOS finder (written down, not built). Bays inside the panel's routing graph (now one bay after the engine's output). Relay naming beyond "first panel found".
@@ -130,10 +132,10 @@ Before starting: the panel and relay junctions in the system VST3 folder point a
 
 ## Read for this step
 In `docs/decisions.md`, by heading:
-- **"FL re-check, merge experiment, Diagnostics panel"** > **"FL check of that build (2026-10-05) and follow-ups"** (the latest results and the double-click settings), and the settings mentioned there (`source/PluginSettings`, `ui/src/lib/editor.svelte.ts`, `ui/src/components/SettingsTab.svelte`) for the defaults file.
-- **"Slice 1b: bridge"** > **"Editor fixes after the first FL check (1b.1)"** (the settings file is untrusted input) and **"Slice 1b.2"** > **"Editor placement"**.
-- For the later bay work: **"Bay control outputs, automatic round trip, bypass"**, **"Bay link: the audio round-trip test"** > **"Timing"**, and the rest of "FL re-check, merge experiment, Diagnostics panel".
-- **"Platforms and toolchain"**: macOS is required (keep the Windows window and key code isolated).
+- **"The rest of 1b.4: plan, and the position marker"** (all of it).
+- **"Bay link: the audio round-trip test"** > **"The hub"** and **"Timing"** (stamping, the receiver's lead), **"Bay control outputs, automatic round trip, bypass"** > **"Values in the hub (version 2)"** (how the last version change was done) and **"Bypass crossfade and dropouts"** (what C2 lines up).
+- **"FL re-check, merge experiment, Diagnostics panel"** > **"The merge experiment"** and **"Regression stages 1 and 4"** (for A).
+- **"Platforms and toolchain"**: macOS is required.
 
 Read the rest of `decisions.md` only for questions these don't cover.
 

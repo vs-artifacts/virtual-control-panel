@@ -6,13 +6,15 @@ juce::AudioProcessor::BusesProperties RelayProcessor::createBuses()
 {
     auto buses = BusesProperties()
                      .withInput ("Input", juce::AudioChannelSet::stereo(), true)
+                     .withInput ("Marker", juce::AudioChannelSet::stereo(), true)
                      .withOutput ("Output", juce::AudioChannelSet::stereo(), true);
 
     // Active from the start: FL leaves outputs that start off switched off. Mono: FL's Peak Controller reads one channel.
     for (int number = 1; number <= numControlOutputs; ++number)
         buses = buses.withOutput ("Control " + juce::String (number), juce::AudioChannelSet::mono(), true);
 
-    return buses;
+    // After the controls, so FL's target numbers for them stay put
+    return buses.withOutput ("Marker", juce::AudioChannelSet::stereo(), true);
 }
 
 RelayProcessor::RelayProcessor()
@@ -35,10 +37,12 @@ bool RelayProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
     if (layouts.getMainOutputChannelSet() != stereo || (!input.isDisabled() && input != stereo))
         return false;
 
-    // Control outputs take mono, stereo or off, so a host's pick for them can't reject the whole layout
-    for (int bus = 1; bus < layouts.outputBuses.size(); ++bus)
-        if (layouts.outputBuses[bus].size() > 2)
-            return false;
+    // The other buses take mono, stereo or off, so a host's pick for them can't reject the whole layout (the marker
+    // only works in stereo)
+    for (const auto* buses : { &layouts.inputBuses, &layouts.outputBuses })
+        for (int bus = 1; bus < buses->size(); ++bus)
+            if (buses->getReference (bus).size() > 2)
+                return false;
 
     return true;
 }
@@ -55,8 +59,13 @@ void RelayProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         for (int channel = 0; channel < std::min (2, buffer.getNumChannels()); ++channel)
             buffer.clear (channel, 0, buffer.getNumSamples());
 
-    // The main output shares its channels with the input; every output is silent except what the link plays
-    link.process (buffer);
+    const auto stereoPin = [this] (bool isInput, int bus) {
+        const auto* pin = getBus (isInput, bus);
+        return pin != nullptr && pin->isEnabled() && pin->getNumberOfChannels() == 2 ? getChannelIndexInProcessBlockBuffer (isInput, bus, 0) : -1;
+    };
+
+    // Outputs share their channels with the inputs; every output is silent except what the link plays
+    link.process (buffer, stereoPin (true, markerInputBus), stereoPin (false, markerOutputBus));
 
     // A receiver's control outputs: each value as a steady level, held when the panel's values don't arrive
     if (getMode() != RelayLink::Mode::receiver)

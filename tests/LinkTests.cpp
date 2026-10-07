@@ -12,7 +12,9 @@ namespace
     constexpr int rigBlock = 512;
     using Dropouts = BayLink::Dropouts;
     using Mode = RelayLink::Mode;
-    constexpr int relayChannels = 2 + RelayProcessor::numControlOutputs;
+    constexpr int relayChannels = 2 + RelayProcessor::numControlOutputs + 2; // main, controls, marker
+    constexpr int markerOutChannel = 2 + RelayProcessor::numControlOutputs;
+    constexpr int markerInChannel = 2;
 
     BayLink::HubSearch inProcessHub()
     {
@@ -117,6 +119,12 @@ namespace
             if (!panelFirst)
                 runPanel (numSamples);
 
+            for (int i = 0; i < numSamples; ++i)
+            {
+                markerLeft.push_back (relayBuffer.getSample (markerOutChannel, i) * markerGain);
+                markerRight.push_back (relayBuffer.getSample (markerOutChannel + 1, i) * markerGain);
+            }
+
             juce::AudioBuffer<float> wire (2, numSamples);
             wire.copyFrom (0, 0, relayBuffer, 0, 0, numSamples);
             wire.copyFrom (1, 0, relayBuffer, 1, 0, numSamples);
@@ -127,6 +135,22 @@ namespace
                 relayBuffer.clear();
                 relayBuffer.copyFrom (0, 0, wire, 0, 0, numSamples);
                 relayBuffer.copyFrom (1, 0, wire, 1, 0, numSamples);
+
+                // Patcher delays the marker's wire to line it up with the bay plugin's output
+                if (markerDelay >= 0)
+                {
+                    const auto start = static_cast<juce::int64> (markerLeft.size()) - numSamples - markerDelay;
+
+                    for (int i = 0; i < numSamples; ++i)
+                    {
+                        if (const auto index = start + i; index >= 0)
+                        {
+                            relayBuffer.setSample (markerInChannel, i, markerLeft[static_cast<size_t> (index)]);
+                            relayBuffer.setSample (markerInChannel + 1, i, markerRight[static_cast<size_t> (index)]);
+                        }
+                    }
+                }
+
                 transmitter->processBlock (relayBuffer, midi);
             }
         }
@@ -213,6 +237,9 @@ namespace
         float receiverPeak = 0.0f; // the loudest the receiver has played
         std::array<float, RelayProcessor::numControlOutputs> controls {}; // the receiver's control outputs, last block
         int unsteadyBlocks = 0; // control outputs that changed level within a block
+        int markerDelay = -1; // samples; -1: no wire from the receiver's Marker output to the transmitter's Marker input
+        float markerGain = 1.0f;
+        std::vector<float> markerLeft, markerRight; // everything the receiver's Marker output has played
     };
 
     // Warm-up: the relays line up and the round trip fills
@@ -1023,6 +1050,98 @@ namespace
         while (!done() && juce::Time::getMillisecondCounter() < deadline)
             juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
     }
+}
+
+TEST_CASE ("A transmitter reads the bay plugin's latency from the receiver's position marker", "[link][marker]")
+{
+    struct Case
+    {
+        int latency;
+        int roundTripBlocks;
+        Order order;
+        bool varying;
+    };
+
+    for (const auto& [latency, blocks, order, varying] : { Case { 0, 2, Order::panelFirst, false },
+             Case { 3, 2, Order::panelFirst, false },
+             Case { 576, 1, Order::panelFirst, true },
+             Case { 12288, 2, Order::panelFirst, false },
+             Case { 12480, 3, Order::random, true } })
+    {
+        INFO ("latency " << latency << ", round trip " << blocks << " blocks, varying blocks " << varying);
+        Patcher patcher;
+        patcher.addAll (blocks);
+        patcher.markerDelay = latency;
+
+        if (latency > 0)
+            patcher.bay = delayingBay (latency);
+
+        // Long enough for the marker to come through the bay plugin's latency
+        const auto warmUp = warmUpBlocks + 2 * latency / rigBlock;
+        varying ? patcher.runVarying (warmUp * 4, order) : patcher.run (warmUp, order);
+        patcher.transmitter->getLink().resetCounters();
+        varying ? patcher.runVarying (400, order) : patcher.run (200, order);
+
+        const auto status = patcher.transmitter->getLink().getStatus();
+        CHECK (status.marker == RelayLink::MarkerState::flowing);
+        CHECK (status.bayLatencyNow == latency);
+        CHECK (status.bayLatencyLowest == latency);
+        CHECK (status.bayLatencyHighest == latency);
+        CHECK (status.markerUnreadable == 0);
+        CHECK (patcher.receiver->getLink().getStatus().marker == RelayLink::MarkerState::flowing);
+    }
+
+    SECTION ("without the wire, or with anything changing the marker on its way, there's no latency to read")
+    {
+        Patcher patcher;
+        patcher.addAll (2);
+        patcher.run (warmUpBlocks, Order::panelFirst);
+        CHECK (patcher.transmitter->getLink().getStatus().marker == RelayLink::MarkerState::silent);
+
+        patcher.markerDelay = 0;
+        patcher.markerGain = 0.999f;
+        patcher.run (warmUpBlocks, Order::panelFirst);
+        patcher.transmitter->getLink().resetCounters();
+        patcher.run (10, Order::panelFirst);
+
+        const auto status = patcher.transmitter->getLink().getStatus();
+        CHECK (status.marker == RelayLink::MarkerState::unreadable);
+        CHECK (status.markerUnreadable == 10);
+        CHECK_FALSE (status.bayLatencyNow.has_value());
+        CHECK_FALSE (status.bayLatencyLowest.has_value());
+    }
+}
+
+TEST_CASE ("A relay shows what the hub sees for every panel", "[link]")
+{
+    Patcher patcher;
+    patcher.addAll (2);
+    patcher.run (warmUpBlocks, Order::panelFirst);
+
+    const auto find = [] (const std::vector<RelayLink::PanelView>& panels, int number) {
+        const auto view = std::find_if (panels.begin(), panels.end(), [number] (const auto& p) { return p.number == number; });
+        return view != panels.end() ? std::optional (*view) : std::nullopt;
+    };
+
+    auto& link = patcher.receiver->getLink();
+    link.getPanels();
+    patcher.run (2, Order::panelFirst);
+    const auto running = find (link.getPanels(), 1);
+    REQUIRE (running.has_value());
+    CHECK (link.getLinkedPanel() == 1);
+    CHECK ((running->panel && running->panelRunning && running->receiver && running->receiverRunning && running->transmitter && running->transmitterRunning));
+
+    // Nothing has run since the last look; a second panel holds its own name, with no relays
+    BayLink second (inProcessHub);
+    second.prepare (rigRate, rigBlock);
+    REQUIRE (second.getStatus().linkName == "Panel 2");
+    const auto panels = link.getPanels();
+    const auto stopped = find (panels, 1);
+    const auto other = find (panels, 2);
+    REQUIRE (stopped.has_value());
+    REQUIRE (other.has_value());
+    CHECK ((stopped->panel && !stopped->panelRunning && stopped->receiver && !stopped->receiverRunning));
+    CHECK ((other->panel && !other->receiver && !other->transmitter));
 }
 
 TEST_CASE ("The panel finds the hub in the real relay file once a host has loaded it", "[link][relayfile]")

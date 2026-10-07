@@ -19,6 +19,15 @@ namespace
 
         std::atomic<bool>& flag;
     };
+
+    constexpr juce::int64 markerMask = (juce::int64 (1) << RelayLink::markerBits) - 1;
+    // 2^-40: the largest marker value is below 2^-18 (about -108 dB), so a marker that ends up in audio stays inaudible
+    constexpr float markerScale = 1.0f / 1099511627776.0f;
+    constexpr float markerUnscale = 1099511627776.0f;
+    constexpr float markerLimit = 1.0f / 262144.0f; // 2^-18
+
+    // Compared by their bits: fast-math builds may assume NaN never happens
+    juce::uint32 bitsOf (float value) noexcept { return std::bit_cast<juce::uint32> (value); }
 }
 
 RelayLink::RelayLink (const hs_link_api& hubToUse)
@@ -133,7 +142,7 @@ void RelayLink::unlink()
         hub.close (writer);
 }
 
-void RelayLink::process (juce::AudioBuffer<float>& buffer)
+void RelayLink::process (juce::AudioBuffer<float>& buffer, int markerInput, int markerOutput)
 {
     const AudioUse use (audioInUse);
     const auto numSamples = buffer.getNumSamples();
@@ -153,17 +162,19 @@ void RelayLink::process (juce::AudioBuffer<float>& buffer)
     if (mode.load() == Mode::receiver)
     {
         buffer.clear();
-        receive (buffer);
+        receive (buffer, markerOutput >= 0 && markerOutput + 1 < buffer.getNumChannels() ? markerOutput : -1);
     }
     else
     {
-        transmit (buffer);
+        transmit (buffer, markerInput >= 0 && markerInput + 1 < buffer.getNumChannels() ? markerInput : -1);
         buffer.clear();
     }
 }
 
-void RelayLink::receive (juce::AudioBuffer<float>& buffer)
+void RelayLink::receive (juce::AudioBuffer<float>& buffer, int markerOutput)
 {
+    markerState.store (markerOutput < 0 ? MarkerState::noPin : MarkerState::silent, std::memory_order_relaxed);
+
     const auto reader = sendReader.load();
     auto info = emptyInfo();
 
@@ -235,6 +246,13 @@ void RelayLink::receive (juce::AudioBuffer<float>& buffer)
         lower (headroomNow, headroom);
         lower (headroomLowest, headroom);
         receiveControls (reader, cursor + numSamples - 1);
+
+        if (markerOutput >= 0)
+        {
+            writeMarker (buffer.getWritePointer (markerOutput), buffer.getWritePointer (markerOutput + 1), cursor, numSamples);
+            markerState.store (MarkerState::flowing, std::memory_order_relaxed);
+        }
+
         cursor += numSamples;
         streaming = true;
         return;
@@ -269,8 +287,9 @@ void RelayLink::setControl (int index, float value) noexcept
         controls[static_cast<size_t> (index)].store (juce::jlimit (0.0f, 1.0f, value), std::memory_order_relaxed);
 }
 
-void RelayLink::transmit (const juce::AudioBuffer<float>& buffer)
+void RelayLink::transmit (const juce::AudioBuffer<float>& buffer, int markerInput)
 {
+    const auto marker = readMarkerInput (buffer, markerInput);
     const auto writer = returnWriter.load();
     const auto observer = sendObserver.load();
     auto info = emptyInfo();
@@ -320,6 +339,21 @@ void RelayLink::transmit (const juce::AudioBuffer<float>& buffer)
     receiverStall = 0;
     otherSideRunning.store (true, std::memory_order_relaxed);
 
+    // The receiver has just played up to readEnd; the marker shows which of its blocks is arriving here now
+    if (marker.has_value())
+    {
+        const auto readEnd = info.last_read_position + info.last_read_length;
+        auto latency = (readEnd - (*marker + buffer.getNumSamples())) & markerMask;
+
+        if (latency > markerMask / 2)
+            latency -= markerMask + 1;
+
+        const auto samples = static_cast<int> (latency);
+        bayLatencyNow.store (samples, std::memory_order_relaxed);
+        lower (bayLatencyLowest, samples);
+        raise (bayLatencyHighest, samples);
+    }
+
     if (readsSince > 1 && streaming)
         noteMiss (Miss::receiverRanTwice);
 
@@ -361,6 +395,73 @@ bool RelayLink::matchesOwnRate (double panelRate) const noexcept
     return own > 0.0 && std::abs (panelRate - own) < 0.001;
 }
 
+std::optional<juce::int64> RelayLink::readMarkerInput (const juce::AudioBuffer<float>& buffer, int markerInput) noexcept
+{
+    if (markerInput < 0)
+    {
+        markerState.store (MarkerState::noPin, std::memory_order_relaxed);
+        return std::nullopt;
+    }
+
+    const auto* left = buffer.getReadPointer (markerInput);
+    const auto* right = buffer.getReadPointer (markerInput + 1);
+    const auto numSamples = buffer.getNumSamples();
+    const auto isZero = [] (float sample) { return (bitsOf (sample) & 0x7fffffffu) == 0; };
+
+    if (std::all_of (left, left + numSamples, isZero) && std::all_of (right, right + numSamples, isZero))
+    {
+        markerState.store (MarkerState::silent, std::memory_order_relaxed);
+        return std::nullopt;
+    }
+
+    const auto marker = readMarker (left, right, numSamples);
+
+    if (!marker.has_value())
+        markerUnreadable.fetch_add (1, std::memory_order_relaxed);
+
+    markerState.store (marker.has_value() ? MarkerState::flowing : MarkerState::unreadable, std::memory_order_relaxed);
+    return marker;
+}
+
+void RelayLink::writeMarker (float* left, float* right, juce::int64 position, int numSamples) noexcept
+{
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const auto value = (position + i) & markerMask;
+        left[i] = static_cast<float> (value) * markerScale;
+        right[i] = static_cast<float> (markerMask - value) * markerScale;
+    }
+}
+
+std::optional<juce::int64> RelayLink::readMarker (const float* left, const float* right, int numSamples) noexcept
+{
+    if (numSamples <= 0)
+        return std::nullopt;
+
+    // Positive floats order like their bits, so this also turns away negatives, NaN and infinity
+    const auto limit = bitsOf (markerLimit);
+    juce::int64 first = 0;
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        if (bitsOf (left[i]) >= limit)
+            return std::nullopt;
+
+        const auto value = static_cast<juce::int64> (left[i] * markerUnscale);
+
+        // Exactly a marker value, its exact complement beside it, and the one after the previous sample's
+        if (bitsOf (static_cast<float> (value) * markerScale) != bitsOf (left[i])
+            || bitsOf (static_cast<float> (markerMask - value) * markerScale) != bitsOf (right[i])
+            || (i > 0 && value != ((first + i) & markerMask)))
+            return std::nullopt;
+
+        if (i == 0)
+            first = value;
+    }
+
+    return first;
+}
+
 void RelayLink::noteMiss (Miss reason) noexcept
 {
     missed.fetch_add (1, std::memory_order_relaxed);
@@ -371,8 +472,9 @@ void RelayLink::resetCounters()
 {
     missed.store (0);
     lastMiss.store (Miss::none);
+    markerUnreadable.store (0);
 
-    for (auto* value : { &headroomNow, &headroomLowest, &blockMin, &blockMax })
+    for (auto* value : { &headroomNow, &headroomLowest, &blockMin, &blockMax, &bayLatencyNow, &bayLatencyLowest, &bayLatencyHighest })
         value->store (unset);
 }
 
@@ -403,6 +505,11 @@ RelayLink::Status RelayLink::getStatus()
     status.blockMin = valueOf (blockMin.load());
     status.blockMax = valueOf (blockMax.load());
     status.controlsLive = controlsLive.load();
+    status.marker = markerState.load();
+    status.bayLatencyNow = valueOf (bayLatencyNow.exchange (unset));
+    status.bayLatencyLowest = valueOf (bayLatencyLowest.load());
+    status.bayLatencyHighest = valueOf (bayLatencyHighest.load());
+    status.markerUnreadable = markerUnreadable.load();
 
     for (int i = 0; i < numControls; ++i)
         status.controls[static_cast<size_t> (i)] = getControl (i);
@@ -429,4 +536,35 @@ void RelayLink::raise (std::atomic<int>& highest, int value) noexcept
 std::optional<int> RelayLink::valueOf (int stored) noexcept
 {
     return stored == unset ? std::nullopt : std::optional<int> (stored);
+}
+
+std::vector<RelayLink::PanelView> RelayLink::getPanels()
+{
+    std::vector<PanelView> panels;
+
+    for (int panel = 1; panel <= BayNames::maxPanels; ++panel)
+    {
+        auto send = emptyInfo();
+        auto back = emptyInfo();
+
+        // Observers never create a channel: a name never used has none
+        if (hub.get_info (hub.open (BayNames::send (panel, 1).c_str(), HS_LINK_OBSERVER), &send) != HS_LINK_OK)
+            continue;
+
+        const auto hasReturn = hub.get_info (hub.open (BayNames::back (panel, 1).c_str(), HS_LINK_OBSERVER), &back) == HS_LINK_OK;
+        auto& last = panelCounts[static_cast<size_t> (panel)];
+
+        PanelView view;
+        view.number = panel;
+        view.panel = send.has_writer != 0;
+        view.panelRunning = view.panel && send.writes != last[0];
+        view.receiver = send.has_reader != 0;
+        view.receiverRunning = view.receiver && send.reads != last[1];
+        view.transmitter = hasReturn && back.has_writer != 0;
+        view.transmitterRunning = view.transmitter && back.writes != last[2];
+        last = { send.writes, send.reads, back.writes };
+        panels.push_back (view);
+    }
+
+    return panels;
 }
