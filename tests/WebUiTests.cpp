@@ -329,7 +329,7 @@ TEST_CASE ("The page's corner grips resize the plugin", "[webui][webview]")
     CHECK (messages == juce::StringArray { "topLeft start", "topLeft end" });
 }
 
-TEST_CASE ("Diagnostics shows the bay link beside the tabs and sends the bypass switch", "[webui][webview]")
+TEST_CASE ("Diagnostics shows the bay link beside the tabs and sends the bypass choice", "[webui][webview]")
 {
     if (!WebUi::isSupported())
         SKIP ("No supported web view on this system");
@@ -341,8 +341,10 @@ TEST_CASE ("Diagnostics shows the bay link beside the tabs and sends the bypass 
         return juce::JSON::parse (R"({ "title": "test", "tab": 0, "diagnostics": false, "settings": {}, "plugins": [], "processing": true,
             "link": { "hubProblem": "", "name": "Panel 1", "linkProblem": "", "receiver": "playing", "transmitter": "returning",
                 "roundTripSetting": 0, "autoState": "oneBlock",
-                "roundTrip": 512, "roundTripBlocks": 1, "maxBlock": 512, "sampleRate": 48000, "latency": 512,
-                "bypass": false, "dropouts": "silence", "crossfadeMs": 20, "missing": 3, "replaced": 0, "oversized": 0, "valueSets": 7,
+                "roundTrip": 512, "roundTripBlocks": 1, "maxBlock": 512, "sampleRate": 48000, "latency": 12800,
+                "bypass": "off", "dropSends": "silence", "delay": 12800, "bayLatency": 12288, "reading": "measured", "readingSamples": 768,
+                "readingLowest": 768, "readingHighest": 12288, "settlingTo": 768, "settledMs": 20, "settleMs": 50, "heldBack": 4,
+                "dropouts": "silence", "crossfadeMs": 20, "missing": 3, "replaced": 0, "oversized": 0, "valueSets": 7,
                 "differenceNow": 0, "differenceLargest": 0,
                 "lag": { "state": "found", "paths": [ { "samples": 12288, "gain": 0.98 }, { "samples": 0, "gain": 1 } ], "exact": false, "earliest": 1024, "latest": 32768 },
                 "probe": { "state": "found", "delay": 480, "rise": 24, "before": 0, "after": 0.25 } } })");
@@ -369,10 +371,14 @@ TEST_CASE ("Diagnostics shows the bay link beside the tabs and sends the bypass 
     CHECK (page.evaluate ("document.getElementById('link-difference').textContent.trim()") == "now identical, largest identical");
     CHECK (page.evaluate ("document.getElementById('link-lag').textContent") == "2 paths: +12288 samples (gain 0.98); 0 samples (gain 1.00)");
     CHECK (page.evaluate ("document.getElementById('link-probe').textContent").startsWith ("+480 samples (10.0 ms, 0.94 blocks) after the step"));
+    CHECK (page.evaluate ("document.getElementById('link-bay-latency').textContent")
+           == "12288 samples (256.0 ms) in use; marker: reads 768; settling to 768 (held 20 of 50 ms); readings 768 to 12288 since reset");
+    CHECK (page.evaluate ("document.getElementById('link-delay').textContent.replace (/\\s+/g, ' ').trim()")
+           == "12800 samples (266.7 ms; round trip + bay latency); host told 12800");
 
-    page.evaluate ("document.getElementById('link-bypass').click()");
+    page.evaluate ("document.getElementById('link-bypass-dropLatency').click()");
     page.pumpUntil ([&chosen] { return !chosen.isVoid(); });
-    CHECK (chosen["value"] == juce::var (true));
+    CHECK (chosen["value"] == juce::var ("dropLatency"));
 }
 
 TEST_CASE ("The page reopens scrolled where it was left, and reports new positions", "[webui][webview]")

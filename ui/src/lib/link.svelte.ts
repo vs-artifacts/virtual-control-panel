@@ -6,8 +6,13 @@ const dropoutModes = ['safe', 'silence'] as const
 const autoStates = ['off', 'checking', 'oneBlock', 'fellBack'] as const
 const lagStates = ['notMeasured', 'measuring', 'found', 'noReturn', 'noMatch'] as const
 const probeStates = ['notRun', 'running', 'found', 'noReturn', 'noChange'] as const
+export const bypassModes = ['off', 'synced', 'dropLatency'] as const
+const dropSendsModes = ['silence', 'audio'] as const
+const readings = ['none', 'measured', 'unreadable', 'outOfRange', 'noInput'] as const
 
 export type AutoState = (typeof autoStates)[number]
+export type BypassMode = (typeof bypassModes)[number]
+export type Reading = (typeof readings)[number]
 
 // A delay at which the panel's test burst comes back, and how strongly (1: as loud as sent)
 export interface LagPath {
@@ -48,7 +53,22 @@ export interface LinkStatus {
     maxBlock: number
     sampleRate: number
     latency: number
-    bypass: boolean
+    bypass: BypassMode
+    // What a bay bypassed with its latency dropped is sent
+    dropSends: (typeof dropSendsModes)[number]
+    // Samples the output plays behind the engine: round trip + bay latency, or 0 with latency dropped
+    delay: number
+    // The bay plugin's own latency in use, and the transmitter's latest reading of it (from the position marker)
+    bayLatency: number
+    reading: Reading
+    readingSamples: number
+    readingLowest: number | null
+    readingHighest: number | null
+    // A new bay latency waiting to hold for settleMs, and how long it has so far
+    settlingTo: number | null
+    settledMs: number
+    settleMs: number
+    heldBack: number
     dropouts: (typeof dropoutModes)[number]
     crossfadeMs: number
     missing: number
@@ -118,7 +138,18 @@ export function readLink(raw: unknown): LinkStatus | null {
         maxBlock: count(fields.maxBlock),
         sampleRate: count(fields.sampleRate),
         latency: count(fields.latency),
-        bypass: fields.bypass === true,
+        bypass: oneOf(bypassModes, fields.bypass) ?? 'off',
+        dropSends: oneOf(dropSendsModes, fields.dropSends) ?? 'silence',
+        delay: count(fields.delay),
+        bayLatency: count(fields.bayLatency),
+        reading: oneOf(readings, fields.reading) ?? 'none',
+        readingSamples: finiteOrNull(fields.readingSamples) ?? 0,
+        readingLowest: finiteOrNull(fields.readingLowest),
+        readingHighest: finiteOrNull(fields.readingHighest),
+        settlingTo: finiteOrNull(fields.settlingTo),
+        settledMs: count(fields.settledMs),
+        settleMs: count(fields.settleMs),
+        heldBack: count(fields.heldBack),
         dropouts: oneOf(dropoutModes, fields.dropouts) ?? 'safe',
         crossfadeMs: count(fields.crossfadeMs),
         missing: count(fields.missing),
@@ -146,7 +177,7 @@ export function listenForLink(): void {
 }
 
 // Only offered once the plugin has reported the link, so the bridge is known to be there
-export function setBayBypass(bypass: boolean): void {
+export function setBayBypass(bypass: BypassMode): void {
     if (link.status === null) return
 
     link.status.bypass = bypass

@@ -86,6 +86,10 @@ namespace
 
         std::atomic<uint64_t> valueWrites { 0 }; // sets written so far; the next goes in valueSets[valueWrites % count]
         std::atomic<uint32_t> valueEpoch { 1 };
+
+        // The writer's latency report: the state in the upper half, the samples (as int32_t) in the lower
+        std::atomic<uint64_t> latency { 0 };
+        std::atomic<uint64_t> latencyReports { 0 };
     };
 
     bool isValidName (const char* name)
@@ -129,6 +133,28 @@ namespace
         return channels != nullptr && (numChannels == 1 || numChannels == 2) && channels[0] != nullptr && channels[numChannels - 1] != nullptr;
     }
 
+    bool isValidLatency (int32_t state, int32_t samples)
+    {
+        switch (state)
+        {
+            case HS_LINK_LATENCY_MEASURED:
+                return samples >= 0 && samples <= HS_LINK_MAX_LATENCY;
+            case HS_LINK_LATENCY_OUT_OF_RANGE:
+                return samples < 0 || samples > HS_LINK_MAX_LATENCY;
+            case HS_LINK_LATENCY_UNKNOWN:
+            case HS_LINK_LATENCY_UNREADABLE:
+            case HS_LINK_LATENCY_NO_INPUT:
+                return samples == 0;
+            default:
+                return false;
+        }
+    }
+
+    uint64_t packLatency (int32_t state, int32_t samples)
+    {
+        return (static_cast<uint64_t> (static_cast<uint32_t> (state)) << 32) | static_cast<uint32_t> (samples);
+    }
+
     class Hub
     {
     public:
@@ -169,6 +195,7 @@ namespace
                 channel.restartNext.store (true, std::memory_order_release);
                 channel.valueEpoch.fetch_add (1, std::memory_order_acq_rel);
                 channel.writerClaims.fetch_add (1, std::memory_order_relaxed);
+                channel.latency.store (packLatency (HS_LINK_LATENCY_UNKNOWN, 0), std::memory_order_release);
             }
             else
             {
@@ -190,9 +217,14 @@ namespace
                 return;
 
             if (role == HS_LINK_WRITER)
+            {
                 channel->restartNext.store (true, std::memory_order_release);
+                channel->latency.store (packLatency (HS_LINK_LATENCY_UNKNOWN, 0), std::memory_order_release);
+            }
             else
+            {
                 channel->lastRead.store (0, std::memory_order_relaxed);
+            }
 
             claimFor (*channel, role).store (0, std::memory_order_release);
         }
@@ -324,6 +356,13 @@ namespace
             const auto structSize = info->struct_size;
             *info = {};
             info->struct_size = structSize;
+
+            // Before the frames' end: a report made after a write then never shows without that write
+            info->latency_reports = c.latencyReports.load (std::memory_order_acquire);
+            const auto latency = c.latency.load (std::memory_order_acquire);
+            info->latency_state = static_cast<int32_t> (static_cast<uint32_t> (latency >> 32));
+            info->latency = static_cast<int32_t> (static_cast<uint32_t> (latency));
+
             info->has_writer = c.writerClaim.load (std::memory_order_acquire) != 0 ? 1u : 0u;
             info->has_reader = c.readerClaim.load (std::memory_order_acquire) != 0 ? 1u : 0u;
             info->session = c.session.load (std::memory_order_acquire);
@@ -465,6 +504,22 @@ namespace
             }
 
             return HS_LINK_GONE;
+        }
+
+        int32_t setLatency (int32_t handle, int32_t state, int32_t samples)
+        {
+            Channel* channel = nullptr;
+            int32_t role = 0;
+
+            if (const auto result = resolve (handle, channel, role); result != HS_LINK_OK)
+                return result;
+
+            if (role != HS_LINK_WRITER || !isValidLatency (state, samples))
+                return HS_LINK_BAD_ARGUMENT;
+
+            channel->latency.store (packLatency (state, samples), std::memory_order_release);
+            channel->latencyReports.fetch_add (1, std::memory_order_release);
+            return HS_LINK_OK;
         }
 
     private:
@@ -613,6 +668,7 @@ namespace
     int32_t apiGetInfo (int32_t handle, hs_link_info* info) { return hub().getInfo (handle, info); }
     int32_t apiWriteValues (int32_t handle, int64_t position, const float* values, int32_t numValues) { return hub().writeValues (handle, position, values, numValues); }
     int32_t apiReadValues (int32_t handle, int64_t position, float* values, int32_t maxValues, int32_t* numValues) { return hub().readValues (handle, position, values, maxValues, numValues); }
+    int32_t apiSetLatency (int32_t handle, int32_t state, int32_t samples) { return hub().setLatency (handle, state, samples); }
 
     constexpr hs_link_api api {
         sizeof (hs_link_api),
@@ -625,6 +681,7 @@ namespace
         apiGetInfo,
         apiWriteValues,
         apiReadValues,
+        apiSetLatency,
     };
 }
 

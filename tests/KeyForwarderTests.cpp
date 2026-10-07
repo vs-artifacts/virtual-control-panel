@@ -184,6 +184,8 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
         CHECK (settings.getBayDropouts() == BayLink::Dropouts::safe);
         CHECK (settings.getRoundTripBlocks() == BayLink::autoRoundTrip);
         CHECK (settings.getBypassCrossfadeMs() == BayLink::defaultCrossfadeMs);
+        CHECK (settings.getLatencySettleMs() == BayLink::defaultSettleMs);
+        CHECK (settings.getDropSends() == BayLink::DropSends::silence);
         CHECK (settings.getEditorPlacement() == EditorPlacement::Monitor::hostPlaced);
         CHECK (settings.getAttachedPlacement() == EditorPlacement::Attached::workspace);
         CHECK (settings.getDoubleClickMs() == PluginSettings::defaultDoubleClickMs);
@@ -197,6 +199,8 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
         settings.setBayDropouts (BayLink::Dropouts::silence);
         settings.setRoundTripBlocks (7);
         settings.setBypassCrossfadeMs (50);
+        settings.setLatencySettleMs (5000);
+        settings.setDropSends (BayLink::DropSends::audio);
         settings.setEditorPlacement (EditorPlacement::Monitor::mouse);
         settings.setAttachedPlacement (EditorPlacement::Attached::hostMonitor);
         settings.setDoubleClickMs (5000);
@@ -212,6 +216,8 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
     CHECK (reloaded.getBayDropouts() == BayLink::Dropouts::silence);
     CHECK (reloaded.getRoundTripBlocks() == BayLink::maxRoundTripBlocks);
     CHECK (reloaded.getBypassCrossfadeMs() == 50);
+    CHECK (reloaded.getLatencySettleMs() == BayLink::maxSettleMs);
+    CHECK (reloaded.getDropSends() == BayLink::DropSends::audio);
     CHECK (reloaded.getEditorPlacement() == EditorPlacement::Monitor::mouse);
     CHECK (reloaded.getAttachedPlacement() == EditorPlacement::Attached::hostMonitor);
     CHECK (reloaded.getDoubleClickMs() == PluginSettings::maxDoubleClickMs);

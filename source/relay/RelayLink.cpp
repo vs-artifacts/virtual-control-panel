@@ -155,12 +155,17 @@ void RelayLink::process (juce::AudioBuffer<float>& buffer, int markerInput, int 
         synced = primed = streaming = false;
         panelStall = receiverStall = 0;
         returnedEnd = 0;
+        markerInUse = false;
+        markerQuiet = 0;
+        lastLatency.reset();
     }
 
     controlsLive.store (false, std::memory_order_relaxed);
 
     if (mode.load() == Mode::receiver)
     {
+        stamp.store (Stamp::none, std::memory_order_relaxed);
+        markerHeld.store (false, std::memory_order_relaxed);
         buffer.clear();
         receive (buffer, markerOutput >= 0 && markerOutput + 1 < buffer.getNumChannels() ? markerOutput : -1);
     }
@@ -290,6 +295,7 @@ void RelayLink::setControl (int index, float value) noexcept
 void RelayLink::transmit (const juce::AudioBuffer<float>& buffer, int markerInput)
 {
     const auto marker = readMarkerInput (buffer, markerInput);
+    const auto markerNow = markerState.load (std::memory_order_relaxed);
     const auto writer = returnWriter.load();
     const auto observer = sendObserver.load();
     auto info = emptyInfo();
@@ -297,6 +303,8 @@ void RelayLink::transmit (const juce::AudioBuffer<float>& buffer, int markerInpu
     if (writer < 0 || observer < 0 || buffer.getNumChannels() < 2 || hub.get_info (observer, &info) != HS_LINK_OK || info.has_writer == 0)
     {
         otherSideRunning.store (false, std::memory_order_relaxed);
+        stamp.store (Stamp::none, std::memory_order_relaxed);
+        markerHeld.store (false, std::memory_order_relaxed);
         streaming = false;
         return;
     }
@@ -304,6 +312,7 @@ void RelayLink::transmit (const juce::AudioBuffer<float>& buffer, int markerInpu
     if (!matchesOwnRate (info.sample_rate))
     {
         sampleRateDiffers.store (true, std::memory_order_relaxed);
+        stamp.store (Stamp::none, std::memory_order_relaxed);
         streaming = false;
         return;
     }
@@ -339,11 +348,16 @@ void RelayLink::transmit (const juce::AudioBuffer<float>& buffer, int markerInpu
     receiverStall = 0;
     otherSideRunning.store (true, std::memory_order_relaxed);
 
-    // The receiver has just played up to readEnd; the marker shows which of its blocks is arriving here now
+    if (readsSince > 1 && streaming)
+        noteMiss (Miss::receiverRanTwice);
+
+    const auto numSamples = buffer.getNumSamples();
+
     if (marker.has_value())
     {
+        // The receiver has just played up to readEnd; the marker shows which of its blocks is arriving here now
         const auto readEnd = info.last_read_position + info.last_read_length;
-        auto latency = (readEnd - (*marker + buffer.getNumSamples())) & markerMask;
+        auto latency = (readEnd - (*marker + numSamples)) & markerMask;
 
         if (latency > markerMask / 2)
             latency -= markerMask + 1;
@@ -352,11 +366,58 @@ void RelayLink::transmit (const juce::AudioBuffer<float>& buffer, int markerInpu
         bayLatencyNow.store (samples, std::memory_order_relaxed);
         lower (bayLatencyLowest, samples);
         raise (bayLatencyHighest, samples);
+
+        const auto steady = lastLatency == samples;
+        lastLatency = samples;
+        markerInUse = true;
+        markerQuiet = 0;
+        markerHeld.store (false, std::memory_order_relaxed);
+        stamp.store (Stamp::marker, std::memory_order_relaxed);
+
+        if (samples < 0 || samples > HS_LINK_MAX_LATENCY)
+        {
+            reportLatency (HS_LINK_LATENCY_OUT_OF_RANGE, samples);
+            return;
+        }
+
+        // A changed reading isn't trusted for its first block: FL can play out stale marker audio while it rearranges
+        // its latency compensation
+        if (steady)
+            sendReturn (buffer, readEnd - numSamples - latency);
+
+        reportLatency (HS_LINK_LATENCY_MEASURED, samples);
+        return;
     }
 
-    if (readsSince > 1 && streaming)
-        noteMiss (Miss::receiverRanTwice);
+    if (markerNow == MarkerState::unreadable)
+    {
+        markerInUse = true;
+        markerQuiet = 0;
+        markerHeld.store (false, std::memory_order_relaxed);
+        stamp.store (Stamp::marker, std::memory_order_relaxed);
+        reportLatency (HS_LINK_LATENCY_UNREADABLE, 0);
+        return;
+    }
 
+    if (markerNow == MarkerState::silent && markerInUse && static_cast<double> (markerQuiet) < markerHoldSeconds * ownSampleRate.load (std::memory_order_relaxed))
+    {
+        markerQuiet += numSamples;
+        markerHeld.store (true, std::memory_order_relaxed);
+        return;
+    }
+
+    // No marker (none wired, its pin off, or silent for longer than the hold): stamped by the receiver's position
+    markerInUse = false;
+    markerQuiet = 0;
+    lastLatency.reset();
+    markerHeld.store (false, std::memory_order_relaxed);
+    stamp.store (Stamp::receiver, std::memory_order_relaxed);
+    transmitByReceiver (buffer, info);
+    reportLatency (markerNow == MarkerState::noPin ? HS_LINK_LATENCY_NO_INPUT : HS_LINK_LATENCY_UNKNOWN, 0);
+}
+
+void RelayLink::transmitByReceiver (const juce::AudioBuffer<float>& buffer, const hs_link_info& info)
+{
     if (info.last_read_ok == 0)
     {
         if (streaming)
@@ -371,22 +432,33 @@ void RelayLink::transmit (const juce::AudioBuffer<float>& buffer, int markerInpu
         return;
     }
 
-    // Stamped with the position the receiver played, so the panel knows exactly which audio this is. A receiver
-    // lining up again may go back over audio it already played: what came back the first time stays, only the new
-    // part is sent.
+    sendReturn (buffer, info.last_read_position);
+}
+
+void RelayLink::sendReturn (const juce::AudioBuffer<float>& buffer, juce::int64 position)
+{
+    // A receiver lining up again, or a longer bay latency, may go back over positions already returned: what came back
+    // the first time stays, only the new part is sent
     const auto numSamples = buffer.getNumSamples();
-    const auto alreadySent = static_cast<int> (juce::jlimit<juce::int64> (0, numSamples, returnedEnd - info.last_read_position));
+    const auto alreadySent = static_cast<int> (juce::jlimit<juce::int64> (0, numSamples, returnedEnd - position));
 
     if (alreadySent == numSamples)
         return;
 
     const float* channels[] { buffer.getReadPointer (0, alreadySent), buffer.getReadPointer (1, alreadySent) };
 
-    if (hub.write (writer, info.last_read_position + alreadySent, channels, 2, numSamples - alreadySent) == HS_LINK_OK)
+    if (hub.write (returnWriter.load(), position + alreadySent, channels, 2, numSamples - alreadySent) == HS_LINK_OK)
     {
-        returnedEnd = info.last_read_position + numSamples;
+        returnedEnd = position + numSamples;
         streaming = true;
     }
+}
+
+void RelayLink::reportLatency (int32_t latencyState, int32_t samples) noexcept
+{
+    // After any write it applies to (see LinkApi.h)
+    if (const auto writer = returnWriter.load(); writer >= 0)
+        hub.set_latency (writer, latencyState, samples);
 }
 
 bool RelayLink::matchesOwnRate (double panelRate) const noexcept
@@ -510,6 +582,8 @@ RelayLink::Status RelayLink::getStatus()
     status.bayLatencyLowest = valueOf (bayLatencyLowest.load());
     status.bayLatencyHighest = valueOf (bayLatencyHighest.load());
     status.markerUnreadable = markerUnreadable.load();
+    status.stamp = stamp.load();
+    status.markerHeld = markerHeld.load();
 
     for (int i = 0; i < numControls; ++i)
         status.controls[static_cast<size_t> (i)] = getControl (i);

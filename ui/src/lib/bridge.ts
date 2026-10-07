@@ -88,8 +88,9 @@ export function onLink(listener: (status: unknown) => void): void {
     window.__JUCE__.backend.addEventListener('link', listener)
 }
 
-// Bypassed, the panel plays the audio it sent (delayed like the return) instead of the bay's return
-export function sendBayBypass(value: boolean): void {
+// The bay's bypass: off (the return plays), synced (the sent audio, delayed like the return), or dropLatency (the sent
+// audio at once: the bay's delay is dropped from the latency the host is told)
+export function sendBayBypass(value: 'off' | 'synced' | 'dropLatency'): void {
     window.__JUCE__.backend.emitEvent('bayBypass', { value })
 }
 

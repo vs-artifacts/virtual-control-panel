@@ -6,6 +6,7 @@
         doubleClickRange,
         editor,
         resetSize,
+        settleRange,
         type Settings,
     } from "../lib/editor.svelte";
 
@@ -53,6 +54,20 @@
         { value: "silence", text: "Silence (makes dropouts audible)" },
     ];
 
+    const dropSendsModes: {
+        value: Settings["bayDropSends"];
+        text: string;
+    }[] = [
+        {
+            value: "silence",
+            text: "Silence (FL's smart disable may switch the bay's plugin off; switching back, the bay's sound returns a round trip and its latency later)",
+        },
+        {
+            value: "audio",
+            text: "The panel's sound (the bay keeps processing, its tails carry on)",
+        },
+    ];
+
     const roundTrips: { value: Settings["roundTripBlocks"]; text: string }[] = [
         {
             value: 0,
@@ -81,6 +96,20 @@
         }
 
         event.currentTarget.value = String(editor.settings.bypassCrossfadeMs);
+    }
+
+    function changeSettle(event: Event & { currentTarget: HTMLInputElement }) {
+        const typed = event.currentTarget.valueAsNumber;
+
+        if (Number.isFinite(typed)) {
+            const milliseconds = Math.min(
+                settleRange.max,
+                Math.max(settleRange.min, Math.round(typed)),
+            );
+            changeSetting("bayLatencySettleMs", milliseconds);
+        }
+
+        event.currentTarget.value = String(editor.settings.bayLatencySettleMs);
     }
 
     function changeDoubleClick(
@@ -254,8 +283,45 @@
             value={editor.settings.bypassCrossfadeMs}
             onchange={changeCrossfade}
         />
-        ms ({crossfadeRange.min} to {crossfadeRange.max}; 0 is off)
+        ms ({crossfadeRange.min} to {crossfadeRange.max}; 0 is off). Also blends
+        the jump when the bay's delay changes.
     </label>
+</fieldset>
+
+<fieldset>
+    <legend>Bay latency settle time</legend>
+    <label class="option">
+        <input
+            id="latency-settle"
+            class="milliseconds"
+            type="number"
+            min={settleRange.min}
+            max={settleRange.max}
+            step="1"
+            value={editor.settings.bayLatencySettleMs}
+            onchange={changeSettle}
+        />
+        ms ({settleRange.min} to {settleRange.max})
+    </label>
+    <p class="hint">
+        A new bay latency must hold this long before the panel uses it;
+        meanwhile the bay's sound is held back and the sent audio plays.
+    </p>
+</fieldset>
+
+<fieldset>
+    <legend>While a bay is bypassed with its latency dropped, send it</legend>
+    {#each dropSendsModes as option (option.value)}
+        <label class="option">
+            <input
+                type="radio"
+                name="bayDropSends"
+                checked={editor.settings.bayDropSends === option.value}
+                onchange={() => changeSetting("bayDropSends", option.value)}
+            />
+            {option.text}
+        </label>
+    {/each}
 </fieldset>
 
 <div class="size">

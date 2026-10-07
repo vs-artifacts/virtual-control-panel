@@ -5,10 +5,58 @@
         resetLinkCounters,
         setBayBypass,
         startProbe,
+        type BypassMode,
         type Lag,
         type LinkStatus,
         type Probe,
     } from "../lib/link.svelte";
+
+    const bypassChoices: { value: BypassMode; text: string }[] = [
+        { value: "off", text: "Off" },
+        { value: "synced", text: "Bypass, synced" },
+        { value: "dropLatency", text: "Bypass, drop latency" },
+    ];
+
+    // The most bay latency the panel takes (HS_LINK_MAX_LATENCY)
+    const maxBayLatency = 32768;
+
+    function describeBypass(status: LinkStatus): string {
+        switch (status.bypass) {
+            case "off":
+                return `the bay's sound plays (crossfade ${status.crossfadeMs} ms)`;
+            case "synced":
+                return `the sent audio plays, at the same delay (crossfade ${status.crossfadeMs} ms)`;
+            case "dropLatency":
+                return `the sent audio plays at once, without the bay's delay; the bay is sent ${status.dropSends === "silence" ? "silence" : "the panel's sound"}`;
+        }
+    }
+
+    function describeReading(status: LinkStatus): string {
+        switch (status.reading) {
+            case "none":
+                return "no marker arriving (the return is stamped by the receiver's position, so it counts as 0)";
+            case "measured":
+                return `reads ${status.readingSamples}`;
+            case "unreadable":
+                return "unreadable (the return is held back)";
+            case "outOfRange":
+                return `${status.readingSamples} samples, out of range (0 to ${maxBayLatency}: the return is held back)`;
+            case "noInput":
+                return "the transmitter's Marker input is off (counts as 0)";
+        }
+    }
+
+    function describeBayLatency(status: LinkStatus): string {
+        let text = `${status.bayLatency} samples (${milliseconds(status.bayLatency, status.sampleRate)} ms) in use; marker: ${describeReading(status)}`;
+
+        if (status.settlingTo !== null)
+            text += `; settling to ${status.settlingTo} (held ${status.settledMs} of ${status.settleMs} ms)`;
+
+        if (status.readingLowest !== null && status.readingHighest !== null)
+            text += `; readings ${status.readingLowest === status.readingHighest ? status.readingLowest : `${status.readingLowest} to ${status.readingHighest}`} since reset`;
+
+        return text;
+    }
 
     function milliseconds(samples: number, sampleRate: number): string {
         return sampleRate > 0
@@ -137,26 +185,43 @@
                     status.roundTrip,
                     status.sampleRate,
                 )} ms,
-                {status.roundTripBlocks} × {status.maxBlock}); host told {status.latency}
+                {status.roundTripBlocks} × {status.maxBlock})
             </dd>
 
             <dt></dt>
             <dd id="link-auto">{describeAuto(status)}</dd>
 
+            <dt>Bay latency</dt>
+            <dd id="link-bay-latency">{describeBayLatency(status)}</dd>
+
+            <dt>Output delay</dt>
+            <dd id="link-delay">
+                {status.delay} samples ({milliseconds(
+                    status.delay,
+                    status.sampleRate,
+                )} ms; {status.bypass === "dropLatency"
+                    ? "bay latency dropped"
+                    : "round trip + bay latency"}); host told {status.latency}
+            </dd>
+
             <dt>Bypass</dt>
             <dd class="choices">
-                <label>
-                    <input
-                        id="link-bypass"
-                        type="checkbox"
-                        checked={status.bypass}
-                        onchange={(event) =>
-                            setBayBypass(event.currentTarget.checked)}
-                    />
-                    Play the sent audio instead of the return (crossfade {status.crossfadeMs}
-                    ms)
-                </label>
+                {#each bypassChoices as choice (choice.value)}
+                    <label>
+                        <input
+                            id="link-bypass-{choice.value}"
+                            type="radio"
+                            name="link-bypass"
+                            checked={status.bypass === choice.value}
+                            onchange={() => setBayBypass(choice.value)}
+                        />
+                        {choice.text}
+                    </label>
+                {/each}
             </dd>
+
+            <dt></dt>
+            <dd id="link-bypass-note">{describeBypass(status)}</dd>
 
             <dt>Missing blocks</dt>
             <dd id="link-missing">
@@ -168,6 +233,11 @@
             <dt>Receiver missed</dt>
             <dd id="link-receiver-missed">
                 {status.receiverMisses} blocks (each leaves a gap in the return)
+            </dd>
+
+            <dt>Held back</dt>
+            <dd id="link-held-back">
+                {status.heldBack} blocks while a new bay latency settled
             </dd>
 
             <dt>Controls</dt>

@@ -85,15 +85,19 @@ namespace
         }
 
         const auto unreadable = ", unreadable blocks " + juce::String (status.markerUnreadable);
+        const auto stamp = status.stamp == RelayLink::Stamp::receiver ? "; return stamped by the receiver's position" : "";
 
         switch (status.marker)
         {
             case State::noPin:
-                return "Marker: the Marker input is switched off";
+                return juce::String ("Marker: the Marker input is switched off") + stamp;
             case State::silent:
-                return "Marker: nothing arriving" + unreadable;
+                if (status.markerHeld)
+                    return "Marker: nothing arriving, return held back for up to " + juce::String (juce::roundToInt (1000.0 * RelayLink::markerHoldSeconds)) + " ms" + unreadable;
+
+                return "Marker: nothing arriving" + unreadable + stamp;
             case State::unreadable:
-                return "Marker: unreadable" + unreadable;
+                return "Marker: unreadable, return held back" + unreadable;
             case State::flowing:
                 break;
             case State::unknown:
@@ -103,9 +107,16 @@ namespace
         auto text = juce::String ("Marker: bay latency ");
 
         if (status.bayLatencyNow.has_value() && status.sampleRate > 0.0)
+        {
             text << *status.bayLatencyNow << " samples (" << juce::String (1000.0 * *status.bayLatencyNow / status.sampleRate, 1) << " ms)";
+
+            if (*status.bayLatencyNow < 0 || *status.bayLatencyNow > HS_LINK_MAX_LATENCY)
+                text << ", out of range (0 to " << HS_LINK_MAX_LATENCY << "), return held back";
+        }
         else
+        {
             text << "- (no receiver playing)";
+        }
 
         return text + ", range " + describeRange (status.bayLatencyLowest, status.bayLatencyHighest) + unreadable;
     }
@@ -119,7 +130,8 @@ namespace
         juce::String text ("Panels in the hub (* this relay's):");
 
         for (const auto& view : panels)
-            text << "\n" << (view.number == linkedPanel ? "* " : "  ") << "Panel " << view.number << ": panel " << role (view.panel, view.panelRunning)
+            text << "\n"
+                 << (view.number == linkedPanel ? "* " : "  ") << "Panel " << view.number << ": panel " << role (view.panel, view.panelRunning)
                  << ", receiver " << role (view.receiver, view.receiverRunning) << ", transmitter " << role (view.transmitter, view.transmitterRunning);
 
         return text;
@@ -167,7 +179,7 @@ RelayEditor::RelayEditor (RelayProcessor& p)
 
     timerCallback();
     startTimerHz (4);
-    setSize (560, 640);
+    setSize (680, 640);
 }
 
 void RelayEditor::paint (juce::Graphics& g)

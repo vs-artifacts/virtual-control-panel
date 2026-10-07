@@ -25,8 +25,9 @@ private:
 
 // The panel's side of an external module bay (one bay for now, after the engine's output). It sends the engine's
 // output and the bay's control values to a receiver relay, gets the audio back from a transmitter relay after FL's
-// plugin, and plays the return (or, bypassed, the sent audio) a fixed round trip later, which the shell reports to the
-// host as latency. It never waits for a relay.
+// plugin, and plays the return (or, bypassed, the sent audio) a fixed delay later: the round trip plus the bay plugin's
+// own latency, which the transmitter reads from the position marker. The shell reports that delay to the host as
+// latency. It never waits for a relay.
 // The shell finds the hub (see RelayHubFinder); this class only uses the hub's C interface.
 class BayLink
 {
@@ -45,6 +46,28 @@ public:
     enum class Dropouts {
         safe, // the matching block that was sent, so only the bay is skipped
         silence, // makes dropouts audible
+    };
+
+    // The bay's bypass switch
+    enum class BypassMode {
+        off, // the return plays
+        synced, // the sent audio plays, at the same delay as the return
+        dropLatency, // the sent audio plays at once: the bay's delay is dropped from the latency the host is told
+    };
+
+    // What a bay bypassed with its latency dropped is sent
+    enum class DropSends {
+        silence, // FL may switch the bay's plugin off (smart disable)
+        audio, // the panel's sound: the bay keeps processing, its tails carry on
+    };
+
+    // The transmitter's latest report of the bay plugin's latency
+    enum class Reading {
+        none, // no marker arriving: the return is stamped by the receiver's position, so the latency counts as 0
+        measured,
+        unreadable, // the return is held back
+        outOfRange, // below 0 or above HS_LINK_MAX_LATENCY: the return is held back
+        noInput, // the transmitter's Marker input is off: counts as 0
     };
 
     // How the automatic round trip got to its choice
@@ -109,7 +132,17 @@ public:
         AutoState autoState = AutoState::off;
         int roundTripBlocks = 0, roundTripSamples = 0, maxBlock = 0;
         double sampleRate = 0.0;
-        bool bypass = false;
+        BypassMode bypass = BypassMode::off;
+        DropSends dropSends = DropSends::silence;
+        int delay = 0; // samples the output plays behind the engine: round trip + bay latency, or 0 with latency dropped
+        int bayLatency = 0; // the one in use
+        Reading reading = Reading::none;
+        int readingSamples = 0;
+        std::optional<int> readingLowest, readingHighest; // measured readings since the counters were reset
+        std::optional<int> settlingTo; // a new bay latency waiting to hold for the settle time
+        int settledMs = 0; // how long it has held so far
+        int settleMs = 0;
+        juce::uint64 heldBack = 0; // blocks held back while a new bay latency settled
         Dropouts dropouts = Dropouts::safe;
         int crossfadeMs = 0;
         juce::uint64 missing = 0; // return blocks missing while the return was flowing
@@ -132,9 +165,16 @@ public:
     void setRoundTripBlocks (int blocksOrAuto); // autoRoundTrip, or 1 to 3 blocks
     int getRoundTripBlocks() const noexcept { return roundTripSetting.load(); }
     int getRoundTripSamples() const noexcept { return roundTrip.load(); }
-    bool updateRoundTrip(); // runs the automatic round trip; true if the round trip changed. A timer calls it twice a second.
-    void setBypass (bool shouldBypass) noexcept { bypass.store (shouldBypass); }
-    bool isBypassed() const noexcept { return bypass.load(); }
+    bool updateRoundTrip(); // runs the automatic round trip; true if the round trip changed. A timer calls it.
+    bool updateBayLatency(); // takes a new bay latency once it has held for the settle time; true if it did. A timer calls it.
+    int getBayLatency() const noexcept { return bayLatency.load(); }
+    int getDelaySamples() const noexcept; // what the output plays behind the engine, for the host's latency
+    void setBypass (BypassMode mode) noexcept { bypass.store (mode); }
+    BypassMode getBypass() const noexcept { return bypass.load(); }
+    void setDropSends (DropSends value) noexcept { dropSends.store (value); }
+    DropSends getDropSends() const noexcept { return dropSends.load(); }
+    void setSettleMs (int milliseconds) noexcept { settleMs.store (juce::jlimit (0, maxSettleMs, milliseconds)); }
+    int getSettleMs() const noexcept { return settleMs.load(); }
     void setDropouts (Dropouts newMode) noexcept { dropouts.store (newMode); }
     Dropouts getDropouts() const noexcept { return dropouts.load(); }
     void setCrossfadeMs (int milliseconds) noexcept { crossfadeMs.store (juce::jlimit (0, maxCrossfadeMs, milliseconds)); }
@@ -159,6 +199,10 @@ public:
 
     static constexpr int maxCrossfadeMs = 50;
     static constexpr int defaultCrossfadeMs = 30;
+
+    // How long a new bay latency must hold before it's used
+    static constexpr int maxSettleMs = 1000;
+    static constexpr int defaultSettleMs = 50;
 
     // No new returned audio for this long: the return counts as stopped rather than missing (e.g. FL's smart disable)
     static constexpr double stallSeconds = 0.1;
@@ -204,6 +248,11 @@ public:
     static const char* toName (Dropouts) noexcept;
     static std::optional<Dropouts> dropoutsFromName (const juce::String&);
     static const char* toName (AutoState) noexcept;
+    static const char* toName (BypassMode) noexcept;
+    static std::optional<BypassMode> bypassFromName (const juce::String&);
+    static const char* toName (DropSends) noexcept;
+    static std::optional<DropSends> dropSendsFromName (const juce::String&);
+    static const char* toName (Reading) noexcept;
 
 private:
     // Stereo audio by position on the panel's timeline, for the delayed direct sound
@@ -239,7 +288,9 @@ private:
     void runTest (juce::int64 linkStart, int numSamples, float* left, float* right);
     void captureTest (juce::int64 returnStart, int numSamples, bool returned, juce::int64 linkEnd);
     void finishTest (juce::int64 linkEnd);
-    void mix (float* left, float* right, int numSamples, bool returned);
+    void noteLatencyReport (const hs_link_info&, int numSamples);
+    void mix (float* left, float* right, int numSamples, bool returned, bool bypassed);
+    void blendJump (const hs_link_api*, int32_t back, juce::int64 start, juce::int64 linkStart, int numSamples, float* left, float* right);
     void fadeOutput (float* left, float* right, int numSamples, float target);
 
     static constexpr int unset = std::numeric_limits<int>::min();
@@ -264,9 +315,21 @@ private:
 
     std::atomic<int> roundTripSetting { defaultRoundTripBlocks }, roundTripBlocks { minRoundTripBlocks }, roundTrip { 0 };
     std::atomic<AutoState> autoState { AutoState::checking };
-    std::atomic<bool> bypass { false };
+    std::atomic<BypassMode> bypass { BypassMode::off };
+    std::atomic<DropSends> dropSends { DropSends::silence };
     std::atomic<Dropouts> dropouts { Dropouts::safe };
     std::atomic<int> crossfadeMs { defaultCrossfadeMs };
+    std::atomic<int> settleMs { defaultSettleMs };
+    std::atomic<int> bayLatency { 0 }; // the one in use; set on the message thread
+
+    // The audio thread's settling bay latency, for the message thread: the value in the upper half (-1: none), the
+    // samples it has held in the lower
+    static constexpr juce::uint64 packCandidate (int value, juce::int64 samples) noexcept
+    {
+        return (static_cast<juce::uint64> (static_cast<juce::uint32> (value)) << 32) | static_cast<juce::uint32> (std::min<juce::int64> (samples, 0x7fffffff));
+    }
+
+    std::atomic<juce::uint64> latencyCandidate { packCandidate (-1, 0) };
 
     // The link's timeline never goes below this: past anything an earlier panel left in the channels
     std::atomic<juce::int64> minimumLinkPosition { juce::int64 (1) << 20 };
@@ -278,6 +341,7 @@ private:
     juce::int64 returnStall = 0; // samples since the transmitter last wrote
     juce::int64 flowingRun = 0; // samples since the return started flowing
     int lastRoundTrip = -1;
+    int currentLinkDelay = 0; // the return is read this far behind: round trip + bay latency
     juce::int64 roundTripRun = 0; // samples since the round trip (or the block size) last changed
     int32_t receiverCountedOn = -1; // the send handle receiverFailures counts for
     juce::uint64 receiverFailures = 0;
@@ -287,6 +351,20 @@ private:
     std::vector<float> returnLeft, returnRight, directLeft, directRight;
     int32_t valuesSentTo = -1; // the send handle the last value set went to
     std::array<float, numControls> valuesSent {};
+
+    // Audio thread: the transmitter's latency reports, and return audio that isn't played
+    juce::uint64 lastLatencyReports = 0;
+    int candidate = -1; // the latest valid reading
+    juce::int64 candidateRun = 0; // samples it has been reported unchanged
+    juce::int64 receiverStampedEnd = 0; // where the return ended when the transmitter last stamped by the receiver
+    juce::int64 silentStart = 0, silentEnd = 0; // the latest stretch sent as silence (link positions)
+
+    // Audio thread: a change of the output's delay blends the old timeline into the new
+    int outputDelay = -1; // -1: none yet
+    int jumpFromDelay = 0;
+    float jumpFromMix = 0.0f; // the old timeline's share of return, held through the blend
+    float jumpGain = 0.0f; // the old timeline's share of the output, falling to 0
+    std::vector<float> jumpLeft, jumpRight, jumpReturnLeft, jumpReturnRight;
 
     // The automatic round trip's check, while at 1 block: counted by the audio thread at the round trip it was started with
     std::atomic<bool> autoCheckActive { false };
@@ -304,9 +382,11 @@ private:
     juce::int64 lagCaptured = 0; // samples of it that arrived
 
     // Audio thread to message thread
-    std::atomic<juce::uint64> missing { 0 }, receiverMisses { 0 }, replaced { 0 }, oversized { 0 }, valueSets { 0 };
+    std::atomic<juce::uint64> missing { 0 }, receiverMisses { 0 }, replaced { 0 }, oversized { 0 }, valueSets { 0 }, heldBack { 0 };
     std::atomic<int> headroomNow { unset }, headroomLowest { unset }, blockMin { unset }, blockMax { unset };
     std::atomic<float> differenceNow { -1.0f }, differenceLargest { -1.0f };
+    std::atomic<Reading> reading { Reading::none };
+    std::atomic<int> readingSamples { 0 }, readingLowest { unset }, readingHighest { unset };
 
     // Declared last, so it stops before anything it uses goes
     juce::TimedCallback hubCheck { [this] { maintain(); } };

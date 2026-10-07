@@ -115,10 +115,11 @@ void BayLink::prepare (double newSampleRate, int maxBlockSize)
 
     const auto blockFrames = static_cast<size_t> (maxBlock);
 
-    for (auto* buffer : { &returnLeft, &returnRight, &directLeft, &directRight })
+    for (auto* buffer : { &returnLeft, &returnRight, &directLeft, &directRight, &jumpLeft, &jumpRight, &jumpReturnLeft, &jumpReturnRight })
         buffer->assign (blockFrames, 0.0f);
 
-    history.allocate ((maxRoundTripBlocks + 1) * maxBlock);
+    // The direct sound as far back as the longest delay: the round trip plus the bay plugin's latency
+    history.allocate ((maxRoundTripBlocks + 1) * maxBlock + HS_LINK_MAX_LATENCY);
 
     probeSettle = static_cast<int> (std::ceil (probeSettleSeconds * sampleRate));
     probeBefore = static_cast<int> (std::ceil (probeBeforeSeconds * sampleRate));
@@ -139,6 +140,13 @@ void BayLink::prepare (double newSampleRate, int maxBlockSize)
     returnStall = flowingRun = 0;
     blockMin.store (unset);
     blockMax.store (unset);
+
+    // A new latency report is needed to settle on another bay latency; the output starts at its delay without a blend
+    candidate = -1;
+    candidateRun = 0;
+    latencyCandidate.store (packCandidate (-1, 0));
+    outputDelay = -1;
+    jumpGain = 0.0f;
 
     // A new session: receivers line up again with the new block size and round trip
     if (const auto send = sendHandle.load(); send >= 0)
@@ -228,6 +236,27 @@ void BayLink::startAutoCheck()
     autoBlocks = minRoundTripBlocks;
     autoCheckActive.store (false);
     autoState.store (AutoState::checking);
+}
+
+bool BayLink::updateBayLatency()
+{
+    const auto packed = latencyCandidate.load();
+    const auto value = static_cast<int> (static_cast<juce::uint32> (packed >> 32));
+    const auto held = static_cast<double> (static_cast<juce::uint32> (packed));
+
+    if (value < 0 || value > HS_LINK_MAX_LATENCY || value == bayLatency.load() || sampleRate <= 0.0)
+        return false;
+
+    if (held < settleMs.load() * sampleRate / 1000.0)
+        return false;
+
+    bayLatency.store (value);
+    return true;
+}
+
+int BayLink::getDelaySamples() const noexcept
+{
+    return bypass.load() == BypassMode::dropLatency ? 0 : roundTrip.load() + bayLatency.load();
 }
 
 bool BayLink::applyRoundTrip (int blocks)
@@ -345,6 +374,10 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
 
     const auto start = position;
     const auto roundTripSamples = roundTrip.load (std::memory_order_relaxed);
+    const auto latencyInUse = bayLatency.load (std::memory_order_relaxed);
+    const auto bypassMode = bypass.load (std::memory_order_relaxed);
+    const auto dropped = bypassMode == BypassMode::dropLatency;
+    currentLinkDelay = roundTripSamples + latencyInUse;
 
     if (roundTripSamples != lastRoundTrip)
     {
@@ -365,6 +398,18 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
     // From here on the buffer only carries what's sent: the output is written last, from the history or the return
     runTest (linkStart, numSamples, left, right);
     const auto testing = testStep.load (std::memory_order_relaxed) == testRunning;
+
+    // A bay bypassed with its latency dropped may be sent silence instead (a test signal still goes out)
+    if (dropped && !testing && dropSends.load (std::memory_order_relaxed) == DropSends::silence)
+    {
+        juce::FloatVectorOperations::clear (left, numSamples);
+        juce::FloatVectorOperations::clear (right, numSamples);
+
+        if (linkStart != silentEnd)
+            silentStart = linkStart;
+
+        silentEnd = linkStart + numSamples;
+    }
 
     const auto* linkHub = hub.load (std::memory_order_acquire);
     const auto send = sendHandle.load (std::memory_order_acquire);
@@ -394,7 +439,7 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
 
     auto result = int32_t { HS_LINK_CLOSED };
     auto flowing = false;
-    const auto returnStart = linkStart - roundTripSamples;
+    const auto returnStart = linkStart - currentLinkDelay;
 
     if (linkHub != nullptr && back >= 0)
     {
@@ -405,6 +450,8 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
 
         if (linkHub->get_info (back, &info) == HS_LINK_OK && info.has_writer != 0)
         {
+            noteLatencyReport (info, numSamples);
+
             if (info.writes != lastReturnWrites)
             {
                 lastReturnWrites = info.writes;
@@ -433,8 +480,19 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
     // A newly flowing return fills the round trip first; counted in samples, since FL's blocks can be far smaller
     // than it announced
     const auto warmedUp = flowingRun > roundTripSamples + warmUpBlocks * maxBlock;
-    history.read (start - roundTripSamples, directLeft.data(), directRight.data(), numSamples);
+    history.read (start - currentLinkDelay, directLeft.data(), directRight.data(), numSamples);
     const auto returned = result == HS_LINK_OK;
+
+    // A new bay latency waiting to settle: the return is held back meanwhile
+    const auto settling = candidate >= 0 && candidate != latencyInUse;
+
+    // Returned audio that isn't the bay's sound at those positions: a stretch it was sent as silence, or audio stamped by
+    // the receiver's position (before the marker arrived) once a bay latency is in use
+    const auto notTheBay = (returnStart < silentEnd && returnStart + numSamples > silentStart)
+                           || (latencyInUse > 0 && returnStart < receiverStampedEnd);
+
+    if (settling)
+        heldBack.fetch_add (1, std::memory_order_relaxed);
 
     if (returned)
     {
@@ -444,7 +502,7 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
             replaced.fetch_add (badSamples, std::memory_order_relaxed);
 
         // A test signal (or what's still coming back of it) isn't the sent audio, so the comparison waits
-        if (!testing && linkStart >= muteUntil)
+        if (!testing && linkStart >= muteUntil && !notTheBay)
         {
             const auto difference = std::max (largestDifference (returnLeft.data(), directLeft.data(), numSamples),
                 largestDifference (returnRight.data(), directRight.data(), numSamples));
@@ -454,15 +512,16 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
     }
     else
     {
-        // A return that's flowing but late or broken; not while a new one fills the round trip
-        if (flowing && warmedUp)
+        // A return that's flowing but late or broken; not while a new one fills the round trip, nor while a new bay
+        // latency settles
+        if (flowing && warmedUp && !settling)
             missing.fetch_add (1, std::memory_order_relaxed);
     }
 
     // The automatic round trip's check, once the return flows and the relays have lined up at the round trip being
     // checked. A miss on either side counts.
     if (autoCheckActive.load (std::memory_order_relaxed) && roundTripSamples == autoCheckRoundTrip.load (std::memory_order_relaxed)
-        && flowing && warmedUp && static_cast<double> (roundTripRun) >= autoSettleSeconds * sampleRate)
+        && flowing && warmedUp && !settling && static_cast<double> (roundTripRun) >= autoSettleSeconds * sampleRate)
     {
         if (returned && !receiverMissed)
             autoCheckSamples.fetch_add (static_cast<juce::uint64> (numSamples), std::memory_order_relaxed);
@@ -474,20 +533,146 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
 
     // A test fades the output out before it starts, and back in once its signal has gone
     const auto muted = testing || testStep.load (std::memory_order_relaxed) == testRequested || linkStart < muteUntil;
+    const auto delayNow = dropped ? 0 : currentLinkDelay;
+    const auto playable = returned && !notTheBay;
+    const auto playsSent = bypassMode == BypassMode::synced || settling || notTheBay;
 
     if (muted && outputGain <= 0.0f)
     {
         buffer.clear (0, 0, numSamples);
         buffer.clear (1, 0, numSamples);
-        returnMix = returned && !bypass.load (std::memory_order_relaxed) ? 1.0f : 0.0f;
+        returnMix = playable && !playsSent && !dropped ? 1.0f : 0.0f;
+        outputDelay = delayNow;
+        jumpGain = 0.0f;
     }
     else
     {
-        mix (left, right, numSamples, returned);
+        // The output's delay changed (a new round trip or bay latency, or latency dropped): blend from the old timeline
+        if (outputDelay >= 0 && delayNow != outputDelay)
+        {
+            jumpFromDelay = outputDelay;
+            jumpFromMix = returnMix;
+            jumpGain = crossfadeMs.load (std::memory_order_relaxed) > 0 ? 1.0f : 0.0f;
+        }
+
+        outputDelay = delayNow;
+
+        if (dropped)
+        {
+            history.read (start, left, right, numSamples);
+            returnMix = 0.0f;
+        }
+        else
+        {
+            mix (left, right, numSamples, playable, playsSent);
+        }
+
+        if (jumpGain > 0.0f)
+            blendJump (linkHub, back, start, linkStart, numSamples, left, right);
+
         fadeOutput (left, right, numSamples, muted ? 0.0f : 1.0f);
     }
 
     position = start + numSamples;
+}
+
+void BayLink::noteLatencyReport (const hs_link_info& info, int numSamples)
+{
+    if (info.latency_reports == lastLatencyReports)
+        return;
+
+    lastLatencyReports = info.latency_reports;
+
+    // The latency each report means, if it can be used; the hub checks reports, but they come from another plugin
+    auto state = Reading::unreadable;
+    std::optional<int> value;
+
+    switch (info.latency_state)
+    {
+        case HS_LINK_LATENCY_UNKNOWN:
+            state = Reading::none;
+            value = 0;
+            break;
+        case HS_LINK_LATENCY_NO_INPUT:
+            state = Reading::noInput;
+            value = 0;
+            break;
+        case HS_LINK_LATENCY_MEASURED:
+            if (info.latency >= 0 && info.latency <= HS_LINK_MAX_LATENCY)
+            {
+                state = Reading::measured;
+                value = info.latency;
+                lower (readingLowest, info.latency);
+                raise (readingHighest, info.latency);
+            }
+            else
+            {
+                state = Reading::outOfRange;
+            }
+            break;
+        case HS_LINK_LATENCY_OUT_OF_RANGE:
+            state = Reading::outOfRange;
+            break;
+        default:
+            break;
+    }
+
+    // Until here, the return was stamped by the receiver's position
+    if (state == Reading::none || state == Reading::noInput)
+        receiverStampedEnd = std::max (receiverStampedEnd, info.readable_end);
+
+    reading.store (state, std::memory_order_relaxed);
+    readingSamples.store (state == Reading::measured || state == Reading::outOfRange ? info.latency : 0, std::memory_order_relaxed);
+
+    if (!value.has_value())
+    {
+        candidateRun = 0;
+    }
+    else if (*value == candidate)
+    {
+        candidateRun += numSamples;
+    }
+    else
+    {
+        candidate = *value;
+        candidateRun = numSamples;
+    }
+
+    latencyCandidate.store (packCandidate (candidate, candidateRun), std::memory_order_relaxed);
+}
+
+void BayLink::blendJump (const hs_link_api* linkHub, int32_t back, juce::int64 start, juce::int64 linkStart, int numSamples, float* left, float* right)
+{
+    // The old timeline: the sent audio at its delay, with as much of the return as it was playing
+    history.read (start - jumpFromDelay, jumpLeft.data(), jumpRight.data(), numSamples);
+
+    if (jumpFromMix > 0.0f && linkHub != nullptr && back >= 0)
+    {
+        float* channels[] { jumpReturnLeft.data(), jumpReturnRight.data() };
+
+        if (linkHub->read (back, linkStart - jumpFromDelay, channels, 2, numSamples) == HS_LINK_OK)
+        {
+            replaceNonFinite (jumpReturnLeft.data(), numSamples);
+            replaceNonFinite (jumpReturnRight.data(), numSamples);
+
+            for (size_t i = 0; i < static_cast<size_t> (numSamples); ++i)
+            {
+                jumpLeft[i] += jumpFromMix * (jumpReturnLeft[i] - jumpLeft[i]);
+                jumpRight[i] += jumpFromMix * (jumpReturnRight[i] - jumpRight[i]);
+            }
+        }
+    }
+
+    const auto fadeSamples = crossfadeMs.load (std::memory_order_relaxed) * sampleRate / 1000.0;
+    const auto step = fadeSamples > 1.0 ? static_cast<float> (1.0 / fadeSamples) : 1.0f;
+
+    for (int i = 0; i < numSamples && jumpGain > 0.0f; ++i)
+    {
+        jumpGain = std::max (0.0f, jumpGain - step);
+        const auto index = static_cast<size_t> (i);
+        left[i] += jumpGain * (jumpLeft[index] - left[i]);
+        right[i] += jumpGain * (jumpRight[index] - right[i]);
+    }
 }
 
 void BayLink::fadeOutput (float* left, float* right, int numSamples, float target)
@@ -505,10 +690,8 @@ void BayLink::fadeOutput (float* left, float* right, int numSamples, float targe
     }
 }
 
-void BayLink::mix (float* left, float* right, int numSamples, bool returned)
+void BayLink::mix (float* left, float* right, int numSamples, bool returned, bool bypassed)
 {
-    const auto bypassed = bypass.load (std::memory_order_relaxed);
-
     if (!returned)
     {
         // A dropout starts at once (fading out of it would need a block of lookahead). Silence mode comes back from
@@ -637,7 +820,7 @@ void BayLink::captureTest (juce::int64 returnStart, int numSamples, bool returne
         }
 
         // Done once the return has passed the stretch, or long after it should have
-        if (const auto end = testStart + length; returnStart + numSamples >= end || linkEnd >= end + lastRoundTrip + probeSettle)
+        if (const auto end = testStart + length; returnStart + numSamples >= end || linkEnd >= end + currentLinkDelay + probeSettle)
             finishTest (linkEnd);
 
         return;
@@ -660,14 +843,14 @@ void BayLink::captureTest (juce::int64 returnStart, int numSamples, bool returne
         return;
 
     // Done once the return has passed the stretch after the step, or long after it should have
-    if (const auto end = probeStepAt + probeAfter; returnStart + numSamples >= end || linkEnd >= end + lastRoundTrip + probeSettle)
+    if (const auto end = probeStepAt + probeAfter; returnStart + numSamples >= end || linkEnd >= end + currentLinkDelay + probeSettle)
         finishTest (linkEnd);
 }
 
 void BayLink::finishTest (juce::int64 linkEnd)
 {
     // The test signal stops now; what's still on its way back is muted too
-    muteUntil = linkEnd + lastRoundTrip + maxBlock;
+    muteUntil = linkEnd + currentLinkDelay + maxBlock;
     auto running = int { testRunning };
     testStep.compare_exchange_strong (running, testReady, std::memory_order_release);
 }
@@ -711,8 +894,9 @@ void BayLink::resetCounters()
     replaced.store (0);
     oversized.store (0);
     valueSets.store (0);
+    heldBack.store (0);
 
-    for (auto* value : { &headroomNow, &headroomLowest, &blockMin, &blockMax })
+    for (auto* value : { &headroomNow, &headroomLowest, &blockMin, &blockMax, &readingLowest, &readingHighest })
         value->store (unset);
 
     differenceNow.store (-1.0f);
@@ -755,6 +939,27 @@ BayLink::Status BayLink::getStatus()
     status.maxBlock = maxBlock;
     status.sampleRate = sampleRate;
     status.bypass = bypass.load();
+    status.dropSends = dropSends.load();
+    status.delay = getDelaySamples();
+    status.bayLatency = bayLatency.load();
+    status.reading = reading.load();
+    status.readingSamples = readingSamples.load();
+    status.readingLowest = valueOf (readingLowest.load());
+    status.readingHighest = valueOf (readingHighest.load());
+    status.settleMs = settleMs.load();
+    status.heldBack = heldBack.load();
+
+    if (const auto packed = latencyCandidate.load(); sampleRate > 0.0)
+    {
+        const auto value = static_cast<int> (static_cast<juce::uint32> (packed >> 32));
+
+        if (value >= 0 && value != status.bayLatency)
+        {
+            status.settlingTo = value;
+            status.settledMs = juce::roundToInt (1000.0 * static_cast<juce::uint32> (packed) / sampleRate);
+        }
+    }
+
     status.dropouts = dropouts.load();
     status.crossfadeMs = crossfadeMs.load();
     status.missing = missing.load();
@@ -994,6 +1199,65 @@ const char* BayLink::toName (AutoState value) noexcept
     }
 
     return "off";
+}
+
+const char* BayLink::toName (BypassMode value) noexcept
+{
+    switch (value)
+    {
+        case BypassMode::synced:
+            return "synced";
+        case BypassMode::dropLatency:
+            return "dropLatency";
+        case BypassMode::off:
+            break;
+    }
+
+    return "off";
+}
+
+std::optional<BayLink::BypassMode> BayLink::bypassFromName (const juce::String& name)
+{
+    for (const auto mode : { BypassMode::off, BypassMode::synced, BypassMode::dropLatency })
+        if (name == toName (mode))
+            return mode;
+
+    return std::nullopt;
+}
+
+const char* BayLink::toName (DropSends value) noexcept
+{
+    return value == DropSends::audio ? "audio" : "silence";
+}
+
+std::optional<BayLink::DropSends> BayLink::dropSendsFromName (const juce::String& name)
+{
+    if (name == "silence")
+        return DropSends::silence;
+
+    if (name == "audio")
+        return DropSends::audio;
+
+    return std::nullopt;
+}
+
+const char* BayLink::toName (Reading value) noexcept
+{
+    switch (value)
+    {
+        case Reading::measured:
+            return "measured";
+        case Reading::unreadable:
+            return "unreadable";
+        case Reading::outOfRange:
+            return "outOfRange";
+        case Reading::noInput:
+            return "noInput";
+        case Reading::none:
+            break;
+    }
+
+    return "none";
 }
 
 void BayLink::History::allocate (int minimumFrames)

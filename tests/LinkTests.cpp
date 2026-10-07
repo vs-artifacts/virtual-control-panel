@@ -53,6 +53,7 @@ namespace
             panel->setRoundTripBlocks (roundTripBlocks);
             panel->prepare (rigRate, rigBlock);
             roundTrip = panel->getRoundTripSamples();
+            latency = panel->getBayLatency();
         }
 
         static std::unique_ptr<RelayProcessor> makeRelay (Mode mode)
@@ -81,7 +82,12 @@ namespace
             {
                 panel->maintain();
                 panel->updateRoundTrip();
+                panel->updateBayLatency();
                 roundTrip = panel->getRoundTripSamples();
+                latency = panel->getBayLatency();
+
+                if (const auto delay = panel->getDelaySamples(); delay != delays.back().second)
+                    delays.emplace_back (played, delay);
             }
 
             for (auto* relay : { receiver.get(), transmitter.get() })
@@ -190,18 +196,19 @@ namespace
             played += numSamples;
         }
 
-        // Samples played from `from` on that aren't the sent audio exactly a round trip late; with silenceAllowed, silent
-        // samples (a missing return) don't count either
+        // Samples played from `from` on that aren't the sent audio exactly a round trip (plus the bay latency in use)
+        // late; with silenceAllowed, silent samples (a missing return) don't count either
         int countWrong (juce::int64 from, bool silenceAllowed = false) const
         {
             auto wrong = 0;
+            const auto delay = roundTrip + latency;
 
             for (auto sample = from; sample < played; ++sample)
             {
                 const auto index = static_cast<size_t> (sample);
                 const auto left = outLeft[index];
                 const auto right = outRight[index];
-                const auto exact = juce::exactlyEqual (left, sentSample (sample - roundTrip, 0)) && juce::exactlyEqual (right, sentSample (sample - roundTrip, 1));
+                const auto exact = juce::exactlyEqual (left, sentSample (sample - delay, 0)) && juce::exactlyEqual (right, sentSample (sample - delay, 1));
                 const auto silent = juce::exactlyEqual (left, 0.0f) && juce::exactlyEqual (right, 0.0f);
 
                 if (!exact && !(silenceAllowed && silent))
@@ -233,6 +240,8 @@ namespace
         juce::Random random { 1234 };
         juce::int64 played = 0;
         int roundTrip = 0;
+        int latency = 0; // the bay latency the panel uses
+        std::vector<std::pair<juce::int64, int>> delays { { 0, -1 } }; // from which sample each output delay applied
         std::vector<float> outLeft, outRight;
         float receiverPeak = 0.0f; // the loudest the receiver has played
         std::array<float, RelayProcessor::numControlOutputs> controls {}; // the receiver's control outputs, last block
@@ -363,7 +372,7 @@ TEST_CASE ("Dropouts play the sent audio or silence; bypassed, the sent audio is
 
     SECTION ("bypassed, with or without relays")
     {
-        patcher.panel->setBypass (true);
+        patcher.panel->setBypass (BayLink::BypassMode::synced);
         patcher.run (10, Order::random);
         patcher.addReceiver();
         patcher.addTransmitter();
@@ -938,13 +947,13 @@ TEST_CASE ("The bypass switch crossfades, and a return coming back after a dropo
     SECTION ("bypass on and off")
     {
         auto switchedAt = patcher.played;
-        patcher.panel->setBypass (true);
+        patcher.panel->setBypass (BayLink::BypassMode::synced);
         patcher.run (4, Order::random);
         CHECK (countOffRamp (switchedAt, 1.0f, 0.0f) == 0);
         CHECK (patcher.countWrong (switchedAt + fade) == 0); // then exactly the sent audio
 
         switchedAt = patcher.played;
-        patcher.panel->setBypass (false);
+        patcher.panel->setBypass (BayLink::BypassMode::off);
         patcher.run (4, Order::random);
         CHECK (countOffRamp (switchedAt, 0.0f, 1.0f) == 0);
 
@@ -1112,6 +1121,325 @@ TEST_CASE ("A transmitter reads the bay plugin's latency from the receiver's pos
     }
 }
 
+namespace
+{
+    // An ideal bay plugin with latency of its own, which may change at any moment: it plays its input exactly `latency`
+    // samples late (wire the marker with the same delay, as Patcher's compensation does)
+    std::function<void (juce::AudioBuffer<float>&)> latentBay (std::shared_ptr<int> latency)
+    {
+        auto input = std::make_shared<std::array<std::vector<float>, 2>>();
+
+        return [input, latency] (juce::AudioBuffer<float>& audio) {
+            for (int i = 0; i < audio.getNumSamples(); ++i)
+            {
+                for (size_t channel = 0; channel < 2; ++channel)
+                {
+                    auto& stored = (*input)[channel];
+                    stored.push_back (audio.getSample (static_cast<int> (channel), i));
+                    const auto from = static_cast<juce::int64> (stored.size()) - 1 - *latency;
+                    audio.setSample (static_cast<int> (channel), i, from >= 0 ? stored[static_cast<size_t> (from)] : 0.0f);
+                }
+            }
+        };
+    }
+
+    // Blocks with the panel's and relays' timers in between, so a new bay latency can settle
+    void runWithTimers (Patcher& patcher, int rounds, Order order, bool varying = false)
+    {
+        for (int round = 0; round < rounds; ++round)
+        {
+            varying ? patcher.runVarying (10, order) : patcher.run (10, order);
+            patcher.maintain();
+        }
+    }
+
+    constexpr int jumpFade = BayLink::defaultCrossfadeMs * static_cast<int> (rigRate) / 1000;
+
+    // Samples from `from` on that aren't the sent audio at the output delay in use then (Patcher::delays), leaving out
+    // the blend after each change of delay
+    int countWrongByDelay (const Patcher& patcher, juce::int64 from)
+    {
+        auto wrong = 0;
+
+        for (auto sample = from; sample < patcher.played; ++sample)
+        {
+            auto delay = -1;
+            auto blending = false;
+
+            for (const auto& [start, value] : patcher.delays)
+            {
+                if (start <= sample)
+                {
+                    delay = value;
+                    blending = sample < start + jumpFade;
+                }
+            }
+
+            const auto index = static_cast<size_t> (sample);
+
+            if (delay >= 0 && !blending
+                && (!juce::exactlyEqual (patcher.outLeft[index], sentSample (sample - delay, 0)) || !juce::exactlyEqual (patcher.outRight[index], sentSample (sample - delay, 1))))
+                ++wrong;
+        }
+
+        return wrong;
+    }
+}
+
+TEST_CASE ("With the marker wired, the panel plays a latent bay's return exactly a round trip plus its latency late", "[link][marker]")
+{
+    struct Case
+    {
+        int latency;
+        int roundTripBlocks;
+        Order order;
+        bool varying;
+    };
+
+    for (const auto& [latency, blocks, order, varying] : { Case { 0, 2, Order::panelFirst, false },
+             Case { 576, 1, Order::panelFirst, true },
+             Case { 12288, 2, Order::random, false },
+             Case { 12480, 3, Order::random, true } })
+    {
+        INFO ("latency " << latency << ", round trip " << blocks << " blocks, varying blocks " << varying);
+        Patcher patcher;
+        patcher.addAll (blocks);
+        patcher.markerDelay = latency;
+        patcher.bay = latentBay (std::make_shared<int> (latency));
+        runWithTimers (patcher, varying ? 60 : 30, order, varying);
+
+        REQUIRE (patcher.panel->getBayLatency() == latency);
+        CHECK (patcher.panel->getDelaySamples() == patcher.roundTrip + latency);
+
+        patcher.panel->resetCounters();
+        const auto from = patcher.played;
+        runWithTimers (patcher, 20, order, varying);
+
+        const auto status = patcher.panel->getStatus();
+        CHECK (patcher.countWrong (from) == 0);
+        CHECK (status.missing == 0);
+        CHECK (status.reading == BayLink::Reading::measured);
+        CHECK (status.readingLowest == latency);
+        CHECK (status.readingHighest == latency);
+        CHECK_FALSE (status.settlingTo.has_value());
+        CHECK (status.differenceLargest.value_or (-1.0f) == 0.0f); // the return is the sent audio, lined up exactly
+        CHECK (patcher.transmitter->getLink().getStatus().stamp == RelayLink::Stamp::marker);
+    }
+}
+
+TEST_CASE ("A new bay latency settles before it's used, and stale readings never place audio", "[link][marker]")
+{
+    Patcher patcher;
+    patcher.addAll (2);
+    auto latency = std::make_shared<int> (576);
+    patcher.bay = latentBay (latency);
+    patcher.markerDelay = 576;
+    runWithTimers (patcher, 30, Order::random);
+    REQUIRE (patcher.panel->getBayLatency() == 576);
+    const auto from = patcher.played;
+
+    // FL rearranging its compensation: stale marker audio for a block, then for three in a row
+    for (const auto staleBlocks : { 1, 3 })
+    {
+        patcher.markerDelay = 25000;
+
+        for (int block = 0; block < staleBlocks; ++block)
+        {
+            patcher.run (1, Order::random);
+            patcher.maintain();
+            CHECK (patcher.panel->getBayLatency() == 576);
+        }
+
+        patcher.markerDelay = 576;
+        runWithTimers (patcher, 3, Order::random);
+    }
+
+    CHECK (patcher.panel->getBayLatency() == 576);
+    CHECK (countWrongByDelay (patcher, from) == 0);
+
+    SECTION ("a change shorter than the settle time is never used; the sent audio plays meanwhile")
+    {
+        patcher.panel->setSettleMs (1000);
+        *latency = 192;
+        patcher.markerDelay = 192;
+        runWithTimers (patcher, 4, Order::random);
+
+        auto status = patcher.panel->getStatus();
+        CHECK (status.bayLatency == 576);
+        CHECK (status.settlingTo == 192);
+        CHECK (status.heldBack > 0);
+
+        *latency = 576;
+        patcher.markerDelay = 576;
+        runWithTimers (patcher, 3, Order::random);
+        status = patcher.panel->getStatus();
+        CHECK (status.bayLatency == 576);
+        CHECK_FALSE (status.settlingTo.has_value());
+        CHECK (countWrongByDelay (patcher, from) == 0);
+    }
+
+    SECTION ("a lasting change is used once it has held, with one blended jump")
+    {
+        *latency = 12288;
+        patcher.markerDelay = 12288;
+        runWithTimers (patcher, 40, Order::random);
+
+        CHECK (patcher.panel->getBayLatency() == 12288);
+        CHECK (patcher.panel->getDelaySamples() == patcher.roundTrip + 12288);
+        CHECK (countWrongByDelay (patcher, from) == 0);
+
+        // The jump blends the old timeline into the new over the crossfade
+        REQUIRE (patcher.delays.size() >= 2);
+        const auto [jumpedAt, newDelay] = patcher.delays.back();
+        const auto oldDelay = patcher.delays[patcher.delays.size() - 2].second;
+        REQUIRE (newDelay == patcher.roundTrip + 12288);
+        auto offRamp = 0;
+
+        for (int i = 0; i < jumpFade; ++i)
+        {
+            const auto sample = jumpedAt + i;
+            const auto oldSample = sentSample (sample - oldDelay, 0);
+            const auto newSample = sentSample (sample - newDelay, 0);
+            const auto oldShare = 1.0f - static_cast<float> (i + 1) / static_cast<float> (jumpFade);
+            const auto expected = newSample + oldShare * (oldSample - newSample);
+
+            if (std::abs (patcher.outLeft[static_cast<size_t> (sample)] - expected) > 1.0e-3f)
+                ++offRamp;
+        }
+
+        CHECK (offRamp == 0);
+    }
+}
+
+TEST_CASE ("A transmitter holds back what it can't place, and stamps by the receiver once the marker has gone", "[link][marker]")
+{
+    Patcher patcher;
+    patcher.addAll (2);
+    auto latency = std::make_shared<int> (576);
+    patcher.bay = latentBay (latency);
+    patcher.markerDelay = 576;
+    runWithTimers (patcher, 30, Order::panelFirst);
+    REQUIRE (patcher.panel->getBayLatency() == 576);
+    auto& transmitter = patcher.transmitter->getLink();
+    const auto from = patcher.played;
+
+    SECTION ("the marker's wire cut: held back for a moment, then stamped by the receiver's position, which counts as 0")
+    {
+        patcher.markerDelay = -1;
+        patcher.run (2, Order::panelFirst);
+        auto status = transmitter.getStatus();
+        CHECK (status.markerHeld);
+        CHECK (status.stamp == RelayLink::Stamp::marker);
+
+        patcher.run (juce::roundToInt (RelayLink::markerHoldSeconds * rigRate / rigBlock) + 1, Order::panelFirst);
+        status = transmitter.getStatus();
+        CHECK_FALSE (status.markerHeld);
+        CHECK (status.stamp == RelayLink::Stamp::receiver);
+
+        runWithTimers (patcher, 5, Order::panelFirst);
+        CHECK (patcher.panel->getBayLatency() == 0);
+        CHECK (patcher.panel->getStatus().reading == BayLink::Reading::none);
+    }
+
+    SECTION ("a bay latency above the cap: never returned, and the sent audio plays")
+    {
+        *latency = HS_LINK_MAX_LATENCY + 1000;
+        patcher.markerDelay = HS_LINK_MAX_LATENCY + 1000;
+        runWithTimers (patcher, 5, Order::panelFirst);
+        patcher.panel->getStatus(); // "returning" means: since the last status
+        runWithTimers (patcher, 5, Order::panelFirst);
+
+        const auto status = patcher.panel->getStatus();
+        CHECK (status.reading == BayLink::Reading::outOfRange);
+        CHECK (status.readingSamples == HS_LINK_MAX_LATENCY + 1000);
+        CHECK_FALSE (status.transmitterReturning);
+        CHECK (status.bayLatency == 576);
+        CHECK (patcher.countWrong (from) == 0);
+    }
+
+    SECTION ("an unreadable marker: never returned, and the sent audio plays")
+    {
+        patcher.markerGain = 0.999f;
+        runWithTimers (patcher, 2, Order::panelFirst);
+        patcher.panel->getStatus();
+        runWithTimers (patcher, 5, Order::panelFirst);
+
+        const auto status = patcher.panel->getStatus();
+        CHECK (status.reading == BayLink::Reading::unreadable);
+        CHECK_FALSE (status.transmitterReturning);
+        CHECK (status.bayLatency == 576);
+        CHECK (patcher.countWrong (from) == 0);
+    }
+}
+
+TEST_CASE ("Bypass, drop latency plays the engine's sound at once, and the bay gets silence or the panel's sound", "[link]")
+{
+    using Bypass = BayLink::BypassMode;
+    Patcher patcher;
+    patcher.addAll (2);
+    patcher.bay = [] (juce::AudioBuffer<float>& audio) { audio.applyGain (0.5f); };
+    patcher.run (warmUpBlocks, Order::random);
+
+    // Samples from `from` on that aren't exactly `gain` times the sent audio `delay` samples late
+    const auto countNot = [&patcher] (juce::int64 from, int delay, float gain) {
+        auto wrong = 0;
+
+        for (auto sample = from; sample < patcher.played; ++sample)
+        {
+            const auto index = static_cast<size_t> (sample);
+
+            if (!juce::exactlyEqual (patcher.outLeft[index], gain * sentSample (sample - delay, 0)) || !juce::exactlyEqual (patcher.outRight[index], gain * sentSample (sample - delay, 1)))
+                ++wrong;
+        }
+
+        return wrong;
+    };
+
+    SECTION ("sending silence (the default): switching back, the silent stretch isn't played")
+    {
+        CHECK (patcher.panel->getDropSends() == BayLink::DropSends::silence);
+        patcher.panel->setBypass (Bypass::dropLatency);
+        CHECK (patcher.panel->getDelaySamples() == 0);
+        const auto dropped = patcher.played;
+        patcher.run (4, Order::random);
+        patcher.receiverPeak = 0.0f;
+        patcher.run (16, Order::random);
+        CHECK (juce::exactlyEqual (patcher.receiverPeak, 0.0f));
+        CHECK (countNot (dropped + jumpFade, 0, 1.0f) == 0);
+
+        patcher.panel->setBypass (Bypass::off);
+        CHECK (patcher.panel->getDelaySamples() == patcher.roundTrip);
+        const auto back = patcher.played;
+        patcher.run (30, Order::random);
+
+        // The sent audio a round trip late until the bay's sound returns, then the bay's sound: never the silence it got
+        auto silent = 0;
+
+        for (auto sample = back + jumpFade; sample < patcher.played; ++sample)
+            if (std::abs (patcher.outLeft[static_cast<size_t> (sample)]) < 1.0e-6f && std::abs (sentSample (sample - patcher.roundTrip, 0)) > 0.01f)
+                ++silent;
+
+        CHECK (silent == 0);
+        CHECK (countNot (patcher.played - 5 * rigBlock, patcher.roundTrip, 0.5f) == 0);
+    }
+
+    SECTION ("sending the panel's sound: the bay keeps playing")
+    {
+        patcher.panel->setDropSends (BayLink::DropSends::audio);
+        patcher.panel->setBypass (Bypass::dropLatency);
+        const auto dropped = patcher.played;
+        patcher.run (4, Order::random);
+        patcher.receiverPeak = 0.0f;
+        patcher.run (16, Order::random);
+        CHECK (patcher.receiverPeak > 0.0f);
+        CHECK (countNot (dropped + jumpFade, 0, 1.0f) == 0);
+
+        patcher.panel->setBypass (Bypass::off);
+        patcher.run (10, Order::random);
+        CHECK (countNot (patcher.played - 5 * rigBlock, patcher.roundTrip, 0.5f) == 0);
+    }
+}
+
 TEST_CASE ("A relay shows what the hub sees for every panel", "[link]")
 {
     Patcher patcher;
@@ -1245,12 +1573,15 @@ TEST_CASE ("The panel finds the hub in the real relay file once a host has loade
     transmitter.reset();
 }
 
-TEST_CASE ("The panel tells the host the round trip as latency, and keeps its bypass switch and control values", "[processor][link]")
+TEST_CASE ("The panel tells the host its delay as latency, and keeps its bypass switch and control values", "[processor][link]")
 {
+    using Bypass = BayLink::BypassMode;
     juce::SharedResourcePointer<PluginSettings> settings;
     const auto previousBlocks = settings->getRoundTripBlocks();
     const auto previousDropouts = settings->getBayDropouts();
     const auto previousCrossfade = settings->getBypassCrossfadeMs();
+    const auto previousSettle = settings->getLatencySettleMs();
+    const auto previousDropSends = settings->getDropSends();
 
     {
         settings->setRoundTripBlocks (3);
@@ -1263,10 +1594,22 @@ TEST_CASE ("The panel tells the host the round trip as latency, and keeps its by
         settings->setRoundTripBlocks (1);
         settings->setBayDropouts (Dropouts::silence);
         settings->setBypassCrossfadeMs (50);
+        settings->setLatencySettleMs (200);
+        settings->setDropSends (BayLink::DropSends::audio);
         processor.applyLinkSettings();
         CHECK (processor.getLatencySamples() == engineLatency + rigBlock);
         CHECK (processor.getBayLink().getDropouts() == Dropouts::silence);
         CHECK (processor.getBayLink().getCrossfadeMs() == 50);
+        CHECK (processor.getBayLink().getSettleMs() == 200);
+        CHECK (processor.getBayLink().getDropSends() == BayLink::DropSends::audio);
+
+        // Dropping the bay's latency leaves only the engine's
+        processor.getBayLink().setBypass (Bypass::dropLatency);
+        processor.applyLinkSettings();
+        CHECK (processor.getLatencySamples() == engineLatency);
+        processor.getBayLink().setBypass (Bypass::off);
+        processor.applyLinkSettings();
+        CHECK (processor.getLatencySamples() == engineLatency + rigBlock);
 
         // Automatic starts by trying 1 block
         settings->setRoundTripBlocks (BayLink::autoRoundTrip);
@@ -1281,30 +1624,34 @@ TEST_CASE ("The panel tells the host the round trip as latency, and keeps its by
         CHECK (juce::exactlyEqual (processor.getBayLink().getControl (2).getValue(), 0.625f));
         CHECK (processor.getBayLink().getControl (2).getText (0.625f, 20) == "62.50%");
 
-        processor.getBayLink().setBypass (true);
+        processor.getBayLink().setBypass (Bypass::dropLatency);
         processor.getBayLink().getControl (15).setValue (0.1f);
         juce::MemoryBlock saved;
         processor.getStateInformation (saved);
-        processor.getBayLink().setBypass (false);
+        processor.getBayLink().setBypass (Bypass::off);
         processor.getBayLink().getControl (2).setValue (0.0f);
         processor.getBayLink().getControl (15).setValue (0.0f);
         processor.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
-        CHECK (processor.getBayLink().isBypassed());
+        CHECK (processor.getBayLink().getBypass() == Bypass::dropLatency);
         CHECK (juce::exactlyEqual (processor.getBayLink().getControl (2).getValue(), 0.625f));
         CHECK (juce::exactlyEqual (processor.getBayLink().getControl (15).getValue(), 0.1f));
         CHECK (juce::exactlyEqual (hostControl.getValue(), 0.625f));
 
-        // Projects saved before the bypass switch had an output switch: "direct" is bypassed
-        for (const auto& [output, bypassed] : { std::pair { "direct", true }, std::pair { "return", false } })
-        {
+        // Earlier projects: a bypass on/off switch (on is now "synced"), and before that an output switch ("direct")
+        const auto loadOld = [&processor] (const char* attribute, const char* value) {
             juce::XmlElement old ("HeartseekerPanelState");
-            old.setAttribute ("bayOutput", output);
+            old.setAttribute (attribute, value);
             juce::MemoryBlock oldBytes;
             juce::AudioProcessor::copyXmlToBinary (old, oldBytes);
-            processor.getBayLink().setBypass (!bypassed);
             processor.setStateInformation (oldBytes.getData(), static_cast<int> (oldBytes.getSize()));
-            CHECK (processor.getBayLink().isBypassed() == bypassed);
-        }
+            return processor.getBayLink().getBypass();
+        };
+
+        CHECK (loadOld ("bayBypass", "1") == Bypass::synced);
+        CHECK (loadOld ("bayBypass", "0") == Bypass::off);
+        CHECK (loadOld ("bayOutput", "direct") == Bypass::synced);
+        CHECK (loadOld ("bayOutput", "return") == Bypass::off);
+        CHECK (loadOld ("bayBypassMode", "sideways") == Bypass::off);
 
         processor.releaseResources();
     }
@@ -1312,4 +1659,6 @@ TEST_CASE ("The panel tells the host the round trip as latency, and keeps its by
     settings->setRoundTripBlocks (previousBlocks);
     settings->setBayDropouts (previousDropouts);
     settings->setBypassCrossfadeMs (previousCrossfade);
+    settings->setLatencySettleMs (previousSettle);
+    settings->setDropSends (previousDropSends);
 }

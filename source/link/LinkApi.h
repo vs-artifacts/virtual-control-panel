@@ -12,6 +12,9 @@
 //
 // A channel also carries value sets: up to HS_LINK_MAX_VALUES numbers stamped with the position from which they apply,
 // until a later set. They outlast sessions; a new writer starts them afresh.
+//
+// A writer can also report its latency: how much later than the positions its source was playing its audio arrives
+// (for a bay's transmitter, the FL plugin's own delay, read from the position marker).
 
 #include <stdint.h>
 
@@ -19,7 +22,7 @@
 extern "C" {
 #endif
 
-#define HS_LINK_ABI_VERSION 2u
+#define HS_LINK_ABI_VERSION 3u
 #define HS_LINK_GET_API_SYMBOL "heartseeker_link_get_api"
 
 // Channel names: printable ASCII, 1 to HS_LINK_MAX_NAME - 1 characters
@@ -38,6 +41,9 @@ extern "C" {
 #define HS_LINK_MAX_VALUES 64
 #define HS_LINK_VALUE_SETS 256
 
+// The most latency a writer may report as measured (samples)
+#define HS_LINK_MAX_LATENCY 32768
+
 enum {
     HS_LINK_WRITER = 0, // one per channel
     HS_LINK_READER = 1, // one per channel; the hub publishes where it last read
@@ -53,6 +59,15 @@ enum {
     HS_LINK_NOT_FOUND = -3, // observer: no such channel
     HS_LINK_FULL = -4, // no room for another channel
     HS_LINK_CLOSED = -5, // the handle's claim has been closed
+};
+
+// What a writer reports about its latency
+enum {
+    HS_LINK_LATENCY_UNKNOWN = 0, // nothing to measure it by (e.g. no marker arriving); samples 0
+    HS_LINK_LATENCY_MEASURED = 1, // samples: 0 to HS_LINK_MAX_LATENCY
+    HS_LINK_LATENCY_UNREADABLE = 2, // something arrives that can't be read; samples 0
+    HS_LINK_LATENCY_OUT_OF_RANGE = 3, // samples: the reading, below 0 or above HS_LINK_MAX_LATENCY
+    HS_LINK_LATENCY_NO_INPUT = 4, // the writer can't measure (e.g. its Marker input is off); samples 0
 };
 
 typedef struct hs_link_info
@@ -76,6 +91,9 @@ typedef struct hs_link_info
     uint64_t reads;
     uint64_t value_sets; // value sets written so far
     uint64_t failed_reads; // reads that didn't get every frame
+    int32_t latency_state; // the writer's latest latency report (HS_LINK_LATENCY_...), unknown since it claimed
+    int32_t latency;
+    uint64_t latency_reports; // reports so far, to tell a new one from the last
 } hs_link_info;
 
 typedef struct hs_link_api
@@ -103,6 +121,10 @@ typedef struct hs_link_api
     // A read that fails changes nothing but *num_values (0).
     int32_t (*write_values) (int32_t handle, int64_t position, const float* values, int32_t num_values);
     int32_t (*read_values) (int32_t handle, int64_t position, float* values, int32_t max_values, int32_t* num_values);
+
+    // Writer only, any thread, as write: its latency (state HS_LINK_LATENCY_..., samples as that state allows). Report
+    // after writing the audio it applies to: a reader that sees the report also sees that audio.
+    int32_t (*set_latency) (int32_t handle, int32_t state, int32_t samples);
 } hs_link_api;
 
 // The one exported function: null unless this hub speaks the requested version

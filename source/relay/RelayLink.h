@@ -7,7 +7,8 @@
 // A relay's side of a bay link, for one bay ("bay 1") of the first panel it finds.
 // Receiver mode (before the FL plugin): plays what the panel sends, and holds the panel's control values for the
 // relay's control outputs. Transmitter mode (after it): sends what comes out of the FL plugin back to the panel,
-// stamped with the position the receiver played in the same cycle.
+// stamped with the position the position marker carries (or, without a marker, the position the receiver played in
+// the same cycle), and reports the bay plugin's latency to the panel.
 class RelayLink
 {
 public:
@@ -47,6 +48,13 @@ public:
         flowing, // receiver: sending positions; transmitter: reading them
     };
 
+    // What a transmitter stamps its return with
+    enum class Stamp {
+        none, // not returning
+        marker, // the marker's positions
+        receiver, // no marker: the position the receiver played in the same cycle
+    };
+
     struct Status
     {
         Mode mode = Mode::receiver;
@@ -65,6 +73,8 @@ public:
         MarkerState marker = MarkerState::unknown;
         std::optional<int> bayLatencyNow, bayLatencyLowest, bayLatencyHighest; // transmitter: samples, from the marker
         juce::uint64 markerUnreadable = 0; // transmitter: blocks
+        Stamp stamp = Stamp::none; // transmitter
+        bool markerHeld = false; // transmitter: the marker has gone silent, and its timing is held for a moment
     };
 
     explicit RelayLink (const hs_link_api&);
@@ -113,11 +123,18 @@ public:
     // The first sample's position modulo 2^markerBits, if every sample is a marker and they run on without a gap
     static std::optional<juce::int64> readMarker (const float* left, const float* right, int numSamples) noexcept;
 
+    // A marker that goes silent after it was read: this long, its blocks aren't returned (a receiver's dropout arriving
+    // through the bay plugin's latency), then the transmitter stamps by the receiver's position again
+    static constexpr double markerHoldSeconds = 0.1;
+
 private:
     void unlink();
     void receive (juce::AudioBuffer<float>&, int markerOutput);
     void receiveControls (int32_t reader, juce::int64 position);
     void transmit (const juce::AudioBuffer<float>&, int markerInput);
+    void transmitByReceiver (const juce::AudioBuffer<float>&, const hs_link_info&);
+    void sendReturn (const juce::AudioBuffer<float>&, juce::int64 position);
+    void reportLatency (int32_t latencyState, int32_t samples) noexcept;
     std::optional<juce::int64> readMarkerInput (const juce::AudioBuffer<float>&, int markerInput) noexcept;
     bool matchesOwnRate (double) const noexcept;
     void noteMiss (Miss) noexcept;
@@ -141,6 +158,9 @@ private:
     juce::int64 cursor = 0, returnedEnd = 0;
     juce::uint64 session = 0, lastPanelWrites = 0, lastReads = 0;
     int panelStall = 0, receiverStall = 0;
+    bool markerInUse = false; // transmitter: a marker has arrived on this link (unreadable ones too)
+    juce::int64 markerQuiet = 0; // transmitter: samples the marker has been silent since
+    std::optional<int> lastLatency; // transmitter: the latest reading in samples
 
     // Audio thread to message thread
     std::atomic<bool> otherSideRunning { false }, sampleRateDiffers { false }, controlsLive { false };
@@ -149,6 +169,8 @@ private:
     std::atomic<Miss> lastMiss { Miss::none };
     std::atomic<MarkerState> markerState { MarkerState::unknown };
     std::atomic<juce::uint64> markerUnreadable { 0 };
+    std::atomic<Stamp> stamp { Stamp::none };
+    std::atomic<bool> markerHeld { false };
     bool streaming = false; // audio thread: only a block missing from a running stream counts as missed
 
     static constexpr int unset = std::numeric_limits<int>::min();

@@ -55,9 +55,18 @@ public:
     int getRoundTripBlocks() const;
     void setRoundTripBlocks (int);
 
-    // How long a bay's bypass switch fades between the return and the sent audio; 0 switches at once
+    // How long a bay's bypass switch fades between the return and the sent audio; 0 switches at once. Also the blend when
+    // the bay's delay changes.
     int getBypassCrossfadeMs() const;
     void setBypassCrossfadeMs (int);
+
+    // How long a new bay latency must hold before the panel uses it
+    int getLatencySettleMs() const;
+    void setLatencySettleMs (int);
+
+    // What a bay bypassed with its latency dropped is sent: silence, or the panel's sound
+    BayLink::DropSends getDropSends() const;
+    void setDropSends (BayLink::DropSends);
 
     // The longest gap between the two clicks of a double-click on the page's controls
     static constexpr int minDoubleClickMs = 1, maxDoubleClickMs = 2000, defaultDoubleClickMs = 500;

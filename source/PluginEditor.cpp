@@ -123,6 +123,8 @@ juce::var PluginEditor::describeEditor() const
     current->setProperty ("bayDropouts", BayLink::toName (settings->getBayDropouts()));
     current->setProperty ("roundTripBlocks", settings->getRoundTripBlocks());
     current->setProperty ("bypassCrossfadeMs", settings->getBypassCrossfadeMs());
+    current->setProperty ("bayLatencySettleMs", settings->getLatencySettleMs());
+    current->setProperty ("bayDropSends", BayLink::toName (settings->getDropSends()));
     current->setProperty ("doubleClickMs", settings->getDoubleClickMs());
     current->setProperty ("doubleClickSets", settings->getDoubleClickSets());
 
@@ -173,7 +175,18 @@ juce::var PluginEditor::describeLink() const
     link->setProperty ("maxBlock", status.maxBlock);
     link->setProperty ("sampleRate", status.sampleRate);
     link->setProperty ("latency", pluginProcessor.getLatencySamples());
-    link->setProperty ("bypass", status.bypass);
+    link->setProperty ("bypass", BayLink::toName (status.bypass));
+    link->setProperty ("dropSends", BayLink::toName (status.dropSends));
+    link->setProperty ("delay", status.delay);
+    link->setProperty ("bayLatency", status.bayLatency);
+    link->setProperty ("reading", BayLink::toName (status.reading));
+    link->setProperty ("readingSamples", status.readingSamples);
+    setIfKnown ("readingLowest", status.readingLowest);
+    setIfKnown ("readingHighest", status.readingHighest);
+    setIfKnown ("settlingTo", status.settlingTo);
+    link->setProperty ("settledMs", status.settledMs);
+    link->setProperty ("settleMs", status.settleMs);
+    link->setProperty ("heldBack", static_cast<juce::int64> (status.heldBack));
     link->setProperty ("dropouts", BayLink::toName (status.dropouts));
     link->setProperty ("crossfadeMs", status.crossfadeMs);
     link->setProperty ("missing", static_cast<juce::int64> (status.missing));
@@ -284,6 +297,24 @@ void PluginEditor::handleSetting (const juce::var& message)
             pluginProcessor.applyLinkSettings();
         }
     }
+    else if (name == "bayLatencySettleMs" && value.isInt())
+    {
+        const auto milliseconds = static_cast<int> (value);
+
+        if (milliseconds >= 0 && milliseconds <= BayLink::maxSettleMs)
+        {
+            settings->setLatencySettleMs (milliseconds);
+            pluginProcessor.applyLinkSettings();
+        }
+    }
+    else if (name == "bayDropSends" && value.isString())
+    {
+        if (const auto sends = BayLink::dropSendsFromName (value.toString()))
+        {
+            settings->setDropSends (*sends);
+            pluginProcessor.applyLinkSettings();
+        }
+    }
     else if (name == "doubleClickMs" && value.isInt())
     {
         const auto milliseconds = static_cast<int> (value);
@@ -348,8 +379,16 @@ void PluginEditor::handleBayBypass (const juce::var& message)
 {
     const auto& value = message["value"];
 
-    if (value.isBool())
-        pluginProcessor.getBayLink().setBypass (static_cast<bool> (value));
+    if (!value.isString())
+        return;
+
+    if (const auto mode = BayLink::bypassFromName (value.toString()))
+    {
+        pluginProcessor.getBayLink().setBypass (*mode);
+
+        // Dropping the bay's latency changes what the host must be told
+        pluginProcessor.applyLinkSettings();
+    }
 }
 
 void PluginEditor::reportLink()

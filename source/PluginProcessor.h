@@ -61,8 +61,8 @@ public:
     // The external module bay (link test): its bypass switch and control values are saved with the instance
     BayLink& getBayLink() noexcept { return bayLink; }
 
-    // Takes the plugin-wide link settings (dropouts, round trip, crossfade), runs the automatic round trip, and
-    // reports the latency if it changed
+    // Takes the plugin-wide link settings (dropouts, round trip, crossfade, settle time, what a dropped bay is sent),
+    // runs the automatic round trip, takes a settled bay latency, and reports the latency if it changed
     void applyLinkSettings();
 
     // Every exposed parameter, for a page to control through its host control

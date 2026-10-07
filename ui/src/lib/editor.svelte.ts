@@ -18,6 +18,7 @@ const placements = ['off', 'hostPlaced', 'mouse', 'hostMainWindow'] as const
 const attachedPlacements = ['off', 'workspace', 'hostMonitor'] as const
 export const renderings = ['smooth', 'sharp'] as const
 const dropoutModes = ['safe', 'silence'] as const
+const dropSendsModes = ['silence', 'audio'] as const
 const roundTrips = [0, 1, 2, 3] as const
 
 // The bay bypass crossfade: whole milliseconds, 0 is off
@@ -25,6 +26,13 @@ export const crossfadeRange = { min: 0, max: 50 } as const
 
 function isCrossfadeMs(value: unknown): value is number {
     return typeof value === 'number' && Number.isInteger(value) && value >= crossfadeRange.min && value <= crossfadeRange.max
+}
+
+// How long a new bay latency must hold before it's used: whole milliseconds
+export const settleRange = { min: 0, max: 1000 } as const
+
+function isSettleMs(value: unknown): value is number {
+    return typeof value === 'number' && Number.isInteger(value) && value >= settleRange.min && value <= settleRange.max
 }
 
 // The longest gap between the clicks of a double-click, in whole milliseconds
@@ -46,6 +54,9 @@ export interface Settings {
     // 0: automatic
     roundTripBlocks: (typeof roundTrips)[number]
     bypassCrossfadeMs: number
+    bayLatencySettleMs: number
+    // What a bay bypassed with its latency dropped is sent
+    bayDropSends: (typeof dropSendsModes)[number]
     doubleClickMs: number
     // Placeholder: double-click will open a value entry instead of resetting
     doubleClickSets: boolean
@@ -77,6 +88,8 @@ export const editor = $state({
         bayDropouts: 'safe',
         roundTripBlocks: 0,
         bypassCrossfadeMs: 30,
+        bayLatencySettleMs: 50,
+        bayDropSends: 'silence',
         doubleClickMs: 500,
         doubleClickSets: false,
     } as Settings,
@@ -135,6 +148,8 @@ function readSettings(raw: unknown): void {
     settings.bayDropouts = oneOf(dropoutModes, fields.bayDropouts) ?? settings.bayDropouts
     settings.roundTripBlocks = roundTrips.find((blocks) => blocks === fields.roundTripBlocks) ?? settings.roundTripBlocks
     if (isCrossfadeMs(fields.bypassCrossfadeMs)) settings.bypassCrossfadeMs = fields.bypassCrossfadeMs
+    if (isSettleMs(fields.bayLatencySettleMs)) settings.bayLatencySettleMs = fields.bayLatencySettleMs
+    settings.bayDropSends = oneOf(dropSendsModes, fields.bayDropSends) ?? settings.bayDropSends
 }
 
 function readLines(raw: unknown, limit: number): string[] {

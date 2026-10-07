@@ -14,6 +14,8 @@ namespace
     constexpr auto dropoutModeKey = "bayDropouts";
     constexpr auto roundTripBlocksKey = "bayRoundTrip";
     constexpr auto bypassCrossfadeKey = "bayBypassCrossfadeMs";
+    constexpr auto latencySettleKey = "bayLatencySettleMs";
+    constexpr auto dropSendsKey = "bayDropSends";
     constexpr auto doubleClickMsKey = "doubleClickMs";
     constexpr auto doubleClickSetsKey = "doubleClickSets";
 }
@@ -132,6 +134,26 @@ int PluginSettings::getBypassCrossfadeMs() const
 void PluginSettings::setBypassCrossfadeMs (int milliseconds)
 {
     file.setValue (bypassCrossfadeKey, juce::jlimit (0, BayLink::maxCrossfadeMs, milliseconds));
+}
+
+int PluginSettings::getLatencySettleMs() const
+{
+    return juce::jlimit (0, BayLink::maxSettleMs, file.getIntValue (latencySettleKey, BayLink::defaultSettleMs));
+}
+
+void PluginSettings::setLatencySettleMs (int milliseconds)
+{
+    file.setValue (latencySettleKey, juce::jlimit (0, BayLink::maxSettleMs, milliseconds));
+}
+
+BayLink::DropSends PluginSettings::getDropSends() const
+{
+    return BayLink::dropSendsFromName (file.getValue (dropSendsKey)).value_or (BayLink::DropSends::silence);
+}
+
+void PluginSettings::setDropSends (BayLink::DropSends value)
+{
+    file.setValue (dropSendsKey, BayLink::toName (value));
 }
 
 int PluginSettings::getDoubleClickMs() const

@@ -89,6 +89,7 @@ TEST_CASE ("The link hub only speaks its own version", "[link]")
 {
     CHECK (heartseeker_link_get_api (0) == nullptr);
     CHECK (heartseeker_link_get_api (1) == nullptr); // no value sets
+    CHECK (heartseeker_link_get_api (2) == nullptr); // no latency reports
     CHECK (heartseeker_link_get_api (HS_LINK_ABI_VERSION + 1) == nullptr);
 
     const auto* api = heartseeker_link_get_api (HS_LINK_ABI_VERSION);
@@ -104,6 +105,85 @@ TEST_CASE ("The link hub only speaks its own version", "[link]")
     CHECK (api->get_info != nullptr);
     CHECK (api->write_values != nullptr);
     CHECK (api->read_values != nullptr);
+    CHECK (api->set_latency != nullptr);
+}
+
+TEST_CASE ("A writer reports its latency through the hub", "[link]")
+{
+    const auto& hub = linkHub();
+    Claims claims;
+    const auto writer = claims.open ("test/latency", HS_LINK_WRITER);
+    const auto reader = claims.open ("test/latency", HS_LINK_READER);
+    const auto observer = hub.open ("test/latency", HS_LINK_OBSERVER);
+    REQUIRE (writer >= 0);
+    REQUIRE (reader >= 0);
+
+    auto info = infoFor (reader);
+    CHECK (info.latency_state == HS_LINK_LATENCY_UNKNOWN);
+    CHECK (info.latency == 0);
+    const auto reportsBefore = info.latency_reports;
+
+    CHECK (hub.set_latency (writer, HS_LINK_LATENCY_MEASURED, 12288) == HS_LINK_OK);
+    info = infoFor (observer);
+    CHECK (info.latency_state == HS_LINK_LATENCY_MEASURED);
+    CHECK (info.latency == 12288);
+    CHECK (info.latency_reports == reportsBefore + 1);
+
+    CHECK (hub.set_latency (writer, HS_LINK_LATENCY_OUT_OF_RANGE, -5) == HS_LINK_OK);
+    info = infoFor (reader);
+    CHECK (info.latency_state == HS_LINK_LATENCY_OUT_OF_RANGE);
+    CHECK (info.latency == -5);
+    CHECK (info.latency_reports == reportsBefore + 2);
+
+    SECTION ("every state takes only its own samples, only from the writer; refused reports change nothing")
+    {
+        CHECK (hub.set_latency (writer, HS_LINK_LATENCY_MEASURED, 0) == HS_LINK_OK);
+        CHECK (hub.set_latency (writer, HS_LINK_LATENCY_MEASURED, HS_LINK_MAX_LATENCY) == HS_LINK_OK);
+        CHECK (hub.set_latency (writer, HS_LINK_LATENCY_OUT_OF_RANGE, HS_LINK_MAX_LATENCY + 1) == HS_LINK_OK);
+        CHECK (hub.set_latency (writer, HS_LINK_LATENCY_UNREADABLE, 0) == HS_LINK_OK);
+        CHECK (hub.set_latency (writer, HS_LINK_LATENCY_NO_INPUT, 0) == HS_LINK_OK);
+        CHECK (hub.set_latency (writer, HS_LINK_LATENCY_UNKNOWN, 0) == HS_LINK_OK);
+        const auto reports = infoFor (reader).latency_reports;
+
+        const std::pair<int32_t, int32_t> refused[] {
+            { HS_LINK_LATENCY_MEASURED, -1 },
+            { HS_LINK_LATENCY_MEASURED, HS_LINK_MAX_LATENCY + 1 },
+            { HS_LINK_LATENCY_OUT_OF_RANGE, 0 },
+            { HS_LINK_LATENCY_OUT_OF_RANGE, HS_LINK_MAX_LATENCY },
+            { HS_LINK_LATENCY_UNKNOWN, 1 },
+            { HS_LINK_LATENCY_UNREADABLE, 3 },
+            { HS_LINK_LATENCY_NO_INPUT, -1 },
+            { 5, 0 },
+            { -1, 0 },
+        };
+
+        for (const auto& [state, samples] : refused)
+        {
+            INFO (state << ", " << samples);
+            CHECK (hub.set_latency (writer, state, samples) == HS_LINK_BAD_ARGUMENT);
+        }
+
+        CHECK (hub.set_latency (reader, HS_LINK_LATENCY_MEASURED, 0) == HS_LINK_BAD_ARGUMENT);
+        CHECK (hub.set_latency (observer, HS_LINK_LATENCY_MEASURED, 0) == HS_LINK_BAD_ARGUMENT);
+        CHECK (hub.set_latency (-1, HS_LINK_LATENCY_MEASURED, 0) == HS_LINK_BAD_ARGUMENT);
+
+        info = infoFor (reader);
+        CHECK (info.latency_state == HS_LINK_LATENCY_UNKNOWN);
+        CHECK (info.latency_reports == reports);
+    }
+
+    SECTION ("a writer that closes leaves it unknown, and a new writer starts from unknown")
+    {
+        hub.close (writer);
+        CHECK (hub.set_latency (writer, HS_LINK_LATENCY_MEASURED, 1) == HS_LINK_CLOSED);
+        CHECK (infoFor (reader).latency_state == HS_LINK_LATENCY_UNKNOWN);
+
+        const auto next = claims.open ("test/latency", HS_LINK_WRITER);
+        REQUIRE (next >= 0);
+        CHECK (infoFor (reader).latency_state == HS_LINK_LATENCY_UNKNOWN);
+        CHECK (hub.set_latency (next, HS_LINK_LATENCY_MEASURED, 576) == HS_LINK_OK);
+        CHECK (infoFor (reader).latency == 576);
+    }
 }
 
 TEST_CASE ("Link channels: names and roles", "[link]")
