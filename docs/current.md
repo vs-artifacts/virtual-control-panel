@@ -2,70 +2,51 @@
 
 The live handover: where things stand, what's next, and exactly what to read for it. Rewritten at the end of every session. Lasting decisions belong in `docs/decisions.md`; this file only points to them.
 
-**Last updated:** 2026-10-07. C2 is committed (not pushed) and FL-checked; the next build is being planned.
+**Last updated:** 2026-10-07, end of session. Everything is committed and pushed (C2: `2a20055`, plus this handover).
 
 ## Where things stand
-- **Slice 1b.4, the rest (planned 2026-10-06):** C (a bay plugin's own latency via the position marker) in two builds, then A (regression fixes), then B (real blocks). The settings defaults file is postponed. Plan and reasons: `decisions.md`, "The rest of 1b.4: plan, and the position marker".
-- **C1 (relay side) passed the FL check (2026-10-07).**
-- **C2 (the panel uses the bay latency) is built (2026-10-07) and needs the FL check below.** The transmitter stamps the return by the marker and reports L through the hub (version 3); the panel settles on a new L (50 ms by default), plays and reports round trip + L, and blends every jump of its delay. Added at the user's request: **two bypasses** ("Bypass, synced" and "Bypass, drop latency") and a plugin-wide toggle for what a dropped bay is sent (silence or the panel's sound). Decisions: `decisions.md`, "C2: decided with the user (2026-10-07)" and "C2 as built".
-- **Automated tests pass in Debug and Release** (70 test cases), warning-free. The page's new rows were checked in the browser preview.
+- **Slice 1b.4, the rest (planned 2026-10-06):** C (a bay plugin's own latency via the position marker), then A (regression fixes), then B (real blocks). The settings defaults file is postponed. Plan and reasons: `decisions.md`, "The rest of 1b.4: plan, and the position marker".
+- **C1 and C2 are built and FL-checked (2026-10-07).** The panel reads the bay plugin's latency from the marker and plays and reports round trip + L, in time with the rest of the project (Lag reads 0 through linear-phase EQ 2). Results: `decisions.md`, "FL check of C2".
+- **Still failing: missing blocks and Automatic falling back to 2 on latency changes** (cause unknown; the next build makes it visible first).
+- **Automated tests pass in Debug and Release** (70 test cases), warning-free.
 
 ## Next
-1. **The next build** (`decisions.md`, "FL check of C2" and "The next build"): diagnostics for the latency-change misses, silence fades with a reversed copy, the four slot states (Active, Mute, Bypass, Off), the tail-cut control output. Open before building: gain-matched dropouts or silence only.
+1. **Next session: build "the next build"** (`decisions.md`, "The next build (user, 2026-10-07)" and "Future refinement: dry dropouts"). The user has given the go; the one point to confirm in a line before building is "Leaving Mute, Bypass or Off is a transition, not a dropout". Then write its FL checklist here.
 2. **Then A: the regression fixes,** then **B: real blocks** (both specified in "Plan (user, 2026-10-06)").
 3. **Then the settings defaults file** (postponed), then **slice 1b.5, plugin swap.**
 
-## FL check: C2
-**Setup:**
-- Close FL before building, or restart it after the build. The panel and relay junctions point at the Debug builds.
-- Fresh blank project. Note the sample rate and buffer length.
-- Patcher with **smart disable off**. Inside it:
-  - the panel: MIDI from "From FL Studio", audio to "To FL Studio";
-  - relay A set to **Receiver**, relay B set to **Transmitter**;
-  - the receiver's main output into the bay's plugin, then into the transmitter's main input (no plugin for step 1);
-  - the receiver's **Marker** output into the transmitter's **Marker** input (assign the pins in Connections, as in C1).
-- Settings tab: dropouts Safe, round trip Automatic, crossfade 30, **settle time 50**, **dropped bay sends Silence**.
-
-**Record:**
-- Diagnostics: Bay latency, Output delay (and "host told"), Held back, Missing blocks, Receiver missed, Return vs sent, Lag.
-- Relay B: the Marker line.
-- Anything audible: clicks, gaps, stutters, timing shifts.
-
-**Steps:**
-1. **Pass-through bay** (no plugin).
-   - **Expect:** "Bay latency 0 samples in use; marker: reads 0", and Output delay = the round trip.
-   - Lag > Measure: "0 samples (an exact copy)". Return vs sent: identical. Missing: 0.
-2. **Linear-phase EQ 2 at its highest** in the bay.
-   - **Expect:**
-     - Bay latency 12288 in use; Output delay = round trip + 12288; "host told" up by 12288.
-     - **Lag > Measure: one path at 0**, not 12,288.
-   - Play, then flip Bypass between Off and "Bypass, synced". **Expect:** no time jump, no phasey blend.
-   - Remove the transmitter while playing. **Expect:** the sound carries on without a time jump. Add it back: the bay's sound fades back in, in time.
-3. **In time with the project.** Put a percussive sound on another channel (not through the panel) and one through the panel and EQ 2. **Expect:** they stay together with the EQ's linear phase on and off. Rendering both and comparing is the precise check.
-4. **Change EQ 2's latency while playing** (off, 384, 768, highest, off).
-   - **Expect each time:**
-     - the bay's sound drops out briefly (your sound plays without it);
-     - then one blended jump: a stutter when the latency goes up, a skip when it goes down, no click;
-     - Bay latency ends on the new value, and "Held back" rises a little.
-   - FL's one-off huge readings may show in "readings … since reset", but must never be "in use".
-   - Automatic stays where it was, and Missing blocks don't jump.
-5. **Maximus:** Bay latency 192.
-6. **Marker wiring while playing** (EQ 2 at its highest):
-   - **Unwire the marker.** **Expect:** the bay's sound held back for about 0.1 s, then back but 12,288 late. Relay B: "return stamped by the receiver's position". Diagnostics: "no marker arriving", and Bay latency settles to 0 (one jump).
-   - **Wire it again.** **Expect:** Bay latency back to 12288 (one jump), then up to a quarter of a second of your sound without the effect, then the bay's sound, in time.
-   - **Damage the marker** (Fruity Balance on the marker wire at 99%). **Expect:** "unreadable"; the bay's sound is held back and your sound plays; never misplaced.
-7. **Settle time 0, then 500 ms:** repeat a few EQ changes. **Expect:** quicker (perhaps an extra jump) at 0, longer gaps at 500. Set it back to 50.
-8. **Bypass, drop latency** (EQ 2 at its highest):
-   - Switch to it while playing. **Expect:**
-     - one blended jump forward;
-     - "host told" drops to the engine's latency alone, and FL re-shifts the rest of the project (a hiccup);
-     - your sound plays with no delay and no effect.
-   - **Silence (default):** relay A's input peak shows nothing reaching the bay. Note whether FL switches the EQ off (its smart disable; CPU or activity). Switch back to Off. **Expect:** one jump back; your sound until the bay's sound returns (about the round trip + 12,288), then a fade into it; no silent gap.
-   - **"The panel's sound":** put a long reverb in the bay (e.g. Fruity Reeverb 2). Drop and come back. **Expect:** the reverb keeps processing while dropped and is there at once on switching back. With Silence, compare how the tails behave. **Then decide** which to keep (or a per-slot toggle).
-   - Save and reopen the project with each bypass choice. **Expect:** it's restored.
-9. **Regression:** stages 1, 2 and 4 of the bay link checklist below. "Bay return" is now Bypass Off; "Direct" is "Bypass, synced".
-
-Carry over (optional): a sleep and wake test with a working bay. Play, sleep the PC, wake it, then read every relay's Panels section and the panel's Diagnostics before touching anything.
+## The next build: implementation notes (agent, for the next session)
+Where each part goes, so the session doesn't need to explore first. Spec: `decisions.md`, "The next build (user, 2026-10-07)".
+1. **Event log and counters.**
+   - Panel: a message-thread log in `BayLink`, like the key log in `PluginEditor`: the newest first, about 30 lines, shown in Diagnostics. Lines:
+     - `prepare` (sample rate, block);
+     - round trip changes, with why (setting, Automatic trying 1, Automatic falling back);
+     - bay latency settling starts and adoptions;
+     - Automatic's decisions;
+     - missing blocks by cause.
+   - Missing blocks by cause: the audio thread keeps counters (late = `HS_LINK_NOT_YET`, gone = `HS_LINK_GONE`, held back), and the 10 Hz timer turns their changes into lines. No strings on the audio thread.
+   - Relay window: prepare count; transmitter's fallbacks to the receiver's position (`RelayLink::transmit`, the no-marker branch after a marker was in use).
+2. **A window after any change of delay** for Automatic and the missing count. In `BayLink::process`, `roundTripRun` resets only when the round trip changes; reset it when `currentLinkDelay` changes too, and don't count missing blocks inside that window either.
+3. **Silence-only dropouts with a reversed-copy fade-out.**
+   - `BayLink::mix`: a missing block (or a held-back one: settling, the marker hold, out of range, unreadable) starts from the last crossfade length of *output* played, reversed, under a falling ramp, then silence; fading back in as now.
+   - Keep a ring of the last output samples, sized in `prepare` for `maxCrossfadeMs`.
+   - The `Dropouts` setting leaves Settings and `PluginSettings` (`bayDropouts` is then ignored); `BayLink` keeps `Dropouts::safe` for tests (see decisions).
+   - Tests that relied on Safe for exactness keep selecting it explicitly; new tests cover the silence fade (no sample jumps above a small threshold at a dropout's start, silence after the fade).
+4. **Four slot states.**
+   - `BayLink::BypassMode` becomes the state: active, mute, bypass, off. The old modes map as off → active, synced → mute, dropLatency → off.
+   - What each state does:
+     - Mute: as today's synced, the bay keeps getting the panel's sound.
+     - Bypass: synced; the bay gets silence and its silent stretch is tracked like a dropped bay's (`silentStart` / `silentEnd`); the tail cut is 1.
+     - Off: as today's drop latency, always silence; the tail cut is 1.
+   - `DropSends` and its setting (`bayDropSends`) go.
+   - Saved as `baySlotState`. Read old projects through `bayBypassMode`, `bayBypass` and `bayOutput` (all \"on\" values → mute).
+   - Page: three toggle buttons (Mute, Bypass, Off) in `LinkStatus.svelte`, each selecting its state, or Active when clicked again; the `bayBypass` event carries the state name.
+5. **Leaving a state.** Dry until the bay's real sound is back (positions sent after the change) and the **tail cut release** (new setting, ms, default 0, `PluginSettings`, Settings tab) has passed, then a crossfade into the return (see the point to confirm).
+6. **Tail cut output.**
+   - Relay: a mono \"Tail cut\" output bus after the Marker output (`RelayProcessor` buses; the relay tests' bus counts and `relayChannels` in `LinkTests.cpp` change).
+   - The panel sends it as value 17 of each value set (`sendValues`: `numControls + 1` values, the last 1 while the state is Bypass or Off). The receiver plays it for the whole block, like a control, and holds it like the controls.
+   - A transmitter's tail cut output is silent.
+7. **Docs:** the FL checklist for this build, here; the build's results in `decisions.md`.
 
 ## Bay link FL checklist (for regression runs when bays change)
 Before starting: the panel and relay junctions in the system VST3 folder point at the Debug builds, so FL picks up this build. If FL was open during the build, restart it. Note FL's sample rate and buffer length (Options > Audio settings). Terms changed after these were written: "Bay return" is now Bypass Off, "Direct" is now "Bypass, synced", and "Missing bay return blocks" is now Bay dropouts (Safe was "Bypass"). Since C2, wire the marker (receiver's Marker output into the transmitter's Marker input) unless a stage says otherwise.
@@ -160,9 +141,10 @@ With the marker wired (C2), Diagnostics shows the plugin's latency as Bay latenc
   - Tests: `tests/LinkHubTests.cpp`, `tests/LinkTests.cpp` (the simulated `Patcher` has a marker wire: `markerDelay`, `markerGain`, and records each output delay in `delays`; `latentBay`, `runWithTimers`, `countWrongByDelay`; the C2 tests from "With the marker wired, the panel plays a latent bay's return…" to "Bypass, drop latency…"), `tests/RelayTests.cpp` (the marker's encoding), `tests/WebUiTests.cpp`, `tests/EditorTests.cpp`, `tests/HostingTests.cpp`, `tests/ControlTests.cpp`, `tests/KeyForwarderTests.cpp` (also the settings file)
 
 ## Open items
-- **The C2 FL check**, then **A and B** (`decisions.md`, "The rest of 1b.4: plan, and the position marker"). A: headroom from arriving blocks; Safe fade-back hold (toggle + time setting); Automatic counting receiver misses without a flowing return; matching miss counts (skip-ahead plays the newest block); the "return silent while the sent audio isn't" line. B: real blocks with a lowest-tempo floor (empty by default; FL's block is exactly 30,000 / BPM at 48 kHz); its round trip jumps use the blend built in C2.
-- **The dropped bay's send:** the user decides after the FL check (silence, the panel's sound, the plugin-wide toggle, or per slot).
-- **Two bypasses for hosted plugins** come with slots (dropping takes the plugin out of the engine's path).
+- **The next build** (above), then **A and B** (`decisions.md`, "The rest of 1b.4: plan, and the position marker"). A: headroom from arriving blocks; ~~Safe fade-back hold~~ (Safe is parked; the silence fade-back may want the same hold); Automatic counting receiver misses without a flowing return; matching miss counts (skip-ahead plays the newest block); the "return silent while the sent audio isn't" line. B: real blocks with a lowest-tempo floor (empty by default; FL's block is exactly 30,000 / BPM at 48 kHz); its round trip jumps use the blend built in C2.
+- **Dry dropouts ("Safe"): a future refinement** (`decisions.md`, "Future refinement: dry dropouts").
+- **The four slot states for hosted plugins** come with slots (Off takes the plugin out of the engine's path).
+- Optional carry-over: a sleep and wake test with a working bay (play, sleep the PC, wake it, read every relay's Panels section and the panel's Diagnostics before touching anything).
 - **Unexplained link problems** from the C1 check (a re-added panel not relinking; a second panel's link carrying the first receiver's marker as audio after the PC had slept). Not reproduced; the Panels section will show it if it returns. Optional sleep and wake test.
 - **FL's "Use time offset"** (wrapper option): a thread for tempo-synced effects in a bay, which may act off the grid by the receiver's lead. Not investigated yet.
 - A control lead: not by default (it costs the same latency it cancels); maybe a setting later.
@@ -179,11 +161,11 @@ With the marker wired (C2), Diagnostics shows the plugin's latency as Bay latenc
 - The Plugins tab (with its Mute checkboxes) merges into the panel in a later slice.
 
 ## Read for this step
-In `docs/decisions.md`, by heading:
-- **"The rest of 1b.4: plan, and the position marker"** > **"C2: decided with the user (2026-10-07)"** and **"C2 as built"** (for the FL check's results), and **"Plan (user, 2026-10-06)"** (for A and B).
-- **"FL re-check, merge experiment, Diagnostics panel"** > **"Regression stages 1 and 4"** (for A).
-- **"Bay link: the audio round-trip test"** > **"Timing"** (the receiver's lead and stamping), if a C2 failure involves them.
-- **"Platforms and toolchain"**: macOS is required.
+In `docs/decisions.md`, by heading (all under "The rest of 1b.4: plan, and the position marker"):
+- **"C2: decided with the user (2026-10-07)"**, **"C2 as built"**, **"FL check of C2"**, **"The next build (user, 2026-10-07)"** and **"Future refinement: dry dropouts"**.
+- Outside it: **"Bay link: the audio round-trip test"** > **"Timing"** (the receiver's lead, stamping), and **"Platforms and toolchain"** (macOS is required).
+
+Then read the code named in "The next build: implementation notes" above: chiefly `source/engine/BayLink.h/.cpp`, `source/relay/RelayLink.*` and `RelayProcessor.*`, `source/PluginProcessor.cpp`, `source/PluginEditor.cpp`, `ui/src/components/LinkStatus.svelte`, `tests/LinkTests.cpp`.
 
 Read the rest of `decisions.md` only for questions these don't cover.
 
@@ -195,7 +177,8 @@ Read the rest of `decisions.md` only for questions these don't cover.
 - Small slices, each ending in an FL check by the user.
 - Latency matters for live playing: prefer 1 block per bay; several bays in series at large buffers is the worry. The zero-latency segments idea is only worth it if the numbers are bad, and only if it reassembles into one interface.
 - Nothing the user must re-measure and re-enter when slots move or plugins change (e.g. a bay plugin's latency must be found automatically).
-- Naming: "bypass" is the explicit switch of what plays; "safe" and "silence" are what dropouts play.
+- Naming: "bypass" is the explicit switch of what plays; "safe" and "silence" are what dropouts play. Slot states: Active, Mute, Bypass, Off (2026-10-07).
+- Safety over continuity: a dropout must never be louder than the bay's sound would have been, so dropouts are silence (faded) for now.
 - Reopening a saved project must restore the panel's UI exactly as it was left (tab, panels, scroll positions).
 - Fade times: 30 ms is the floor for anything switched while playing (10 ms still pops on the bass-heavy test material).
 - Testing uses a fresh blank project each time; save and reload only when a test calls for it.
