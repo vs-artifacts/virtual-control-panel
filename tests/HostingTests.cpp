@@ -326,7 +326,7 @@ TEST_CASE ("The EQ's low band gain is exposed to the host as Param 1", "[process
     using Catch::Matchers::WithinAbs;
 
     PluginProcessor processor;
-    CHECK (processor.getParameters().size() == HostControls::count);
+    CHECK (processor.getParameters().size() == HostControls::count + 1 + PluginProcessor::maxBays);
 
     const auto& exposed = processor.getEngine().getExposedParameters();
     REQUIRE (exposed.size() == 1);

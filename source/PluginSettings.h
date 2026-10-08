@@ -36,6 +36,10 @@ public:
     bool getFlipAltResize() const;
     void setFlipAltResize (bool);
 
+    // While a corner is dragged, keep Shift with Alt or Ctrl from switching Windows' input language
+    bool getResizeBlocksLanguageSwitch() const;
+    void setResizeBlocksLanguageSwitch (bool);
+
     // The size new instances' editors open at: the last one used
     double getLastEditorScale() const;
     void setLastEditorScale (double);
@@ -52,6 +56,26 @@ public:
     // A bay's round trip: BayLink::autoRoundTrip, or blocks of the host's largest block size. Reported to the host as latency.
     int getRoundTripBlocks() const;
     void setRoundTripBlocks (int);
+
+    // Whether the round trip counts the host's real blocks (on) or the block size it announces (see BayLink)
+    bool getRoundTripRealBlocks() const;
+    void setRoundTripRealBlocks (bool);
+
+    // Real blocks start at one tick at this tempo at least (BPM; 0: none)
+    double getLowestTempo() const;
+    void setLowestTempo (double);
+
+    // Real blocks: when the round trip may shrink while the transport is stopped, and what counts as a quiet output
+    BayLink::StoppedShrink getStoppedShrink() const;
+    void setStoppedShrink (BayLink::StoppedShrink);
+    int getQuietLevelDb() const;
+    void setQuietLevelDb (int);
+    int getQuietMs() const;
+    void setQuietMs (int);
+
+    // How long a change of the round trip or bay latency blends the old timing into the new
+    int getJumpCrossfadeMs() const;
+    void setJumpCrossfadeMs (int);
 
     // How long a bay's bypass switch fades between the return and the sent audio; 0 switches at once. Also the blend when
     // the bay's delay changes.

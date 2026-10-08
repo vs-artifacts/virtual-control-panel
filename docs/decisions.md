@@ -615,3 +615,65 @@ Parked by the user (2026-10-07) to get to functional machinery first; to come ba
 - **Gain matching** (discussed): measure the bay's output level against the sent audio over about half a second (only while both are clearly above silence, so quiet passages and tails don't skew it), and play the dry sound at that ratio, capped at 1: the lower of the bay's recent level and the sent audio. **Limit:** it matches the average level only. A compressor or limiter in the bay lowers the peaks far more than the average, so matched dry audio brings the peaks back. Truly safe would need a limiter on dropout audio too. Filters and distortion change the sound itself, which no level match reproduces.
 - **Where it plays:** dropouts, and the held-back stretches (settling, the marker hold, a dropped bay's silent stretch).
 - **Cost when it was set aside:** level measuring and its tests (about 150 lines), one setting; the fades are needed for silence anyway.
+
+### FL recheck of the fixes (2026-10-08)
+- **Passed:** latency changes (Automatic stays at 1 block), the marker wire cut, the hidden pop (Bypass and Off with a reverb in the bay), crossfades above 50 ms, Shift+drag, the grouped Settings tab.
+- **Tail cut release:** 0 is fine; no pop from the Peak Controller. **Kept, default 0** (user agreed with the agent's advice): it costs nothing, and a Peak Controller with its ramp on reacts in about 1,600 samples (33 ms at 48 kHz), longer than the 30 ms crossfade.
+- **The bay bypass crossfade is enough** (user): it catches the pops and smooths the bay's sound coming in from 0, so even low-frequency content fades in and out cleanly.
+- **Control values do save:** what looked like a regression was an FL feature the user wasn't using deliberately. Hosted plugins' states are saved too: each slot's plugin keeps its full state in the project, restored by slot, never into a different plugin.
+- **Pops on latency changes come from the bay's plugin** (user's check: the EQ pops on an ordinary mixer insert too). Noted below as a future refinement.
+- **Windows' input language flyout while resizing:** releasing Shift while Alt is held (and no other modifier) shows Windows 11's input language flyout. Resizing chords stack modifiers, so Alt, then Shift, then Shift released in one drag is likely here. **Fixed (2026-10-08):** while a corner is dragged, whenever Shift is held together with Alt or Ctrl, the panel types one meaningless key (Windows' unassigned virtual key 0xE8, the trick AutoHotkey uses against menu activation). Windows only switches language if no other key came between the modifiers, so this stops it. It's checked 100 times a second and once more when the drag ends. Setting: "While a window corner is dragged, stop Shift with Alt or Ctrl from switching Windows' input language" (on by default; `resizeBlocksLanguageSwitch`). It's beside the web UI and FL gain options. Windows only; macOS has no such shortcut.
+- **What's left of 1b.4 (user):** A is done except the "return silent while the sent audio isn't" line in Diagnostics, which stays until the alpha slot interface. **B (real blocks) next**, then slots.
+
+### B: real blocks (built 2026-10-08; needs the FL check)
+- **Setting "Bay round trip counted in":** *real blocks* (default, user: revert if needed) or *announced blocks* (as before). Plugin-wide: `bayRealBlocks`. **"Lowest tempo"** (BPM, empty by default: `bayLowestTempo`, 0 is none, up to 999).
+- **The unit** (`BayLink::blockUnit`, the block the round trip counts in; the message thread's 10-per-second check, `updateBlockUnit`):
+  - Announced blocks: the announced block, as before.
+  - Real blocks, after a prepare or a recheck: the lowest tempo's tick (sample rate × 60 / (96 × BPM), plus 25%, at most the announced block), or the announced block with no floor. Blocks are watched for 0.1 s (a *survey*), then the unit is 125% of the largest block seen (never below the floor, at most the announced block). Only a survey can shrink it. *(At first Reset counters also started a survey; since the additions below, only a recheck does.)*
+  - **Growing ahead of need:** a block above **90%** of the unit grows it to 125% of the largest seen. *Changed from 80% while building:* at 80%, each new largest block grew the unit again (0.8 × 1.25 = 1), so a slowly falling tempo would make many tiny jumps. At 90%, the unit grows once blocks have grown by an eighth. A sudden jump past the unit misses blocks until the check sees it (at most 0.1 s).
+  - Raising the lowest tempo's floor applies at once. Switching to real blocks surveys afresh. Switching to announced blocks goes straight to the announced block.
+  - Each change logs "Round trip block: N samples (why)"; the round trip line says "counted in blocks of N". Automatic's check carries on at the new size.
+- **The hub's writer details carry the unit** as the largest block, so receivers line up by it. **The receiver uses its own largest real block** (since its prepare) instead of the announced one, so 2 blocks stay safe in either order (with the announced 512 it would line up too far behind for a 538-sample round trip).
+- **Known cost:** a change of the unit sets new writer details, which starts a new session. At 1 block the receiver carries on without a gap (it plays the newest block anyway). At 2 or 3 blocks it lines up again, so the bay gets a gap of about one block, like any round trip change. This happens at startup (the survey) and when blocks grow. If it's audible through reverbs at 2 or 3 blocks, the fix is a hub call that updates the details without a new session (hub version 4).
+- **Diagnostics:** the round trip line shows "N × unit; real blocks (announced M)", "real blocks: watching them" during the survey, or "announced blocks".
+- **At 512 and 140 BPM (48 kHz):** FL's largest block is 215, so 1 block is 269 samples (5.6 ms) instead of 512 (10.7 ms).
+- **Tests (78 test cases, Debug and Release):** the return is exact at 1 block (receiver after the panel), 2 blocks (receiver first, random order) and 3 blocks with FL-like blocks of 1 to 215; the unit grows ahead of need (100 → 120 → 215), never shrinks while playing, the output is the sent audio at the delay in use apart from the blends, and Reset counters surveys again; the lowest tempo's floor (120 BPM: 313), raising it, announced blocks, switching back; Automatic settles on 1 real block; the settings file.
+
+### Additions to B (user, 2026-10-08; built the same day, needs the FL check)
+- **The limits of smoothing a round trip change, and what's done about each** (user):
+  1. *The time shift* (growing repeats a few ms, shrinking skips a few ms, crossfaded). **A setting for its crossfade:** "Bay delay change crossfade", 0 to 100 ms, default 30 (`bayJumpCrossfadeMs`). It blends round trip and bay latency changes. Switching Off and back keeps the bay bypass crossfade (user).
+  2. *The gap inside the bay at 2 or 3 blocks.* **An orange warning** under "counted in" when real blocks are on, the lowest tempo is empty, and the round trip in use is more than 1 block (Automatic's fallback included): tempo drops can pop inside the bay; set a lowest tempo.
+  3. *A sudden tempo drop missing blocks before the unit grows.* Parked as "virtual lookahead automation" (below).
+- **The transport:** the processor passes the host's playhead state (`AudioPlayHead`, "is playing") to the bay every block. Not reported counts as playing. Diagnostics shows "Transport: playing / stopped / not reported", and "output quiet".
+- **Shrinking while stopped:** a setting, "Real blocks: shrink the round trip while the transport is stopped" (`bayStoppedShrink`): Never, Only when the panel's output is quiet too (default), Always (user: a failsafe; a player will also have live BPM controls).
+  - "Quiet": the output's peak below a level for a time, both settings for this testing phase: `bayQuietLevelDb` (−120 to 0, default −80) and `bayQuietMs` (0 to 5,000, default 500).
+  - While allowed, one survey follows another, so the round trip follows a faster tempo. A survey started while stopped doesn't shrink if playing has started (or the output got loud) by the time it ends; it may still grow.
+- **A new lowest tempo rechecks** (a survey), so the round trip can shrink at once, while playing too.
+- **Bay round trip section:** a **"Retry 1 block"** button on the Automatic line (enabled only in Automatic; it doesn't recheck the block size: concerns kept apart, user) and a **"Recheck real block size"** button (enabled with real blocks). Closes the open item "a panel-side check 1 block again button".
+- **Reset counters only resets the counters** (user).
+- **Automatable commands** (`TriggerParameter`: on/off, acts each time it's switched on, an automation pulse or a controller button; the message thread's 10-per-second check takes the request). After the Param 1–256 pool, with permanent IDs (JUCE hashes parameter IDs, so the pool's IDs don't move):
+  - `baysRecheckBlockSize`, "Bays: recheck block size": one for all bays, since the block size is the host's, shared by every bay in a panel (agent's suggestion, confirmed).
+  - `bay1RetryOneBlock` to `bay4RetryOneBlock`, "Bay N: retry 1-block round trip": one per bay, since each bay's relays can run in their own order. Planned for 4 bays (user); bays 2 to 4 do nothing until there are more bays (the next slice handles that, user).
+- **Tests (83 test cases, Debug and Release):** shrinking while stopped (never while playing or with the transport unreported; Always; Never; only when quiet, not while the panel plays); a new lowest tempo shrinks while playing; a recheck shrinks and Reset counters doesn't; Retry 1 block from a fallback settles on 1 block, and a fixed round trip ignores it; the jump crossfade (0: the new timing at once; 100 ms: still blending at 50) and Off on the bypass crossfade; the command parameters' IDs, names, one request per switch on, and the timer taking them; the settings file.
+
+### Future refinement: latency-change pop fade ("linear phase pop fade")
+Noted for a later quality-of-life pass (user, 2026-10-08). Reference it by either name.
+- **The problem:** a bay plugin that changes its own latency (linear phase on or off, its amount) pops at that moment: its output jumps, or it refills its delay line with silence and then starts abruptly. It happens inside the bay, before the panel knows. Our fades already hide the panel's own side (the ghost fade, held-back silence, the faded return). But a plugin after it in the bay, such as a reverb, rings the pop out loudly.
+- **The idea: an automatic Bypass-like cycle on every bay latency change,** reusing the send fades, the tail cut and the "waiting for the bay's sound" transition:
+  - The transmitter's reading changes (held, unreadable or a new value), and the panel fades the bay's send out over the crossfade.
+  - Tail cut goes to 1 once the send is silent, which clears the reverb through the user's Peak Controller wiring.
+  - The cut holds for the release *and* the new bay latency, so the latent plugin's delayed output (the abrupt restart included) has flushed through before the reverb runs again.
+  - The send fades back in. The panel holds its output (silence, or dry as when leaving Bypass: to decide) until the return has passed the faded positions, then crossfades in.
+- **Limits:**
+  - It can't stop the first pop reaching the reverb (the change is only known after the plugin has switched); it clears the reverb's ringing afterwards.
+  - It clears the music's own reverb tail too.
+  - The gap grows to about crossfade + cut hold + new latency + crossfade.
+  - It only helps when the tail cut is linked to the plugins that ring.
+- **A cheaper part on its own:** after a new bay latency is adopted, keep the return silent until it carries sound again, then fade it in. This hides the abrupt restart when nothing after the plugin rings, and does nothing for a reverb.
+- **Size:** a refit of existing machinery, but with timing subtleties (the cut's length depends on the latency being adopted). A setting: on a bay latency change, *hold* (today) or *cut tails*.
+
+### Future refinement: virtual lookahead automation
+Parked by the user (2026-10-08), low priority. Reference it by that name.
+- **The problem:** with real blocks, a sudden tempo drop makes FL's blocks outgrow the round trip before the panel notices (up to its 0.1 s check). Those blocks are missed (faded silence), and Automatic can fall back to 2 blocks.
+- **The idea (user):** a copy of the project's tempo automation clip, moved slightly earlier, drives a panel parameter ("upcoming tempo"). The panel grows the round trip before the real tempo drops.
+- **Reading the project's automation directly would be better, but plugins can't:** VST3 and CLAP only hand a plugin parameter changes for the block being processed, and the playhead reports the current tempo, not future ones. FL's Python scripting API might reach automation clips; not checked.

@@ -56,6 +56,8 @@ namespace
             // Safe dropouts, so a pass-through bay must give exactly the sent audio at every moment; tests of silence
             // choose it
             panel->setDropouts (Dropouts::safe);
+            panel->setRealBlocks (realBlocks);
+            panel->setLowestTempo (lowestTempo);
             panel->setRoundTripBlocks (roundTripBlocks);
             panel->prepare (rigRate, rigBlock);
             roundTrip = panel->getRoundTripSamples();
@@ -251,6 +253,8 @@ namespace
         }
 
         std::unique_ptr<BayLink> panel;
+        bool realBlocks = false; // the panel's round trip counts in announced blocks unless a test says otherwise
+        double lowestTempo = 0.0;
         std::unique_ptr<RelayProcessor> receiver, transmitter;
         std::function<void (juce::AudioBuffer<float>&)> bay = [] (juce::AudioBuffer<float>&) {}; // FL's plugin
         juce::Random random { 1234 };
@@ -1741,6 +1745,329 @@ TEST_CASE ("Missing blocks and the automatic round trip ignore a moment after an
     CHECK (status.events.size() <= BayLink::maxEvents);
 }
 
+namespace
+{
+    // FL's real blocks at 140 BPM, 48 kHz: one sequencer tick (at most 215 samples) while it announces 512
+    constexpr int flTick = 215;
+
+    int unitFor (int largest)
+    {
+        return static_cast<int> (std::ceil (BayLink::unitHeadroom * largest));
+    }
+
+    void runFixedWithTimers (Patcher& patcher, int rounds, Order order, int blockSize)
+    {
+        for (int round = 0; round < rounds; ++round)
+        {
+            patcher.run (10, order, blockSize);
+            patcher.maintain();
+        }
+    }
+}
+
+TEST_CASE ("Real blocks: the round trip counts the host's real blocks, and the return stays exact", "[link][blocks]")
+{
+    for (const auto& [blocks, order] : { std::pair { 1, Order::panelFirst }, std::pair { 2, Order::receiverFirst }, std::pair { 2, Order::random }, std::pair { 3, Order::random } })
+    {
+        INFO ("round trip " << blocks << " blocks, order " << static_cast<int> (order));
+        Patcher patcher;
+        patcher.realBlocks = true;
+        patcher.addAll (blocks);
+
+        // The announced block until the survey has seen real ones
+        auto status = patcher.panel->getStatus();
+        CHECK (status.realBlocks);
+        CHECK (status.surveyingBlocks);
+        CHECK (status.blockUnit == rigBlock);
+        CHECK (patcher.roundTrip == blocks * rigBlock);
+
+        for (int round = 0; round < 40; ++round)
+        {
+            patcher.runVarying (10, order, flTick);
+            patcher.maintain();
+        }
+
+        // Random sizes may not reach the largest within the survey; a block that grows past 90% of the unit grows it
+        status = patcher.panel->getStatus();
+        INFO (status.events.joinIntoString ("\n"));
+        REQUIRE (status.blockMax.has_value());
+        CHECK_FALSE (status.surveyingBlocks);
+        CHECK (status.blockUnit >= *status.blockMax);
+        CHECK (status.blockUnit <= unitFor (*status.blockMax));
+        CHECK (patcher.roundTrip == blocks * status.blockUnit);
+        CHECK (status.events.joinIntoString ("\n").contains ("samples (largest real block"));
+
+        patcher.panel->resetCounters();
+        const auto from = patcher.played;
+        patcher.runVarying (400, order, flTick);
+
+        status = patcher.panel->getStatus();
+        CHECK (patcher.countWrong (from) == 0);
+        CHECK (status.missing == 0);
+        CHECK (status.differenceLargest.value_or (-1.0f) == 0.0f);
+    }
+}
+
+TEST_CASE ("Real blocks: the round trip grows ahead of need, never shrinks while playing, and is surveyed again on a recheck", "[link][blocks]")
+{
+    Patcher patcher;
+    patcher.realBlocks = true;
+    patcher.addAll (1);
+    runFixedWithTimers (patcher, 10, Order::panelFirst, 100);
+    REQUIRE (patcher.panel->getBlockUnit() == unitFor (100));
+    const auto from = patcher.played;
+
+    // Above 80% of the unit: grown to 125% of it before it's needed, so nothing goes missing
+    runFixedWithTimers (patcher, 5, Order::panelFirst, 120);
+    CHECK (patcher.panel->getBlockUnit() == unitFor (120));
+    CHECK (patcher.roundTrip == unitFor (120));
+    CHECK (patcher.panel->getStatus().missing == 0);
+
+    // A sudden jump past the unit (a tempo dropping at once): grown as soon as the timer sees it
+    runFixedWithTimers (patcher, 5, Order::panelFirst, flTick);
+    CHECK (patcher.panel->getBlockUnit() == unitFor (flTick));
+
+    // Smaller blocks again: no shrinking while playing
+    runFixedWithTimers (patcher, 10, Order::panelFirst, 100);
+    CHECK (patcher.panel->getBlockUnit() == unitFor (flTick));
+
+    // Every sample is the sent audio at the delay in use (Safe dropouts cover what the jump missed), apart from the blends
+    CHECK (countWrongByDelay (patcher, from) == 0);
+
+    // A recheck surveys again, and may shrink; Reset counters doesn't
+    patcher.panel->resetCounters();
+    runFixedWithTimers (patcher, 10, Order::panelFirst, 100);
+    CHECK (patcher.panel->getBlockUnit() == unitFor (flTick));
+
+    patcher.panel->recheckBlockSize();
+    runFixedWithTimers (patcher, 10, Order::panelFirst, 100);
+    CHECK (patcher.panel->getBlockUnit() == unitFor (100));
+    CHECK (patcher.roundTrip == unitFor (100));
+
+    const auto log = patcher.panel->getStatus().events.joinIntoString ("\n");
+    INFO (log);
+    CHECK (log.contains ("(a real block of 120)"));
+    CHECK (log.contains ("counted in blocks of " + juce::String (unitFor (120))));
+}
+
+TEST_CASE ("Real blocks: the lowest tempo is the starting size, a fixed setting counts too, and announced blocks ignore both", "[link][blocks]")
+{
+    // One tick at 120 BPM is 250 samples at 48 kHz, plus 25%
+    Patcher patcher;
+    patcher.realBlocks = true;
+    patcher.lowestTempo = 120.0;
+    patcher.addAll (2);
+    CHECK (patcher.panel->getBlockUnit() == 313);
+    CHECK (patcher.roundTrip == 2 * 313);
+
+    // Smaller real blocks don't go below it
+    runFixedWithTimers (patcher, 10, Order::random, flTick);
+    CHECK (patcher.panel->getBlockUnit() == 313);
+    CHECK (patcher.roundTrip == 2 * 313);
+
+    // A lower tempo raises it at once, up to the announced block
+    patcher.panel->setLowestTempo (60.0);
+    patcher.maintain();
+    CHECK (patcher.panel->getBlockUnit() == rigBlock);
+
+    // Announced blocks
+    patcher.panel->setRealBlocks (false);
+    patcher.panel->setLowestTempo (120.0);
+    patcher.maintain();
+    CHECK (patcher.panel->getBlockUnit() == rigBlock);
+    CHECK_FALSE (patcher.panel->getStatus().realBlocks);
+
+    // Back to real blocks: surveyed afresh
+    patcher.panel->setRealBlocks (true);
+    patcher.panel->setLowestTempo (0.0);
+    patcher.maintain();
+    CHECK (patcher.panel->getStatus().surveyingBlocks);
+    runFixedWithTimers (patcher, 10, Order::random, flTick);
+    CHECK (patcher.panel->getBlockUnit() == unitFor (flTick));
+    CHECK (patcher.roundTrip == 2 * unitFor (flTick));
+}
+
+TEST_CASE ("Real blocks: Automatic settles on 1 real block with the receiver after the panel", "[link][blocks]")
+{
+    Patcher patcher;
+    patcher.realBlocks = true;
+    patcher.addAll (BayLink::autoRoundTrip);
+
+    for (int round = 0; round < 100; ++round)
+    {
+        patcher.runVarying (10, Order::panelFirst, flTick);
+        patcher.maintain();
+    }
+
+    const auto status = patcher.panel->getStatus();
+    INFO (status.events.joinIntoString ("\n"));
+    CHECK (status.autoState == BayLink::AutoState::oneBlock);
+    CHECK (status.roundTripSamples == status.blockUnit);
+    CHECK (status.blockUnit < rigBlock);
+    CHECK (status.missing == 0);
+    CHECK (patcher.relayMisses (patcher.receiver.get()) == 0);
+}
+
+TEST_CASE ("Real blocks: while the transport is stopped the round trip may shrink, as the setting allows", "[link][blocks]")
+{
+    using Shrink = BayLink::StoppedShrink;
+    using Transport = BayLink::Transport;
+
+    Patcher patcher;
+    patcher.realBlocks = true;
+    patcher.addAll (1);
+    runFixedWithTimers (patcher, 10, Order::panelFirst, flTick);
+    REQUIRE (patcher.panel->getBlockUnit() == unitFor (flTick));
+
+    // A faster tempo: smaller blocks
+    const auto runFaster = [&patcher] { runFixedWithTimers (patcher, 30, Order::panelFirst, 100); };
+
+    SECTION ("playing: never")
+    {
+        patcher.panel->setStoppedShrink (Shrink::always);
+        patcher.panel->setTransport (Transport::playing);
+        runFaster();
+        CHECK (patcher.panel->getBlockUnit() == unitFor (flTick));
+    }
+
+    SECTION ("transport not reported: treated as playing")
+    {
+        patcher.panel->setStoppedShrink (Shrink::always);
+        runFaster();
+        CHECK (patcher.panel->getBlockUnit() == unitFor (flTick));
+    }
+
+    SECTION ("stopped, always")
+    {
+        patcher.panel->setStoppedShrink (Shrink::always);
+        patcher.panel->setTransport (Transport::stopped);
+        runFaster();
+        CHECK (patcher.panel->getBlockUnit() == unitFor (100));
+        CHECK (patcher.roundTrip == unitFor (100));
+        CHECK (patcher.panel->getStatus().events.joinIntoString ("\n").contains ("while stopped"));
+    }
+
+    SECTION ("stopped, never")
+    {
+        patcher.panel->setStoppedShrink (Shrink::never);
+        patcher.panel->setTransport (Transport::stopped);
+        runFaster();
+        CHECK (patcher.panel->getBlockUnit() == unitFor (flTick));
+    }
+
+    SECTION ("stopped, only when quiet: not while the panel plays, then once it has been quiet long enough")
+    {
+        patcher.panel->setStoppedShrink (Shrink::whenQuiet);
+        patcher.panel->setQuiet (-80, 500);
+        patcher.panel->setTransport (Transport::stopped);
+        runFaster();
+        CHECK (patcher.panel->getBlockUnit() == unitFor (flTick));
+        CHECK_FALSE (patcher.panel->getStatus().outputQuiet);
+
+        patcher.source = [] (juce::int64, int) { return 0.0f; };
+        runFaster();
+        runFaster();
+        CHECK (patcher.panel->getStatus().outputQuiet);
+        CHECK (patcher.panel->getBlockUnit() == unitFor (100));
+    }
+}
+
+TEST_CASE ("Real blocks: a new lowest tempo rechecks, so the round trip can shrink while playing", "[link][blocks]")
+{
+    Patcher patcher;
+    patcher.realBlocks = true;
+    patcher.addAll (1);
+    runFixedWithTimers (patcher, 10, Order::panelFirst, flTick);
+    runFixedWithTimers (patcher, 10, Order::panelFirst, 100);
+    REQUIRE (patcher.panel->getBlockUnit() == unitFor (flTick));
+
+    // 300 BPM: a tick of 100 samples, plus 25%
+    patcher.panel->setLowestTempo (300.0);
+    runFixedWithTimers (patcher, 10, Order::panelFirst, 100);
+    CHECK (patcher.panel->getBlockUnit() == 125);
+    CHECK (patcher.roundTrip == 125);
+}
+
+TEST_CASE ("Retry 1 block: Automatic tries 1 block again; a fixed round trip ignores it", "[link][blocks]")
+{
+    const auto settle = [] (Patcher& patcher, Order order) {
+        for (int round = 0; round < 30; ++round)
+        {
+            patcher.run (10, order);
+            patcher.maintain();
+        }
+    };
+
+    Patcher patcher;
+    patcher.addAll (BayLink::autoRoundTrip);
+    settle (patcher, Order::receiverFirst);
+    REQUIRE (patcher.panel->getStatus().autoState == BayLink::AutoState::fellBack);
+
+    // The wire added: retrying settles on 1 block without relinking the relays
+    patcher.panel->retryOneBlock();
+    patcher.maintain();
+    CHECK (patcher.panel->getStatus().autoState == BayLink::AutoState::checking);
+    CHECK (patcher.roundTrip == rigBlock);
+    settle (patcher, Order::panelFirst);
+    CHECK (patcher.panel->getStatus().autoState == BayLink::AutoState::oneBlock);
+    CHECK (patcher.panel->getStatus().events.joinIntoString ("\n").contains ("Automatic: trying 1 block again (asked)"));
+
+    patcher.panel->setRoundTripBlocks (3);
+    patcher.panel->retryOneBlock();
+    patcher.maintain();
+    CHECK (patcher.panel->getStatus().autoState == BayLink::AutoState::off);
+    CHECK (patcher.roundTrip == 3 * rigBlock);
+}
+
+TEST_CASE ("A change of the round trip blends over the jump crossfade; Off and back over the bypass crossfade", "[link]")
+{
+    constexpr int fiftyMs = static_cast<int> (rigRate) / 20;
+
+    // The sample `after` samples past the latest change of delay is the sent audio at the new delay, exactly
+    const auto exactAfter = [] (const Patcher& patcher, juce::int64 after) {
+        const auto [start, delay] = patcher.delays.back();
+        const auto sample = start + after;
+        REQUIRE (sample < patcher.played);
+        return juce::exactlyEqual (patcher.outLeft[static_cast<size_t> (sample)], sentSample (sample - delay, 0));
+    };
+
+    Patcher patcher;
+    patcher.addAll (2);
+    patcher.run (warmUpBlocks, Order::panelFirst);
+    patcher.maintain();
+
+    SECTION ("no jump crossfade: the new timing at once")
+    {
+        patcher.panel->setJumpCrossfadeMs (0);
+        patcher.panel->setRoundTripBlocks (3);
+        patcher.maintain();
+        patcher.run (warmUpBlocks, Order::panelFirst);
+        CHECK (exactAfter (patcher, 0));
+    }
+
+    SECTION ("100 ms: still blending after 50 ms, done after 100")
+    {
+        patcher.panel->setJumpCrossfadeMs (100);
+        patcher.panel->setRoundTripBlocks (3);
+        patcher.maintain();
+        patcher.run (30, Order::panelFirst);
+        CHECK_FALSE (exactAfter (patcher, fiftyMs));
+        CHECK (exactAfter (patcher, 2 * fiftyMs + 64));
+    }
+
+    SECTION ("Off uses the bypass crossfade, not the jump crossfade")
+    {
+        patcher.panel->setJumpCrossfadeMs (0);
+        patcher.panel->setCrossfadeMs (50);
+        patcher.panel->setSlotState (Slot::off);
+        patcher.maintain();
+        patcher.run (30, Order::panelFirst);
+        CHECK (patcher.delays.back().second == 0);
+        CHECK_FALSE (exactAfter (patcher, fiftyMs / 2));
+        CHECK (exactAfter (patcher, fiftyMs + 64));
+    }
+}
+
 TEST_CASE ("A relay shows what the hub sees for every panel", "[link]")
 {
     Patcher patcher;
@@ -1872,6 +2199,46 @@ TEST_CASE ("The panel finds the hub in the real relay file once a host has loade
 
     receiver.reset();
     transmitter.reset();
+}
+
+TEST_CASE ("The processor's bay commands are parameters after the pool, with permanent IDs, acting once per switch on", "[processor][link]")
+{
+    PluginProcessor processor;
+    const auto& parameters = processor.getParameters();
+    REQUIRE (parameters.size() == HostControls::count + 1 + PluginProcessor::maxBays);
+
+    const auto check = [&parameters] (int index, const juce::String& id, const juce::String& name) {
+        const auto* parameter = dynamic_cast<const juce::AudioProcessorParameterWithID*> (parameters[index]);
+        REQUIRE (parameter != nullptr);
+        CHECK (parameter->getParameterID() == id);
+        CHECK (parameter->getName (64) == name);
+        CHECK (parameter->isAutomatable());
+        CHECK (parameter->isBoolean());
+    };
+
+    check (HostControls::count, "baysRecheckBlockSize", "Bays: recheck block size");
+
+    for (int bay = 1; bay <= PluginProcessor::maxBays; ++bay)
+        check (HostControls::count + bay, "bay" + juce::String (bay) + "RetryOneBlock", "Bay " + juce::String (bay) + ": retry 1-block round trip");
+
+    auto& retry = processor.getRetryOneBlock (0);
+    retry.setValue (1.0f);
+    CHECK (retry.takeRequest());
+    CHECK_FALSE (retry.takeRequest());
+
+    // Staying on asks nothing more; off and on again asks again
+    retry.setValue (1.0f);
+    CHECK_FALSE (retry.takeRequest());
+    retry.setValue (0.0f);
+    retry.setValue (1.0f);
+
+    // The link settings' timer takes the requests
+    auto& recheck = processor.getRecheckBlockSize();
+    recheck.setValue (1.0f);
+    processor.applyLinkSettings();
+    CHECK_FALSE (retry.takeRequest());
+    CHECK_FALSE (recheck.takeRequest());
+    CHECK (recheck.getCurrentValueAsText() == "On");
 }
 
 TEST_CASE ("The panel tells the host its delay as latency, and keeps its slot state and control values", "[processor][link]")

@@ -18,6 +18,18 @@ const placements = ['off', 'hostPlaced', 'mouse', 'hostMainWindow'] as const
 const attachedPlacements = ['off', 'workspace', 'hostMonitor'] as const
 export const renderings = ['smooth', 'sharp'] as const
 const roundTrips = [0, 1, 2, 3] as const
+export const stoppedShrinkRules = ['never', 'whenQuiet', 'always'] as const
+
+// Real blocks while stopped: the output counts as quiet below this level (whole dBFS) for this long (whole ms)
+export const quietLevelRange = { min: -120, max: 0 } as const
+export const quietMsRange = { min: 0, max: 5000 } as const
+
+// How long a change of the round trip or bay latency blends the old timing into the new: whole milliseconds
+export const jumpCrossfadeRange = { min: 0, max: 100 } as const
+
+function isWholeIn(value: unknown, range: { min: number; max: number }): value is number {
+    return typeof value === 'number' && Number.isInteger(value) && value >= range.min && value <= range.max
+}
 
 // The bay bypass crossfade: whole milliseconds, 0 is off
 export const crossfadeRange = { min: 0, max: 500 } as const
@@ -43,6 +55,13 @@ function isReleaseMs(value: unknown): value is number {
 // The longest gap between the clicks of a double-click, in whole milliseconds
 export const doubleClickRange = { min: 1, max: 2000 } as const
 
+// Real blocks start at one tick at this tempo at least: BPM, 0 for none
+export const lowestTempoRange = { min: 0, max: 999 } as const
+
+function isLowestTempo(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value) && value >= lowestTempoRange.min && value <= lowestTempoRange.max
+}
+
 function isDoubleClickMs(value: unknown): value is number {
     return typeof value === 'number' && Number.isInteger(value) && value >= doubleClickRange.min && value <= doubleClickRange.max
 }
@@ -54,9 +73,18 @@ export interface Settings {
     attachedPlacement: (typeof attachedPlacements)[number]
     resizeRendering: (typeof renderings)[number]
     resizeFlipAlt: boolean
+    resizeBlocksLanguageSwitch: boolean
     flOutputCorrection: boolean
     // 0: automatic
     roundTripBlocks: (typeof roundTrips)[number]
+    // Count the round trip in the host's real blocks, not the announced block size
+    bayRealBlocks: boolean
+    // BPM; 0: none
+    bayLowestTempo: number
+    bayStoppedShrink: (typeof stoppedShrinkRules)[number]
+    bayQuietLevelDb: number
+    bayQuietMs: number
+    bayJumpCrossfadeMs: number
     bypassCrossfadeMs: number
     bayLatencySettleMs: number
     bayTailCutReleaseMs: number
@@ -87,8 +115,15 @@ export const editor = $state({
         attachedPlacement: 'off',
         resizeRendering: 'smooth',
         resizeFlipAlt: false,
+        resizeBlocksLanguageSwitch: true,
         flOutputCorrection: true,
         roundTripBlocks: 0,
+        bayRealBlocks: true,
+        bayLowestTempo: 0,
+        bayStoppedShrink: 'whenQuiet',
+        bayQuietLevelDb: -80,
+        bayQuietMs: 500,
+        bayJumpCrossfadeMs: 30,
         bypassCrossfadeMs: 30,
         bayLatencySettleMs: 50,
         bayTailCutReleaseMs: 0,
@@ -141,6 +176,7 @@ function readSettings(raw: unknown): void {
     if (typeof fields.keepWebViewWarm === 'boolean') settings.keepWebViewWarm = fields.keepWebViewWarm
     if (typeof fields.flOutputCorrection === 'boolean') settings.flOutputCorrection = fields.flOutputCorrection
     if (typeof fields.resizeFlipAlt === 'boolean') settings.resizeFlipAlt = fields.resizeFlipAlt
+    if (typeof fields.resizeBlocksLanguageSwitch === 'boolean') settings.resizeBlocksLanguageSwitch = fields.resizeBlocksLanguageSwitch
     if (typeof fields.doubleClickSets === 'boolean') settings.doubleClickSets = fields.doubleClickSets
     if (isDoubleClickMs(fields.doubleClickMs)) settings.doubleClickMs = fields.doubleClickMs
 
@@ -148,6 +184,12 @@ function readSettings(raw: unknown): void {
     settings.attachedPlacement = oneOf(attachedPlacements, fields.attachedPlacement) ?? settings.attachedPlacement
     settings.resizeRendering = oneOf(renderings, fields.resizeRendering) ?? settings.resizeRendering
     settings.roundTripBlocks = roundTrips.find((blocks) => blocks === fields.roundTripBlocks) ?? settings.roundTripBlocks
+    if (typeof fields.bayRealBlocks === 'boolean') settings.bayRealBlocks = fields.bayRealBlocks
+    if (isLowestTempo(fields.bayLowestTempo)) settings.bayLowestTempo = fields.bayLowestTempo
+    settings.bayStoppedShrink = oneOf(stoppedShrinkRules, fields.bayStoppedShrink) ?? settings.bayStoppedShrink
+    if (isWholeIn(fields.bayQuietLevelDb, quietLevelRange)) settings.bayQuietLevelDb = fields.bayQuietLevelDb
+    if (isWholeIn(fields.bayQuietMs, quietMsRange)) settings.bayQuietMs = fields.bayQuietMs
+    if (isWholeIn(fields.bayJumpCrossfadeMs, jumpCrossfadeRange)) settings.bayJumpCrossfadeMs = fields.bayJumpCrossfadeMs
     if (isCrossfadeMs(fields.bypassCrossfadeMs)) settings.bypassCrossfadeMs = fields.bypassCrossfadeMs
     if (isSettleMs(fields.bayLatencySettleMs)) settings.bayLatencySettleMs = fields.bayLatencySettleMs
     if (isReleaseMs(fields.bayTailCutReleaseMs)) settings.bayTailCutReleaseMs = fields.bayTailCutReleaseMs

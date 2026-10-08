@@ -1,15 +1,21 @@
 <script lang="ts">
+    import { sendRecheckBlockSize, sendRetryOneBlock } from "../lib/bridge";
     import { view } from "../lib/display.svelte";
     import {
         changeSetting,
         crossfadeRange,
         doubleClickRange,
         editor,
+        jumpCrossfadeRange,
+        lowestTempoRange,
+        quietLevelRange,
+        quietMsRange,
         releaseRange,
         resetSize,
         settleRange,
         type Settings,
     } from "../lib/editor.svelte";
+    import { link } from "../lib/link.svelte";
 
     const placements: { value: Settings["editorPlacement"]; text: string }[] = [
         { value: "off", text: "Off" },
@@ -57,6 +63,42 @@
         { value: 3, text: "3 blocks" },
     ];
 
+    const stoppedShrinks: {
+        value: Settings["bayStoppedShrink"];
+        text: string;
+    }[] = [
+        { value: "never", text: "Never" },
+        {
+            value: "whenQuiet",
+            text: "Only when the panel's output is quiet too (below)",
+        },
+        { value: "always", text: "Always" },
+    ];
+
+    // At 2 or 3 blocks each change of the real block size makes the receiver line up again: a gap inside the bay
+    const tempoDropsPop = $derived(
+        editor.settings.bayRealBlocks &&
+            editor.settings.bayLowestTempo === 0 &&
+            (link.status?.roundTripBlocks ?? 0) > 1,
+    );
+
+    // Whole numbers kept in range; anything else puts the field back
+    function changeWhole(
+        event: Event & { currentTarget: HTMLInputElement },
+        name: "bayQuietLevelDb" | "bayQuietMs" | "bayJumpCrossfadeMs",
+        range: { min: number; max: number },
+    ) {
+        const typed = event.currentTarget.valueAsNumber;
+
+        if (Number.isFinite(typed))
+            changeSetting(
+                name,
+                Math.min(range.max, Math.max(range.min, Math.round(typed))),
+            );
+
+        event.currentTarget.value = String(editor.settings[name]);
+    }
+
     // Typed values are rounded and kept in range; anything else puts the field back
     function changeCrossfade(
         event: Event & { currentTarget: HTMLInputElement },
@@ -102,6 +144,27 @@
         event.currentTarget.value = String(editor.settings.bayTailCutReleaseMs);
     }
 
+    // An empty field is no floor (0); anything else is kept in range, to a tenth of a BPM
+    function changeLowestTempo(
+        event: Event & { currentTarget: HTMLInputElement },
+    ) {
+        const field = event.currentTarget;
+        const typed = field.value.trim() === "" ? 0 : field.valueAsNumber;
+
+        if (Number.isFinite(typed)) {
+            const bpm = Math.min(
+                lowestTempoRange.max,
+                Math.max(lowestTempoRange.min, Math.round(typed * 10) / 10),
+            );
+            changeSetting("bayLowestTempo", bpm);
+        }
+
+        field.value =
+            editor.settings.bayLowestTempo > 0
+                ? String(editor.settings.bayLowestTempo)
+                : "";
+    }
+
     function changeDoubleClick(
         event: Event & { currentTarget: HTMLInputElement },
     ) {
@@ -139,6 +202,20 @@
             changeSetting("flOutputCorrection", event.currentTarget.checked)}
     />
     Correct FL Studio's gain on our control outputs (x1.283291, FL only)
+</label>
+
+<label class="option">
+    <input
+        type="checkbox"
+        checked={editor.settings.resizeBlocksLanguageSwitch}
+        onchange={(event) =>
+            changeSetting(
+                "resizeBlocksLanguageSwitch",
+                event.currentTarget.checked,
+            )}
+    />
+    While a window corner is dragged, stop Shift with Alt or Ctrl from switching
+    Windows' input language (Windows only)
 </label>
 
 <div class="group" id="window-settings">
@@ -249,17 +326,167 @@
     <fieldset>
         <legend>Bay round trip (the host is told it as latency)</legend>
         {#each roundTrips as option (option.value)}
+            <div class="line">
+                <label class="option">
+                    <input
+                        type="radio"
+                        name="roundTripBlocks"
+                        checked={editor.settings.roundTripBlocks ===
+                            option.value}
+                        onchange={() =>
+                            changeSetting("roundTripBlocks", option.value)}
+                    />
+                    {option.text}
+                </label>
+                {#if option.value === 0}
+                    <button
+                        type="button"
+                        id="retry-one-block"
+                        disabled={editor.settings.roundTripBlocks !== 0}
+                        onclick={sendRetryOneBlock}>Retry 1 block</button
+                    >
+                {/if}
+            </div>
+        {/each}
+        <div class="line">
+            <button
+                type="button"
+                id="recheck-block-size"
+                disabled={!editor.settings.bayRealBlocks}
+                onclick={sendRecheckBlockSize}>Recheck real block size</button
+            >
+        </div>
+        <p class="hint">
+            The host can automate both: "Bay 1: retry 1-block round trip" and
+            "Bays: recheck block size" (each acts when switched on). A recheck
+            watches the blocks afresh, so the round trip can shrink as well as
+            grow.
+        </p>
+    </fieldset>
+
+    <fieldset>
+        <legend>Bay round trip counted in</legend>
+        <label class="option">
+            <input
+                type="radio"
+                name="bayRealBlocks"
+                checked={editor.settings.bayRealBlocks}
+                onchange={() => changeSetting("bayRealBlocks", true)}
+            />
+            Real blocks (FL: one sequencer tick each, far below the buffer length;
+            grown ahead of need, 25% to spare)
+        </label>
+        <label class="option">
+            <input
+                type="radio"
+                name="bayRealBlocks"
+                checked={!editor.settings.bayRealBlocks}
+                onchange={() => changeSetting("bayRealBlocks", false)}
+            />
+            Announced blocks (the host's buffer length)
+        </label>
+        <label class="option">
+            Lowest tempo
+            <input
+                id="lowest-tempo"
+                class="milliseconds"
+                type="number"
+                min="1"
+                max={lowestTempoRange.max}
+                step="any"
+                placeholder="none"
+                value={editor.settings.bayLowestTempo > 0
+                    ? editor.settings.bayLowestTempo
+                    : ""}
+                onchange={changeLowestTempo}
+            />
+            BPM (empty: none)
+        </label>
+        <p class="hint">
+            Real blocks start at one tick at the lowest tempo, so a project that
+            slows down later needn't grow the round trip while playing. Setting
+            it rechecks the block size.
+        </p>
+        {#if tempoDropsPop}
+            <p class="warning" id="tempo-drop-warning">
+                At 2 or 3 blocks, tempo drops can pop inside the bay (each
+                growth of the round trip makes the receiver line up again). Set
+                a lowest tempo to avoid it.
+            </p>
+        {/if}
+    </fieldset>
+
+    <fieldset>
+        <legend
+            >Real blocks: shrink the round trip while the transport is stopped</legend
+        >
+        {#each stoppedShrinks as option (option.value)}
             <label class="option">
                 <input
                     type="radio"
-                    name="roundTripBlocks"
-                    checked={editor.settings.roundTripBlocks === option.value}
+                    name="bayStoppedShrink"
+                    checked={editor.settings.bayStoppedShrink === option.value}
                     onchange={() =>
-                        changeSetting("roundTripBlocks", option.value)}
+                        changeSetting("bayStoppedShrink", option.value)}
                 />
                 {option.text}
             </label>
         {/each}
+        <label class="option">
+            Quiet: below
+            <input
+                id="quiet-level"
+                class="milliseconds"
+                type="number"
+                min={quietLevelRange.min}
+                max={quietLevelRange.max}
+                step="1"
+                value={editor.settings.bayQuietLevelDb}
+                onchange={(event) =>
+                    changeWhole(event, "bayQuietLevelDb", quietLevelRange)}
+            />
+            dBFS for
+            <input
+                id="quiet-ms"
+                class="milliseconds"
+                type="number"
+                min={quietMsRange.min}
+                max={quietMsRange.max}
+                step="1"
+                value={editor.settings.bayQuietMs}
+                onchange={(event) =>
+                    changeWhole(event, "bayQuietMs", quietMsRange)}
+            />
+            ms
+        </label>
+        <p class="hint">
+            While stopped, the block size is checked again and again, so the
+            round trip follows a faster tempo. Playing, it only grows.
+        </p>
+    </fieldset>
+
+    <fieldset>
+        <legend>Bay delay change crossfade</legend>
+        <label class="option">
+            <input
+                id="jump-crossfade"
+                class="milliseconds"
+                type="number"
+                min={jumpCrossfadeRange.min}
+                max={jumpCrossfadeRange.max}
+                step="1"
+                value={editor.settings.bayJumpCrossfadeMs}
+                onchange={(event) =>
+                    changeWhole(
+                        event,
+                        "bayJumpCrossfadeMs",
+                        jumpCrossfadeRange,
+                    )}
+            />
+            ms ({jumpCrossfadeRange.min} to {jumpCrossfadeRange.max}; 0 is off).
+            Blends the old timing into the new when the round trip or the bay
+            latency changes.
+        </label>
     </fieldset>
 
     <fieldset>
@@ -276,7 +503,7 @@
                 onchange={changeCrossfade}
             />
             ms ({crossfadeRange.min} to {crossfadeRange.max}; 0 is off). Also
-            blends the jump when the bay's delay changes, fades the bay's send
+            blends the jump when the slot goes Off or back, fades the bay's send
             for Bypass and Off, and is the length of a dropout's fade.
         </label>
     </fieldset>
@@ -366,6 +593,17 @@
     .hint {
         margin: 2px 0 0;
         opacity: 0.7;
+    }
+
+    .warning {
+        margin: 4px 0 0;
+        color: #ffb36b;
+    }
+
+    .line {
+        display: flex;
+        align-items: center;
+        gap: 8px;
     }
 
     .size {

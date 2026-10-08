@@ -142,7 +142,15 @@ void BayLink::prepare (double newSampleRate, int maxBlockSize)
     if (lagResult.state == Lag::State::measuring)
         lagResult = {};
 
-    roundTrip.store (roundTripBlocks.load() * maxBlock);
+    // Real blocks start at the lowest tempo's tick, or the announced block until the survey has seen real ones
+    const auto floor = floorUnit();
+    blockUnit.store (realBlocks.load() && floor > 0 ? floor : maxBlock);
+    startSurvey (false);
+    unitSurveyPending.store (realBlocks.load());
+    countingRealBlocks = realBlocks.load();
+    quietSamples.store (0);
+
+    roundTrip.store (roundTripBlocks.load() * blockUnit.load());
     lastRoundTrip = lastLinkDelay = -1;
     returnStall = flowingRun = 0;
     blockMin.store (unset);
@@ -159,7 +167,7 @@ void BayLink::prepare (double newSampleRate, int maxBlockSize)
 
     // A new session: receivers line up again with the new block size and round trip
     if (const auto send = sendHandle.load(); send >= 0)
-        hub.load()->set_writer_details (send, sampleRate, maxBlock, roundTrip.load());
+        hub.load()->set_writer_details (send, sampleRate, blockUnit.load(), roundTrip.load());
     else
         linkIfReady();
 }
@@ -179,12 +187,14 @@ void BayLink::setRoundTripBlocks (int blocksOrAuto)
 bool BayLink::updateRoundTrip()
 {
     const auto setting = roundTripSetting.load();
+    const auto unitChanged = updateBlockUnit();
+    const auto unitReason = "counted in blocks of " + juce::String (blockUnit.load());
 
     if (setting != autoRoundTrip)
     {
         autoCheckActive.store (false);
         autoState.store (AutoState::off);
-        return applyRoundTrip (setting, "set in Settings");
+        return applyRoundTrip (setting, unitChanged ? unitReason : "set in Settings");
     }
 
     // A relay linking (a new one, or one switching modes) may run in a different order: check 1 block again
@@ -236,7 +246,12 @@ bool BayLink::updateRoundTrip()
         autoCheckActive.store (false);
     }
 
-    const auto changed = applyRoundTrip (autoBlocks, autoBlocks == minRoundTripBlocks ? "Automatic, trying 1 block" : "Automatic, falling back");
+    const auto changed = applyRoundTrip (autoBlocks, unitChanged ? unitReason : autoBlocks == minRoundTripBlocks ? "Automatic, trying 1 block"
+                                                                                                                 : "Automatic, falling back");
+
+    // The check carries on at the new size of the same number of blocks
+    if (unitChanged && autoCheckActive.load())
+        autoCheckRoundTrip.store (roundTrip.load());
 
     // Counted only at the round trip being checked, so nothing from before the change gets in
     if (autoState.load() == AutoState::checking && !autoCheckActive.load())
@@ -256,6 +271,134 @@ void BayLink::startAutoCheck()
     autoBlocks = minRoundTripBlocks;
     autoCheckActive.store (false);
     autoState.store (AutoState::checking);
+}
+
+int BayLink::floorUnit() const
+{
+    const auto bpm = lowestTempo.load();
+
+    if (bpm <= 0.0 || sampleRate <= 0.0 || maxBlock <= 0)
+        return 0;
+
+    const auto tick = sampleRate * 60.0 / (ticksPerBeat * bpm);
+    return std::min (maxBlock, static_cast<int> (std::ceil (unitHeadroom * tick)));
+}
+
+int BayLink::unitFor (int largestBlock) const
+{
+    return std::min (maxBlock, std::max (1, static_cast<int> (std::ceil (unitHeadroom * largestBlock))));
+}
+
+bool BayLink::updateBlockUnit()
+{
+    if (maxBlock <= 0 || sampleRate <= 0.0)
+        return false;
+
+    const auto current = blockUnit.load();
+    auto unit = maxBlock;
+    juce::String why = "the announced block";
+
+    if (realBlocks.load())
+    {
+        // Switched on from announced blocks, or a new lowest tempo: survey first
+        if (tempoFloorChanged.exchange (false) || !countingRealBlocks)
+            startSurvey (false);
+
+        // While stopped (and quiet, if so set), one survey follows another, so the round trip can follow a faster tempo
+        const auto shrinkAllowed = mayShrinkNow();
+
+        if (shrinkAllowed && !unitSurveyPending.load())
+            startSurvey (true);
+
+        const auto floor = floorUnit();
+        const auto largest = valueOf (unitLargest.load());
+        unit = std::max (current, floor);
+        why = "the lowest tempo";
+
+        if (unitSurveyPending.load() && largest.has_value() && static_cast<double> (surveyedSamples.load()) >= unitSurveySeconds * sampleRate)
+        {
+            unitSurveyPending.store (false);
+
+            // A survey started while stopped doesn't shrink once playing has started (or it got loud)
+            if (const auto surveyed = std::max (floor, unitFor (*largest)); surveyed > unit || !surveyWhileStopped || shrinkAllowed)
+            {
+                unit = surveyed;
+                why = "largest real block " + juce::String (*largest) + (surveyWhileStopped ? ", while stopped" : "");
+            }
+        }
+        else if (largest.has_value() && *largest > unitGrowAt * unit)
+        {
+            unit = std::max (unit, unitFor (*largest));
+            why = "a real block of " + juce::String (*largest);
+        }
+    }
+
+    countingRealBlocks = realBlocks.load();
+
+    if (unit == current)
+        return false;
+
+    blockUnit.store (unit);
+    logEvent ("Round trip block: " + juce::String (unit) + " samples (" + why + ")");
+    return true;
+}
+
+void BayLink::startSurvey (bool whileStopped)
+{
+    surveyWhileStopped = whileStopped;
+    unitLargest.store (unset);
+    surveyedSamples.store (0);
+    unitSurveyPending.store (true);
+}
+
+bool BayLink::mayShrinkNow() const
+{
+    if (transport.load() != Transport::stopped)
+        return false;
+
+    switch (stoppedShrink.load())
+    {
+        case StoppedShrink::never:
+            return false;
+        case StoppedShrink::always:
+            return true;
+        case StoppedShrink::whenQuiet:
+            break;
+    }
+
+    return static_cast<double> (quietSamples.load()) >= quietMs.load() * sampleRate / 1000.0;
+}
+
+void BayLink::setLowestTempo (double bpm) noexcept
+{
+    const auto floor = bpm > 0.0 && bpm <= maxLowestTempo ? bpm : 0.0;
+
+    if (!juce::exactlyEqual (lowestTempo.exchange (floor), floor))
+        tempoFloorChanged.store (true);
+}
+
+void BayLink::setQuiet (int levelDb, int milliseconds) noexcept
+{
+    quietLevel.store (juce::Decibels::decibelsToGain (static_cast<float> (juce::jlimit (minQuietLevelDb, maxQuietLevelDb, levelDb))));
+    quietMs.store (juce::jlimit (0, maxQuietMs, milliseconds));
+}
+
+void BayLink::recheckBlockSize()
+{
+    if (!realBlocks.load())
+        return;
+
+    startSurvey (false);
+    logEvent ("Real block size: checking again (asked)");
+}
+
+void BayLink::retryOneBlock()
+{
+    if (roundTripSetting.load() != autoRoundTrip)
+        return;
+
+    logEvent ("Automatic: trying 1 block again (asked)");
+    startAutoCheck();
 }
 
 bool BayLink::updateBayLatency()
@@ -302,7 +445,7 @@ void BayLink::setSlotState (SlotState state)
 bool BayLink::applyRoundTrip (int blocks, const juce::String& why)
 {
     roundTripBlocks.store (blocks);
-    const auto samples = blocks * maxBlock;
+    const auto samples = blocks * blockUnit.load();
 
     if (samples == roundTrip.load())
         return false;
@@ -311,7 +454,7 @@ bool BayLink::applyRoundTrip (int blocks, const juce::String& why)
     logEvent ("Round trip: " + juce::String (blocks) + (blocks == 1 ? " block (" : " blocks (") + juce::String (samples) + " samples), " + why);
 
     if (const auto send = sendHandle.load(); send >= 0 && maxBlock > 0)
-        hub.load()->set_writer_details (send, sampleRate, maxBlock, samples);
+        hub.load()->set_writer_details (send, sampleRate, blockUnit.load(), samples);
 
     return true;
 }
@@ -363,7 +506,7 @@ void BayLink::linkIfReady()
             continue;
         }
 
-        if (linkHub->set_writer_details (send, sampleRate, maxBlock, roundTrip.load()) != HS_LINK_OK)
+        if (linkHub->set_writer_details (send, sampleRate, blockUnit.load(), roundTrip.load()) != HS_LINK_OK)
         {
             linkHub->close (send);
             linkHub->close (back);
@@ -412,6 +555,8 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
 
     lower (blockMin, numSamples);
     raise (blockMax, numSamples);
+    raise (unitLargest, numSamples);
+    surveyedSamples.fetch_add (static_cast<juce::uint64> (numSamples), std::memory_order_relaxed);
 
     const auto start = position;
     const auto roundTripSamples = roundTrip.load (std::memory_order_relaxed);
@@ -661,13 +806,17 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
     }
     else
     {
-        // The output's delay changed (a new round trip or bay latency, or Off): blend from the old timeline
+        // The output's delay changed (a new round trip or bay latency, or Off): blend from the old timeline. Off and back
+        // use the bypass crossfade, the rest the jump crossfade.
         if (outputDelay >= 0 && delayNow != outputDelay)
         {
+            const auto fadeMs = dropped != lastDropped ? crossfadeMs.load (std::memory_order_relaxed) : jumpCrossfadeMs.load (std::memory_order_relaxed);
+            const auto fadeSamples = fadeMs * sampleRate / 1000.0;
             jumpFromDelay = outputDelay;
             jumpFromMix = returnMix;
             jumpFromLevel = level;
-            jumpGain = crossfadeMs.load (std::memory_order_relaxed) > 0 ? 1.0f : 0.0f;
+            jumpGain = fadeMs > 0 ? 1.0f : 0.0f;
+            jumpStep = fadeSamples > 1.0 ? static_cast<float> (1.0 / fadeSamples) : 1.0f;
         }
 
         outputDelay = delayNow;
@@ -689,6 +838,13 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
 
         fadeOutput (left, right, numSamples, muted ? 0.0f : 1.0f);
     }
+
+    lastDropped = dropped;
+
+    // How long the output has been quiet, for shrinking the round trip while stopped
+    const auto peak = std::max (juce::FloatVectorOperations::findMaximum (left, numSamples), -juce::FloatVectorOperations::findMinimum (left, numSamples));
+    const auto peakRight = std::max (juce::FloatVectorOperations::findMaximum (right, numSamples), -juce::FloatVectorOperations::findMinimum (right, numSamples));
+    quietSamples.store (std::max (peak, peakRight) < quietLevel.load (std::memory_order_relaxed) ? quietSamples.load (std::memory_order_relaxed) + numSamples : 0, std::memory_order_relaxed);
 
     // What played, for the next dropout's reversed fade
     if (const auto ringSize = static_cast<int> (playedLeft.size()); ringSize > 0)
@@ -818,7 +974,7 @@ void BayLink::blendJump (const hs_link_api* linkHub, int32_t back, juce::int64 s
         juce::FloatVectorOperations::multiply (jumpRight.data(), jumpFromLevel, numSamples);
     }
 
-    const auto step = crossfadeStep();
+    const auto step = jumpStep;
 
     for (int i = 0; i < numSamples && jumpGain > 0.0f; ++i)
     {
@@ -1165,6 +1321,13 @@ BayLink::Status BayLink::getStatus()
     status.roundTripBlocks = roundTripBlocks.load();
     status.roundTripSamples = roundTrip.load();
     status.maxBlock = maxBlock;
+    status.blockUnit = blockUnit.load();
+    status.realBlocks = realBlocks.load();
+    status.surveyingBlocks = status.realBlocks && unitSurveyPending.load();
+    status.lowestTempo = lowestTempo.load();
+    status.transport = transport.load();
+    status.outputQuiet = sampleRate > 0.0 && static_cast<double> (quietSamples.load()) >= quietMs.load() * sampleRate / 1000.0;
+    status.stoppedShrink = stoppedShrink.load();
     status.sampleRate = sampleRate;
     status.slotState = slotState.load();
     status.awaitingBay = status.slotState == SlotState::active && awaitingBay.load();
@@ -1519,6 +1682,45 @@ const char* BayLink::toName (Reading value) noexcept
     }
 
     return "none";
+}
+
+const char* BayLink::toName (Transport value) noexcept
+{
+    switch (value)
+    {
+        case Transport::playing:
+            return "playing";
+        case Transport::stopped:
+            return "stopped";
+        case Transport::unknown:
+            break;
+    }
+
+    return "unknown";
+}
+
+const char* BayLink::toName (StoppedShrink value) noexcept
+{
+    switch (value)
+    {
+        case StoppedShrink::never:
+            return "never";
+        case StoppedShrink::always:
+            return "always";
+        case StoppedShrink::whenQuiet:
+            break;
+    }
+
+    return "whenQuiet";
+}
+
+std::optional<BayLink::StoppedShrink> BayLink::stoppedShrinkFromName (const juce::String& name)
+{
+    for (const auto rule : { StoppedShrink::never, StoppedShrink::whenQuiet, StoppedShrink::always })
+        if (name == toName (rule))
+            return rule;
+
+    return std::nullopt;
 }
 
 void BayLink::History::allocate (int minimumFrames)

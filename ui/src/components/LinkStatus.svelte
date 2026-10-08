@@ -137,7 +137,7 @@
             case "oneBlock":
                 return "automatic: 1 block works (still watching: a miss on either side falls back to 2)";
             case "fellBack":
-                return "automatic: 1 block missed, so 2. To try 1 again: wire the panel into the receiver, then switch the receiver's mode to Transmitter and back";
+                return 'automatic: 1 block missed, so 2. To try 1 again: wire the panel into the receiver, then press Retry 1 block (Settings) or switch on "Bay 1: retry 1-block round trip"';
         }
     }
 
@@ -209,11 +209,24 @@
                     status.roundTrip,
                     status.sampleRate,
                 )} ms,
-                {status.roundTripBlocks} × {status.maxBlock})
+                {status.roundTripBlocks} × {status.blockUnit}{status.realBlocks
+                    ? status.surveyingBlocks
+                        ? `; real blocks: watching them (announced ${status.maxBlock})`
+                        : `; real blocks (announced ${status.maxBlock})`
+                    : "; announced blocks"})
             </dd>
 
             <dt></dt>
             <dd id="link-auto">{describeAuto(status)}</dd>
+
+            <dt>Transport</dt>
+            <dd id="link-transport">
+                {status.transport === "unknown"
+                    ? "not reported by the host"
+                    : status.transport}{status.outputQuiet
+                    ? "; output quiet"
+                    : ""}
+            </dd>
 
             <dt>Bay latency</dt>
             <dd id="link-bay-latency">{describeBayLatency(status)}</dd>

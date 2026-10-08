@@ -122,6 +122,14 @@ WebUi::Handlers PluginEditor::createPageHandlers()
         { "measureLag", [this] (const juce::var&) { pluginProcessor.getBayLink().measureLag(); } },
         { "startProbe", [this] (const juce::var&) { pluginProcessor.getBayLink().startProbe(); } },
         { "resetLinkCounters", [this] (const juce::var&) { pluginProcessor.getBayLink().resetCounters(); } },
+        { "recheckBlockSize", [this] (const juce::var&) {
+             pluginProcessor.getBayLink().recheckBlockSize();
+             pluginProcessor.applyLinkSettings();
+         } },
+        { "retryOneBlock", [this] (const juce::var&) {
+             pluginProcessor.getBayLink().retryOneBlock();
+             pluginProcessor.applyLinkSettings();
+         } },
     };
     return handlers;
 }
@@ -134,8 +142,15 @@ juce::var PluginEditor::describeEditor() const
     current->setProperty ("attachedPlacement", EditorPlacement::toSettingsValue (settings->getAttachedPlacement()));
     current->setProperty ("resizeRendering", EditorScale::toSettingsValue (settings->getResizeRendering()));
     current->setProperty ("resizeFlipAlt", settings->getFlipAltResize());
+    current->setProperty ("resizeBlocksLanguageSwitch", settings->getResizeBlocksLanguageSwitch());
     current->setProperty ("flOutputCorrection", settings->getFlOutputCorrection());
     current->setProperty ("roundTripBlocks", settings->getRoundTripBlocks());
+    current->setProperty ("bayRealBlocks", settings->getRoundTripRealBlocks());
+    current->setProperty ("bayLowestTempo", settings->getLowestTempo());
+    current->setProperty ("bayStoppedShrink", BayLink::toName (settings->getStoppedShrink()));
+    current->setProperty ("bayQuietLevelDb", settings->getQuietLevelDb());
+    current->setProperty ("bayQuietMs", settings->getQuietMs());
+    current->setProperty ("bayJumpCrossfadeMs", settings->getJumpCrossfadeMs());
     current->setProperty ("bypassCrossfadeMs", settings->getBypassCrossfadeMs());
     current->setProperty ("bayLatencySettleMs", settings->getLatencySettleMs());
     current->setProperty ("bayTailCutReleaseMs", settings->getTailCutReleaseMs());
@@ -187,6 +202,11 @@ juce::var PluginEditor::describeLink() const
     link->setProperty ("roundTrip", status.roundTripSamples);
     link->setProperty ("roundTripBlocks", status.roundTripBlocks);
     link->setProperty ("maxBlock", status.maxBlock);
+    link->setProperty ("blockUnit", status.blockUnit);
+    link->setProperty ("realBlocks", status.realBlocks);
+    link->setProperty ("surveyingBlocks", status.surveyingBlocks);
+    link->setProperty ("transport", BayLink::toName (status.transport));
+    link->setProperty ("outputQuiet", status.outputQuiet);
     link->setProperty ("sampleRate", status.sampleRate);
     link->setProperty ("latency", pluginProcessor.getLatencySamples());
     link->setProperty ("slotState", BayLink::toName (status.slotState));
@@ -285,6 +305,10 @@ void PluginEditor::handleSetting (const juce::var& message)
     {
         settings->setFlipAltResize (static_cast<bool> (value));
     }
+    else if (name == "resizeBlocksLanguageSwitch" && value.isBool())
+    {
+        settings->setResizeBlocksLanguageSwitch (static_cast<bool> (value));
+    }
     else if (name == "flOutputCorrection" && value.isBool())
     {
         settings->setFlOutputCorrection (static_cast<bool> (value));
@@ -296,6 +320,51 @@ void PluginEditor::handleSetting (const juce::var& message)
         if (blocks == BayLink::autoRoundTrip || (blocks >= BayLink::minRoundTripBlocks && blocks <= BayLink::maxRoundTripBlocks))
         {
             settings->setRoundTripBlocks (blocks);
+            pluginProcessor.applyLinkSettings();
+        }
+    }
+    else if (name == "bayRealBlocks" && value.isBool())
+    {
+        settings->setRoundTripRealBlocks (static_cast<bool> (value));
+        pluginProcessor.applyLinkSettings();
+    }
+    else if (name == "bayLowestTempo" && (value.isDouble() || value.isInt()))
+    {
+        if (const auto bpm = static_cast<double> (value); bpm >= 0.0 && bpm <= BayLink::maxLowestTempo)
+        {
+            settings->setLowestTempo (bpm);
+            pluginProcessor.applyLinkSettings();
+        }
+    }
+    else if (name == "bayStoppedShrink" && value.isString())
+    {
+        if (const auto rule = BayLink::stoppedShrinkFromName (value.toString()))
+        {
+            settings->setStoppedShrink (*rule);
+            pluginProcessor.applyLinkSettings();
+        }
+    }
+    else if (name == "bayQuietLevelDb" && value.isInt())
+    {
+        if (const auto decibels = static_cast<int> (value); decibels >= BayLink::minQuietLevelDb && decibels <= BayLink::maxQuietLevelDb)
+        {
+            settings->setQuietLevelDb (decibels);
+            pluginProcessor.applyLinkSettings();
+        }
+    }
+    else if (name == "bayQuietMs" && value.isInt())
+    {
+        if (const auto milliseconds = static_cast<int> (value); milliseconds >= 0 && milliseconds <= BayLink::maxQuietMs)
+        {
+            settings->setQuietMs (milliseconds);
+            pluginProcessor.applyLinkSettings();
+        }
+    }
+    else if (name == "bayJumpCrossfadeMs" && value.isInt())
+    {
+        if (const auto milliseconds = static_cast<int> (value); milliseconds >= 0 && milliseconds <= BayLink::maxJumpCrossfadeMs)
+        {
+            settings->setJumpCrossfadeMs (milliseconds);
             pluginProcessor.applyLinkSettings();
         }
     }
@@ -467,6 +536,33 @@ void PluginEditor::handleResize (const juce::var& message)
 void PluginEditor::beginResize (Corner corner)
 {
     drag = startDrag (corner, wantsCenterAnchor(), KeyForwarder::readPhysicalModifiers().shift);
+
+    if (settings->getResizeBlocksLanguageSwitch())
+    {
+        chordInterrupted = false;
+        guardLanguageSwitch();
+        languageSwitchGuard.startTimerHz (languageSwitchGuardHz);
+    }
+}
+
+void PluginEditor::guardLanguageSwitch()
+{
+    if (!drag.has_value())
+    {
+        languageSwitchGuard.stopTimer();
+        return;
+    }
+
+    // Windows switches on releasing Shift with Alt (or Ctrl) if no other key came in between
+    const auto modifiers = KeyForwarder::readPhysicalModifiers();
+
+    if (!(modifiers.shift && (modifiers.alt || modifiers.ctrl)))
+        chordInterrupted = false;
+    else if (!chordInterrupted)
+    {
+        KeyForwarder::interruptModifierChord();
+        chordInterrupted = true;
+    }
 }
 
 PluginEditor::Drag PluginEditor::startDrag (Corner corner, bool aroundCenter, bool freeAspect) const
@@ -576,7 +672,10 @@ void PluginEditor::continueResize()
 
 void PluginEditor::endResize()
 {
+    // Shift released between the last check and the mouse button would still switch
+    guardLanguageSwitch();
     drag.reset();
+    languageSwitchGuard.stopTimer();
 }
 
 void PluginEditor::setScale (double newScale)

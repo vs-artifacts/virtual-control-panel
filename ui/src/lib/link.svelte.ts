@@ -8,6 +8,7 @@ const lagStates = ['notMeasured', 'measuring', 'found', 'noReturn', 'noMatch'] a
 const probeStates = ['notRun', 'running', 'found', 'noReturn', 'noChange'] as const
 export const slotStates = ['active', 'mute', 'bypass', 'off'] as const
 const readings = ['none', 'measured', 'unreadable', 'outOfRange', 'noInput', 'held'] as const
+const transportStates = ['unknown', 'playing', 'stopped'] as const
 
 export type AutoState = (typeof autoStates)[number]
 export type SlotState = (typeof slotStates)[number]
@@ -50,6 +51,13 @@ export interface LinkStatus {
     roundTrip: number
     roundTripBlocks: number
     maxBlock: number
+    // The block the round trip counts in: the announced one, or (real blocks) grown from the largest seen
+    blockUnit: number
+    realBlocks: boolean
+    surveyingBlocks: boolean
+    // The host's transport as it reports it, and whether the panel's output has been quiet for the set time
+    transport: (typeof transportStates)[number]
+    outputQuiet: boolean
     sampleRate: number
     latency: number
     slotState: SlotState
@@ -142,6 +150,11 @@ export function readLink(raw: unknown): LinkStatus | null {
         roundTrip: count(fields.roundTrip),
         roundTripBlocks: count(fields.roundTripBlocks),
         maxBlock: count(fields.maxBlock),
+        blockUnit: count(fields.blockUnit),
+        realBlocks: fields.realBlocks === true,
+        surveyingBlocks: fields.surveyingBlocks === true,
+        transport: oneOf(transportStates, fields.transport) ?? 'unknown',
+        outputQuiet: fields.outputQuiet === true,
         sampleRate: count(fields.sampleRate),
         latency: count(fields.latency),
         slotState: oneOf(slotStates, fields.slotState) ?? 'active',

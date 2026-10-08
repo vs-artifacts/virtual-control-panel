@@ -39,6 +39,10 @@ public:
     static Post postToHostOf (juce::Component& editor, std::function<void (const juce::String&)> log = {});
     static Modifiers readPhysicalModifiers();
 
+    // Types one key with no meaning (Windows: virtual key 0xE8, unassigned), so modifiers held now no longer form a
+    // chord of their own on release, e.g. Windows' Alt+Shift input language switch. Elsewhere: nothing.
+    static void interruptModifierChord();
+
     // The KeyboardEvent.code name of a forwarded key, or its scan code in hex
     static juce::String nameOf (std::uint32_t scanCode);
 

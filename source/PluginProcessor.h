@@ -10,6 +10,7 @@
 #include "bridge/ControlSession.h"
 #include "engine/BayLink.h"
 #include "engine/Engine.h"
+#include "engine/TriggerParameter.h"
 
 #if (MSVC)
     #include "ipps.h"
@@ -62,8 +63,15 @@ public:
     BayLink& getBayLink() noexcept { return bayLink; }
 
     // Takes the plugin-wide link settings (round trip, crossfade, settle time, tail cut release), runs the automatic
-    // round trip, takes a settled bay latency, updates the link's event log, and reports the latency if it changed
+    // round trip, takes a settled bay latency, updates the link's event log, and reports the latency if it changed.
+    // Also takes the command parameters' requests.
     void applyLinkSettings();
+
+    // Commands the host can automate, after the pool, with permanent IDs: one for all bays, and one per bay (planned for
+    // up to maxBays; bays 2 on do nothing yet)
+    static constexpr int maxBays = 4;
+    TriggerParameter& getRecheckBlockSize() noexcept { return *recheckBlockSize; }
+    TriggerParameter& getRetryOneBlock (int bay) noexcept { return *retryOneBlock[static_cast<size_t> (bay)]; }
 
     // Every exposed parameter, for a page to control through its host control
     std::vector<ControlSession::Parameter> createSessionParameters();
@@ -112,6 +120,8 @@ private:
 
     Engine engine;
     HostControls hostControls { *this };
+    TriggerParameter* recheckBlockSize = nullptr; // owned by the processor, like every parameter
+    std::array<TriggerParameter*, maxBays> retryOneBlock {};
     bool editorPlaced = false;
     int editorTab = 0;
     std::optional<double> editorScale;

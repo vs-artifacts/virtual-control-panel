@@ -9,11 +9,18 @@ namespace
     constexpr auto attachedPlacementKey = "attachedPlacement";
     constexpr auto resizeRenderingKey = "resizeRendering";
     constexpr auto flipAltResizeKey = "resizeFlipAlt";
+    constexpr auto resizeBlocksLanguageSwitchKey = "resizeBlocksLanguageSwitch";
     constexpr auto lastEditorScaleKey = "lastEditorScale";
     constexpr auto lastEditorLayoutWidthKey = "lastEditorLayoutWidth";
     constexpr auto lastEditorLayoutHeightKey = "lastEditorLayoutHeight";
     constexpr auto flOutputCorrectionKey = "flOutputCorrection";
     constexpr auto roundTripBlocksKey = "bayRoundTrip";
+    constexpr auto realBlocksKey = "bayRealBlocks";
+    constexpr auto lowestTempoKey = "bayLowestTempo";
+    constexpr auto stoppedShrinkKey = "bayStoppedShrink";
+    constexpr auto quietLevelKey = "bayQuietLevelDb";
+    constexpr auto quietMsKey = "bayQuietMs";
+    constexpr auto jumpCrossfadeKey = "bayJumpCrossfadeMs";
     constexpr auto bypassCrossfadeKey = "bayBypassCrossfadeMs";
     constexpr auto latencySettleKey = "bayLatencySettleMs";
     constexpr auto tailCutReleaseKey = "bayTailCutReleaseMs";
@@ -86,6 +93,16 @@ void PluginSettings::setFlipAltResize (bool flip)
     file.setValue (flipAltResizeKey, flip);
 }
 
+bool PluginSettings::getResizeBlocksLanguageSwitch() const
+{
+    return file.getBoolValue (resizeBlocksLanguageSwitchKey, true);
+}
+
+void PluginSettings::setResizeBlocksLanguageSwitch (bool shouldBlock)
+{
+    file.setValue (resizeBlocksLanguageSwitchKey, shouldBlock);
+}
+
 double PluginSettings::getLastEditorScale() const
 {
     return EditorScale::constrain (file.getDoubleValue (lastEditorScaleKey, 1.0));
@@ -127,6 +144,67 @@ int PluginSettings::getRoundTripBlocks() const
 void PluginSettings::setRoundTripBlocks (int blocks)
 {
     file.setValue (roundTripBlocksKey, blocks == BayLink::autoRoundTrip ? blocks : juce::jlimit (BayLink::minRoundTripBlocks, BayLink::maxRoundTripBlocks, blocks));
+}
+
+bool PluginSettings::getRoundTripRealBlocks() const
+{
+    return file.getBoolValue (realBlocksKey, true);
+}
+
+void PluginSettings::setRoundTripRealBlocks (bool shouldCount)
+{
+    file.setValue (realBlocksKey, shouldCount);
+}
+
+double PluginSettings::getLowestTempo() const
+{
+    const auto bpm = file.getDoubleValue (lowestTempoKey, 0.0);
+    return bpm > 0.0 && bpm <= BayLink::maxLowestTempo ? bpm : 0.0;
+}
+
+void PluginSettings::setLowestTempo (double bpm)
+{
+    file.setValue (lowestTempoKey, bpm > 0.0 && bpm <= BayLink::maxLowestTempo ? bpm : 0.0);
+}
+
+BayLink::StoppedShrink PluginSettings::getStoppedShrink() const
+{
+    return BayLink::stoppedShrinkFromName (file.getValue (stoppedShrinkKey)).value_or (BayLink::StoppedShrink::whenQuiet);
+}
+
+void PluginSettings::setStoppedShrink (BayLink::StoppedShrink rule)
+{
+    file.setValue (stoppedShrinkKey, BayLink::toName (rule));
+}
+
+int PluginSettings::getQuietLevelDb() const
+{
+    return juce::jlimit (BayLink::minQuietLevelDb, BayLink::maxQuietLevelDb, file.getIntValue (quietLevelKey, BayLink::defaultQuietLevelDb));
+}
+
+void PluginSettings::setQuietLevelDb (int decibels)
+{
+    file.setValue (quietLevelKey, juce::jlimit (BayLink::minQuietLevelDb, BayLink::maxQuietLevelDb, decibels));
+}
+
+int PluginSettings::getQuietMs() const
+{
+    return juce::jlimit (0, BayLink::maxQuietMs, file.getIntValue (quietMsKey, BayLink::defaultQuietMs));
+}
+
+void PluginSettings::setQuietMs (int milliseconds)
+{
+    file.setValue (quietMsKey, juce::jlimit (0, BayLink::maxQuietMs, milliseconds));
+}
+
+int PluginSettings::getJumpCrossfadeMs() const
+{
+    return juce::jlimit (0, BayLink::maxJumpCrossfadeMs, file.getIntValue (jumpCrossfadeKey, BayLink::defaultJumpCrossfadeMs));
+}
+
+void PluginSettings::setJumpCrossfadeMs (int milliseconds)
+{
+    file.setValue (jumpCrossfadeKey, juce::jlimit (0, BayLink::maxJumpCrossfadeMs, milliseconds));
 }
 
 int PluginSettings::getBypassCrossfadeMs() const

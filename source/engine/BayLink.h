@@ -99,6 +99,20 @@ public:
         int earliest = 0, latest = 0; // the range searched
     };
 
+    // The host's transport, as it reports it each block
+    enum class Transport {
+        unknown, // not reported: treated as playing
+        playing,
+        stopped,
+    };
+
+    // Real blocks: when the round trip may shrink again while the transport is stopped
+    enum class StoppedShrink {
+        never,
+        whenQuiet, // and the panel's output has been quiet for a while
+        always,
+    };
+
     // How long a step on control 1 takes to show in the return: the panel sends a steady tone instead of its sound,
     // holds control 1 at 0, then steps it to 1 and watches the return's level (control 1 must drive a level knob)
     struct Probe
@@ -127,6 +141,13 @@ public:
         int roundTripSetting = 0; // autoRoundTrip, or a number of blocks
         AutoState autoState = AutoState::off;
         int roundTripBlocks = 0, roundTripSamples = 0, maxBlock = 0;
+        int blockUnit = 0; // the block the round trip counts in
+        bool realBlocks = false; // counted in the host's real blocks, not the announced one
+        bool surveyingBlocks = false; // real blocks: still watching them before choosing the unit
+        double lowestTempo = 0.0; // BPM; 0: none
+        Transport transport = Transport::unknown;
+        bool outputQuiet = false; // quiet for the set time
+        StoppedShrink stoppedShrink = StoppedShrink::whenQuiet;
         double sampleRate = 0.0;
         SlotState slotState = SlotState::active;
         bool awaitingBay = false; // Active, but the bay's sound isn't back yet (since a state was left, or ever): dry plays
@@ -167,6 +188,35 @@ public:
     int getRoundTripBlocks() const noexcept { return roundTripSetting.load(); }
     int getRoundTripSamples() const noexcept { return roundTrip.load(); }
     bool updateRoundTrip(); // runs the automatic round trip; true if the round trip changed. A timer calls it.
+
+    // Real blocks: the round trip counts in the largest block the host really sends (FL: one sequencer tick, far
+    // below the buffer length it announces), grown ahead of need. Otherwise in the announced block size.
+    void setRealBlocks (bool shouldCount) noexcept { realBlocks.store (shouldCount); }
+    bool getRealBlocks() const noexcept { return realBlocks.load(); }
+
+    // Real blocks start at one tick at this tempo at least (BPM; 0: no floor, pure growing). A change rechecks.
+    void setLowestTempo (double bpm) noexcept;
+    double getLowestTempo() const noexcept { return lowestTempo.load(); }
+    int getBlockUnit() const noexcept { return blockUnit.load(); }
+
+    // Real blocks: watch the blocks afresh, after which the round trip may shrink as well as grow (message thread)
+    void recheckBlockSize();
+
+    // Automatic: try 1 block again (message thread); a fixed round trip ignores it
+    void retryOneBlock();
+
+    // Audio thread, before process(): the host's transport for this block
+    void setTransport (Transport newState) noexcept { transport.store (newState, std::memory_order_relaxed); }
+
+    void setStoppedShrink (StoppedShrink rule) noexcept { stoppedShrink.store (rule); }
+    StoppedShrink getStoppedShrink() const noexcept { return stoppedShrink.load(); }
+
+    // The panel's output counts as quiet below this level (dBFS) for this long
+    void setQuiet (int levelDb, int milliseconds) noexcept;
+
+    // How long a change of the round trip or bay latency blends the old timing into the new
+    void setJumpCrossfadeMs (int milliseconds) noexcept { jumpCrossfadeMs.store (juce::jlimit (0, maxJumpCrossfadeMs, milliseconds)); }
+    int getJumpCrossfadeMs() const noexcept { return jumpCrossfadeMs.load(); }
     bool updateBayLatency(); // takes a new bay latency once it has held for the settle time; true if it did. A timer calls it.
     int getBayLatency() const noexcept { return bayLatency.load(); }
     int getDelaySamples() const noexcept; // what the output plays behind the engine, for the host's latency
@@ -199,6 +249,21 @@ public:
     static constexpr int minRoundTripBlocks = 1;
     static constexpr int maxRoundTripBlocks = 3;
     static constexpr int defaultRoundTripBlocks = autoRoundTrip;
+
+    // Real blocks: blocks are watched this long (after a prepare or Reset counters) before the unit is chosen. The unit is
+    // the largest block seen times unitHeadroom, at most the announced block; a block above unitGrowAt of it grows it
+    // (so only after blocks have grown by an eighth: a falling tempo makes a few jumps, not one per new largest block).
+    static constexpr double unitSurveySeconds = 0.1;
+    static constexpr double unitHeadroom = 1.25;
+    static constexpr double unitGrowAt = 0.9;
+    static constexpr int ticksPerBeat = 96; // FL's sequencer, for the lowest tempo's tick
+    static constexpr double maxLowestTempo = 999.0;
+
+    static constexpr int maxJumpCrossfadeMs = 100;
+    static constexpr int defaultJumpCrossfadeMs = 30;
+
+    static constexpr int minQuietLevelDb = -120, maxQuietLevelDb = 0, defaultQuietLevelDb = -80;
+    static constexpr int maxQuietMs = 5000, defaultQuietMs = 500;
 
     static constexpr int maxCrossfadeMs = 500;
     static constexpr int defaultCrossfadeMs = 30;
@@ -262,6 +327,9 @@ public:
     static const char* toName (SlotState) noexcept;
     static std::optional<SlotState> slotStateFromName (const juce::String&);
     static const char* toName (Reading) noexcept;
+    static const char* toName (Transport) noexcept;
+    static const char* toName (StoppedShrink) noexcept;
+    static std::optional<StoppedShrink> stoppedShrinkFromName (const juce::String&);
 
 private:
     // Stereo audio by position on the panel's timeline, for the delayed direct sound
@@ -290,6 +358,11 @@ private:
     };
 
     void linkIfReady();
+    bool updateBlockUnit();
+    void startSurvey (bool whileStopped);
+    bool mayShrinkNow() const;
+    int floorUnit() const;
+    int unitFor (int largestBlock) const;
     bool applyRoundTrip (int blocks, const juce::String& why);
     void startAutoCheck();
     void logEvent (const juce::String&);
@@ -324,6 +397,7 @@ private:
     Lag lagResult;
     Probe probeResult;
     int autoBlocks = minRoundTripBlocks;
+    bool countingRealBlocks = false; // what updateBlockUnit last counted in
     std::optional<juce::uint64> relayClaims; // the receiver's and transmitter's claim counts when last checked
 
     // The event log: message threads only (prepare may come from a host's other thread, hence the lock)
@@ -338,6 +412,20 @@ private:
     std::optional<bool> loggedAwaiting;
 
     std::atomic<int> roundTripSetting { defaultRoundTripBlocks }, roundTripBlocks { minRoundTripBlocks }, roundTrip { 0 };
+    std::atomic<bool> realBlocks { true };
+    std::atomic<double> lowestTempo { 0.0 };
+    std::atomic<int> blockUnit { 0 };
+    std::atomic<bool> unitSurveyPending { true }; // the next unit comes from a survey, so it may shrink
+    std::atomic<juce::uint64> surveyedSamples { 0 }; // audio thread counts, the message thread resets
+    std::atomic<int> unitLargest { std::numeric_limits<int>::min() }; // the largest block since the survey started
+    std::atomic<bool> tempoFloorChanged { false };
+    bool surveyWhileStopped = false; // message thread: its result may only shrink if shrinking is still allowed
+    std::atomic<Transport> transport { Transport::unknown };
+    std::atomic<StoppedShrink> stoppedShrink { StoppedShrink::whenQuiet };
+    std::atomic<float> quietLevel { juce::Decibels::decibelsToGain (static_cast<float> (defaultQuietLevelDb)) };
+    std::atomic<int> quietMs { defaultQuietMs };
+    std::atomic<juce::int64> quietSamples { 0 }; // audio thread: how long the output has been below quietLevel
+    std::atomic<int> jumpCrossfadeMs { defaultJumpCrossfadeMs };
     std::atomic<AutoState> autoState { AutoState::checking };
     std::atomic<SlotState> slotState { SlotState::active };
     std::atomic<Dropouts> dropouts { Dropouts::silence };
@@ -410,6 +498,8 @@ private:
     float jumpFromMix = 0.0f; // the old timeline's share of return, held through the blend
     float jumpFromLevel = 1.0f;
     float jumpGain = 0.0f; // the old timeline's share of the output, falling to 0
+    float jumpStep = 1.0f; // per sample: the bypass crossfade for Off, the jump crossfade otherwise
+    bool lastDropped = false; // the slot was Off last block
     std::vector<float> jumpLeft, jumpRight, jumpReturnLeft, jumpReturnRight;
 
     // The automatic round trip's check, while at 1 block: counted by the audio thread at the round trip it was started with

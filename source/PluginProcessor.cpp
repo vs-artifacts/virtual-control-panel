@@ -25,6 +25,18 @@ PluginProcessor::PluginProcessor()
     for (int i = 0; i < BayLink::numControls; ++i)
         hostControls.bind (static_cast<int> (exposed.size()) + i, bayLink.getControl (i));
 
+    auto recheck = std::make_unique<TriggerParameter> ("baysRecheckBlockSize", "Bays: recheck block size");
+    recheckBlockSize = recheck.get();
+    addParameter (recheck.release());
+
+    for (int bay = 0; bay < maxBays; ++bay)
+    {
+        const auto number = juce::String (bay + 1);
+        auto retry = std::make_unique<TriggerParameter> ("bay" + number + "RetryOneBlock", "Bay " + number + ": retry 1-block round trip");
+        retryOneBlock[static_cast<size_t> (bay)] = retry.get();
+        addParameter (retry.release());
+    }
+
     applyLinkSettings();
     linkSettingsCheck.startTimerHz (10);
 }
@@ -111,11 +123,24 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 void PluginProcessor::applyLinkSettings()
 {
     bayLink.setCrossfadeMs (settings->getBypassCrossfadeMs());
+    bayLink.setJumpCrossfadeMs (settings->getJumpCrossfadeMs());
     bayLink.setSettleMs (settings->getLatencySettleMs());
     bayLink.setTailCutReleaseMs (settings->getTailCutReleaseMs());
+    bayLink.setRealBlocks (settings->getRoundTripRealBlocks());
+    bayLink.setLowestTempo (settings->getLowestTempo());
+    bayLink.setStoppedShrink (settings->getStoppedShrink());
+    bayLink.setQuiet (settings->getQuietLevelDb(), settings->getQuietMs());
 
     if (const auto blocks = settings->getRoundTripBlocks(); blocks != bayLink.getRoundTripBlocks())
         bayLink.setRoundTripBlocks (blocks);
+
+    if (recheckBlockSize->takeRequest())
+        bayLink.recheckBlockSize();
+
+    // Only bay 1 exists so far: the others' requests are dropped
+    for (size_t bay = 0; bay < retryOneBlock.size(); ++bay)
+        if (retryOneBlock[bay]->takeRequest() && bay == 0)
+            bayLink.retryOneBlock();
 
     bayLink.updateRoundTrip();
     bayLink.updateBayLatency();
@@ -169,6 +194,14 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         buffer.clear (i, 0, buffer.getNumSamples());
 
     engine.process (buffer, midiMessages, getPlayHead());
+
+    auto transport = BayLink::Transport::unknown;
+
+    if (auto* host = getPlayHead())
+        if (const auto position = host->getPosition())
+            transport = position->getIsPlaying() ? BayLink::Transport::playing : BayLink::Transport::stopped;
+
+    bayLink.setTransport (transport);
     bayLink.process (buffer);
 }
 

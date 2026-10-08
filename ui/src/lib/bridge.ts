@@ -108,6 +108,16 @@ export function sendResetLinkCounters(): void {
     window.__JUCE__.backend.emitEvent('resetLinkCounters', {})
 }
 
+// Real blocks: watch the host's blocks afresh (the round trip may shrink)
+export function sendRecheckBlockSize(): void {
+    window.__JUCE__.backend.emitEvent('recheckBlockSize', {})
+}
+
+// Automatic round trip: try 1 block again
+export function sendRetryOneBlock(): void {
+    window.__JUCE__.backend.emitEvent('retryOneBlock', {})
+}
+
 // { items }: our menu for a parameter, with the host's options in a submenu
 export function fetchParameterMenu(h: number, timeoutMs = 10000): Promise<unknown> {
     return callNative('parameterMenu', timeoutMs, h)

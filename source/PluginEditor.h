@@ -61,6 +61,7 @@ private:
 
     Drag startDrag (Corner, bool aroundCenter, bool freeAspect) const;
     bool wantsCenterAnchor() const;
+    void guardLanguageSwitch();
     void applySize();
 
     double getPhysicalPixelsPerPixel() const;
@@ -96,6 +97,9 @@ private:
     std::unique_ptr<WebUi> webUi;
     juce::Label webUiUnavailable;
     std::optional<Drag> drag;
+    bool chordInterrupted = false; // for the modifiers held now
+    static constexpr int languageSwitchGuardHz = 100; // a quick Shift tap is still several checks long
+    juce::TimedCallback languageSwitchGuard { [this] { guardLanguageSwitch(); } };
     double scale = 1.0;
     juce::Point<double> layout { 1.0, 1.0 };
     std::unique_ptr<EditorPlacement> placement;

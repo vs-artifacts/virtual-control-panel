@@ -261,6 +261,22 @@ KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor, std::fun
 #endif
 }
 
+void KeyForwarder::interruptModifierChord()
+{
+#if JUCE_WINDOWS
+    INPUT keys[2] {};
+
+    for (auto& key : keys)
+    {
+        key.type = INPUT_KEYBOARD;
+        key.ki.wVk = 0xE8;
+    }
+
+    keys[1].ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput (static_cast<UINT> (std::size (keys)), keys, sizeof (INPUT));
+#endif
+}
+
 KeyForwarder::Modifiers KeyForwarder::readPhysicalModifiers()
 {
 #if JUCE_WINDOWS
