@@ -63,6 +63,7 @@ public:
         unreadable, // the return is held back
         outOfRange, // below 0 or above HS_LINK_MAX_LATENCY: the return is held back
         noInput, // the transmitter's Marker input is off: counts as 0
+        held, // the marker went silent (e.g. FL refilling its compensation): the return is held back for a while
     };
 
     // How the automatic round trip got to its choice
@@ -140,6 +141,7 @@ public:
         int settleMs = 0;
         juce::uint64 heldBack = 0; // blocks held back while a new bay latency settled
         juce::uint64 heldStamped = 0; // blocks held back: stamped by the receiver's position while a bay latency is in use
+        juce::uint64 heldByTransmitter = 0; // blocks the transmitter held back (marker unreadable, out of range or paused)
         Dropouts dropouts = Dropouts::silence;
         int crossfadeMs = 0;
         juce::uint64 missing = 0; // return blocks missing while the return was flowing
@@ -198,15 +200,15 @@ public:
     static constexpr int maxRoundTripBlocks = 3;
     static constexpr int defaultRoundTripBlocks = autoRoundTrip;
 
-    static constexpr int maxCrossfadeMs = 50;
+    static constexpr int maxCrossfadeMs = 500;
     static constexpr int defaultCrossfadeMs = 30;
 
     // How long a new bay latency must hold before it's used
     static constexpr int maxSettleMs = 1000;
     static constexpr int defaultSettleMs = 50;
 
-    // After a slot leaves Bypass or Off, the bay's sound is held back this much longer: a plugin cleared through a Peak
-    // Controller reacts some ms late
+    // After a slot leaves Bypass or Off, the bay's send stays silent this much longer before it fades in: a plugin
+    // cleared through a Peak Controller comes back some ms late
     static constexpr int maxTailCutReleaseMs = 1000;
     static constexpr int defaultTailCutReleaseMs = 0;
 
@@ -330,7 +332,7 @@ private:
 
     // Message thread: what the event log last saw
     juce::uint64 loggedMissingLate = 0, loggedMissingGone = 0, loggedMissingOther = 0, loggedReceiverMisses = 0;
-    juce::uint64 loggedHeldBack = 0, loggedHeldStamped = 0;
+    juce::uint64 loggedHeldBack = 0, loggedHeldStamped = 0, loggedHeldByTransmitter = 0;
     int loggedSettling = -1;
     std::optional<Reading> loggedReading;
     std::optional<bool> loggedAwaiting;
@@ -375,6 +377,14 @@ private:
     std::array<float, numControls + 1> valuesSent {};
     SlotState lastSlotState = SlotState::active;
 
+    // Audio thread: the bay's send fades out for Bypass and Off, and in after them (once the release has passed)
+    float sendGain = 1.0f;
+    bool sentSilence = false;
+    juce::int64 sendSilentUntil = 0, sendFullUntil = 0; // link positions
+
+    // Audio thread: the transmitter's latest report says it's holding the return back
+    bool transmitterHolding = false;
+
     // Audio thread: Active, but the bay's sound hasn't been back since a state was left (or ever): dry plays meanwhile
     bool awaiting = true;
     std::atomic<bool> awaitingBay { true }; // for the message thread
@@ -418,7 +428,7 @@ private:
     juce::int64 lagCaptured = 0; // samples of it that arrived
 
     // Audio thread to message thread
-    std::atomic<juce::uint64> missing { 0 }, receiverMisses { 0 }, replaced { 0 }, oversized { 0 }, valueSets { 0 }, heldBack { 0 }, heldStamped { 0 };
+    std::atomic<juce::uint64> missing { 0 }, receiverMisses { 0 }, replaced { 0 }, oversized { 0 }, valueSets { 0 }, heldBack { 0 }, heldStamped { 0 }, heldByTransmitter { 0 };
     std::atomic<juce::uint64> missingLate { 0 }, missingGone { 0 }, missingOther { 0 };
     std::atomic<int> headroomNow { unset }, headroomLowest { unset }, blockMin { unset }, blockMax { unset };
     std::atomic<float> differenceNow { -1.0f }, differenceLargest { -1.0f };

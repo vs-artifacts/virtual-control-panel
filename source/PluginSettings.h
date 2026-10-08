@@ -39,6 +39,8 @@ public:
     // The size new instances' editors open at: the last one used
     double getLastEditorScale() const;
     void setLastEditorScale (double);
+    juce::Point<double> getLastEditorLayout() const; // shares of the design size (see EditorScale)
+    void setLastEditorLayout (juce::Point<double>);
 
     // What FL Studio multiplies a generator's added outputs by (measured, see docs/decisions.md); effects' aren't scaled
     static constexpr double flGeneratorOutputGain = 6536795.0 / 8388608.0;

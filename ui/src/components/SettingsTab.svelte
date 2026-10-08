@@ -141,67 +141,82 @@
     Correct FL Studio's gain on our control outputs (x1.283291, FL only)
 </label>
 
-<fieldset>
-    <legend>Center a separate window when it first opens on</legend>
-    {#each placements as option (option.value)}
-        <label class="option">
-            <input
-                type="radio"
-                name="editorPlacement"
-                checked={editor.settings.editorPlacement === option.value}
-                onchange={() => changeSetting("editorPlacement", option.value)}
-            />
-            {option.text}
-        </label>
-    {/each}
-</fieldset>
+<div class="group" id="window-settings">
+    <fieldset>
+        <legend>Center a separate window when it first opens on</legend>
+        {#each placements as option (option.value)}
+            <label class="option">
+                <input
+                    type="radio"
+                    name="editorPlacement"
+                    checked={editor.settings.editorPlacement === option.value}
+                    onchange={() =>
+                        changeSetting("editorPlacement", option.value)}
+                />
+                {option.text}
+            </label>
+        {/each}
+    </fieldset>
 
-<fieldset>
-    <legend
-        >Center a window attached inside FL Studio when it first opens</legend
-    >
-    {#each attachedPlacements as option (option.value)}
-        <label class="option">
-            <input
-                type="radio"
-                name="attachedPlacement"
-                checked={editor.settings.attachedPlacement === option.value}
-                onchange={() =>
-                    changeSetting("attachedPlacement", option.value)}
-            />
-            {option.text}
-        </label>
-    {/each}
-</fieldset>
+    <fieldset>
+        <legend
+            >Center a window attached inside FL Studio when it first opens</legend
+        >
+        {#each attachedPlacements as option (option.value)}
+            <label class="option">
+                <input
+                    type="radio"
+                    name="attachedPlacement"
+                    checked={editor.settings.attachedPlacement === option.value}
+                    onchange={() =>
+                        changeSetting("attachedPlacement", option.value)}
+                />
+                {option.text}
+            </label>
+        {/each}
+    </fieldset>
 
-<fieldset>
-    <legend>Resizing</legend>
-    {#each renderings as option (option.value)}
+    <fieldset>
+        <legend>Resizing</legend>
+        {#each renderings as option (option.value)}
+            <label class="option">
+                <input
+                    type="radio"
+                    name="resizeRendering"
+                    checked={editor.settings.resizeRendering === option.value}
+                    onchange={() =>
+                        changeSetting("resizeRendering", option.value)}
+                />
+                {option.text}
+            </label>
+        {/each}
         <label class="option">
             <input
-                type="radio"
-                name="resizeRendering"
-                checked={editor.settings.resizeRendering === option.value}
-                onchange={() => changeSetting("resizeRendering", option.value)}
+                type="checkbox"
+                checked={editor.settings.resizeFlipAlt}
+                onchange={(event) =>
+                    changeSetting("resizeFlipAlt", event.currentTarget.checked)}
             />
-            {option.text}
+            Window resize: flip drag and alt+drag
         </label>
-    {/each}
-    <label class="option">
-        <input
-            type="checkbox"
-            checked={editor.settings.resizeFlipAlt}
-            onchange={(event) =>
-                changeSetting("resizeFlipAlt", event.currentTarget.checked)}
-        />
-        Window resize: flip drag and alt+drag
-    </label>
-    <p class="hint">
-        Corner grips: drag keeps the opposite corner in place, Alt+drag the
-        window's center (separate windows, and windows attached inside FL). Add
-        Ctrl for 25% steps.
-    </p>
-</fieldset>
+        <p class="hint">
+            Corner grips: drag keeps the opposite corner in place, Alt+drag the
+            window's center (separate windows, and windows attached inside FL).
+            Add Ctrl for 25% steps. Shift sets width and height apart: the page
+            keeps its scale and shows more or less (with Ctrl, each in 25% steps
+            of the design size).
+        </p>
+    </fieldset>
+
+    <div class="size">
+        <span
+            >Size: {view.width} x {view.height} ({Math.round(
+                view.uiScale * 100,
+            )}%)</span
+        >
+        <button type="button" onclick={resetSize}>Reset size</button>
+    </div>
+</div>
 
 <fieldset>
     <legend>Double-click on a control</legend>
@@ -230,89 +245,86 @@
     </label>
 </fieldset>
 
-<fieldset>
-    <legend>Bay round trip (the host is told it as latency)</legend>
-    {#each roundTrips as option (option.value)}
+<div class="group" id="bay-settings">
+    <fieldset>
+        <legend>Bay round trip (the host is told it as latency)</legend>
+        {#each roundTrips as option (option.value)}
+            <label class="option">
+                <input
+                    type="radio"
+                    name="roundTripBlocks"
+                    checked={editor.settings.roundTripBlocks === option.value}
+                    onchange={() =>
+                        changeSetting("roundTripBlocks", option.value)}
+                />
+                {option.text}
+            </label>
+        {/each}
+    </fieldset>
+
+    <fieldset>
+        <legend>Bay bypass crossfade</legend>
         <label class="option">
             <input
-                type="radio"
-                name="roundTripBlocks"
-                checked={editor.settings.roundTripBlocks === option.value}
-                onchange={() => changeSetting("roundTripBlocks", option.value)}
+                id="bypass-crossfade"
+                class="milliseconds"
+                type="number"
+                min={crossfadeRange.min}
+                max={crossfadeRange.max}
+                step="1"
+                value={editor.settings.bypassCrossfadeMs}
+                onchange={changeCrossfade}
             />
-            {option.text}
+            ms ({crossfadeRange.min} to {crossfadeRange.max}; 0 is off). Also
+            blends the jump when the bay's delay changes, fades the bay's send
+            for Bypass and Off, and is the length of a dropout's fade.
         </label>
-    {/each}
-</fieldset>
+    </fieldset>
 
-<fieldset>
-    <legend>Bay bypass crossfade</legend>
-    <label class="option">
-        <input
-            id="bypass-crossfade"
-            class="milliseconds"
-            type="number"
-            min={crossfadeRange.min}
-            max={crossfadeRange.max}
-            step="1"
-            value={editor.settings.bypassCrossfadeMs}
-            onchange={changeCrossfade}
-        />
-        ms ({crossfadeRange.min} to {crossfadeRange.max}; 0 is off). Also blends
-        the jump when the bay's delay changes.
-    </label>
-</fieldset>
+    <fieldset>
+        <legend>Bay latency settle time</legend>
+        <label class="option">
+            <input
+                id="latency-settle"
+                class="milliseconds"
+                type="number"
+                min={settleRange.min}
+                max={settleRange.max}
+                step="1"
+                value={editor.settings.bayLatencySettleMs}
+                onchange={changeSettle}
+            />
+            ms ({settleRange.min} to {settleRange.max})
+        </label>
+        <p class="hint">
+            A new bay latency must hold this long before the panel uses it;
+            meanwhile the bay's sound is held back (silence, faded).
+        </p>
+    </fieldset>
 
-<fieldset>
-    <legend>Bay latency settle time</legend>
-    <label class="option">
-        <input
-            id="latency-settle"
-            class="milliseconds"
-            type="number"
-            min={settleRange.min}
-            max={settleRange.max}
-            step="1"
-            value={editor.settings.bayLatencySettleMs}
-            onchange={changeSettle}
-        />
-        ms ({settleRange.min} to {settleRange.max})
-    </label>
-    <p class="hint">
-        A new bay latency must hold this long before the panel uses it;
-        meanwhile the bay's sound is held back (silence, faded).
-    </p>
-</fieldset>
-
-<fieldset>
-    <legend>Bay tail cut release</legend>
-    <label class="option">
-        <input
-            id="tail-cut-release"
-            class="milliseconds"
-            type="number"
-            min={releaseRange.min}
-            max={releaseRange.max}
-            step="1"
-            value={editor.settings.bayTailCutReleaseMs}
-            onchange={changeRelease}
-        />
-        ms ({releaseRange.min} to {releaseRange.max})
-    </label>
-    <p class="hint">
-        After a bay leaves Bypass or Off, its sound is held back this much
-        longer (the sent audio plays on), since a plugin cleared through the
-        relay's Tail cut output reacts some ms late.
-    </p>
-</fieldset>
-
-<div class="size">
-    <span
-        >Size: {view.width} x {view.height} ({Math.round(
-            view.uiScale * 100,
-        )}%)</span
-    >
-    <button type="button" onclick={resetSize}>Reset size</button>
+    <fieldset>
+        <legend>Bay tail cut release</legend>
+        <label class="option">
+            <input
+                id="tail-cut-release"
+                class="milliseconds"
+                type="number"
+                min={releaseRange.min}
+                max={releaseRange.max}
+                step="1"
+                value={editor.settings.bayTailCutReleaseMs}
+                onchange={changeRelease}
+            />
+            ms ({releaseRange.min} to {releaseRange.max})
+        </label>
+        <p class="hint">
+            After a bay leaves Bypass or Off, the audio sent to it stays silent
+            this much longer before it fades in, so a plugin cleared through the
+            relay's Tail cut output (which reacts some ms late) comes back on
+            silence. The panel's own sound plays on until the bay's sound is
+            back.
+        </p>
+    </fieldset>
 </div>
 
 <style>
@@ -361,5 +373,12 @@
         align-items: center;
         justify-content: space-between;
         margin-top: 14px;
+    }
+
+    .group {
+        margin: 14px 0;
+        padding: 4px 0 12px;
+        border-top: 1px solid rgba(255, 255, 255, 0.3);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.3);
     }
 </style>

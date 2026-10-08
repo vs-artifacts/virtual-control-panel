@@ -32,9 +32,13 @@ public:
     void continueResize();
     void endResize();
 
-    // Relative to the design size, limited and (in sharp mode) snapped
+    // Relative to the design size, limited
     void setScale (double);
-    double getScale() const;
+    double getScale() const { return scale; }
+
+    // The page's layout area as shares of the design size on each axis, limited; the scale stays
+    void setLayout (juce::Point<double>);
+    juce::Point<double> getLayout() const { return layout; }
 
     //==============================================================================
     void paint (juce::Graphics&) override;
@@ -46,17 +50,20 @@ private:
         Corner corner;
         juce::Point<float> startMouse;
         double startScale;
+        juce::Point<double> startLayout;
         juce::Point<int> startSize;
         std::optional<juce::Rectangle<int>> startWindow;
         bool aroundCenter;
+        bool freeAspect; // Shift: width and height apart (the layout), not the scale
         std::optional<double> virtualStep; // with Ctrl: the size when Ctrl went down, a step of its own
+        std::optional<juce::Point<double>> virtualLayoutStep; // likewise for each axis of the layout
     };
 
-    Drag startDrag (Corner, bool aroundCenter) const;
+    Drag startDrag (Corner, bool aroundCenter, bool freeAspect) const;
     bool wantsCenterAnchor() const;
+    void applySize();
 
     double getPhysicalPixelsPerPixel() const;
-    double constrainScale (double) const;
     WebUi::Handlers createPageHandlers();
     juce::var describeEditor() const;
     juce::var describeLink() const;
@@ -89,6 +96,8 @@ private:
     std::unique_ptr<WebUi> webUi;
     juce::Label webUiUnavailable;
     std::optional<Drag> drag;
+    double scale = 1.0;
+    juce::Point<double> layout { 1.0, 1.0 };
     std::unique_ptr<EditorPlacement> placement;
     std::optional<bool> sentProcessing;
     juce::TimedCallback processingCheck { [this] {

@@ -2,15 +2,18 @@
 
 #include <juce_core/juce_core.h>
 
-// The editor's size relative to its design size; the whole UI scales with it rather than rearranging
+// The editor's size: a scale relative to the design size (the whole UI scales with it), times the page's layout area as a
+// share of the design size on each axis (Shift+drag sets those apart; the page shows more or less at the same scale)
 namespace EditorScale
 {
     constexpr int designWidth = 1120;
     constexpr int designHeight = 600;
     constexpr double minimum = 0.5;
     constexpr double maximum = 5.0;
+    constexpr double minimumLayout = 0.5;
+    constexpr double maximumLayout = 4.0;
 
-    // Ctrl+drag steps, as a share of the design size
+    // Ctrl+drag steps, as a share of the design size (the scale, or each axis of the layout)
     constexpr double step = 0.25;
 
     // How the page follows the editor's size (the page does it; C++ only stores the choice)
@@ -38,10 +41,15 @@ namespace EditorScale
         return std::isfinite (scale) ? juce::jlimit (minimum, maximum, scale) : 1.0;
     }
 
-    // The nearest step, or the virtual step (the size when Ctrl went down) if that's nearer
-    inline double snap (double scale, double virtualStep)
+    inline double constrainLayout (double share)
     {
-        const auto nearestStep = juce::jlimit (minimum, maximum, std::round (scale / step) * step);
+        return std::isfinite (share) ? juce::jlimit (minimumLayout, maximumLayout, share) : 1.0;
+    }
+
+    // The nearest step, or the virtual step (the size when Ctrl went down) if that's nearer
+    inline double snap (double scale, double virtualStep, double low = minimum, double high = maximum)
+    {
+        const auto nearestStep = juce::jlimit (low, high, std::round (scale / step) * step);
         return std::abs (scale - virtualStep) < std::abs (scale - nearestStep) ? virtualStep : nearestStep;
     }
 }

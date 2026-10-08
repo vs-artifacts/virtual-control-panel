@@ -210,6 +210,12 @@ void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
     if (editorScale.has_value())
         state.setAttribute ("editorScale", *editorScale);
 
+    if (editorLayout.has_value())
+    {
+        state.setAttribute ("editorLayoutWidth", editorLayout->x);
+        state.setAttribute ("editorLayoutHeight", editorLayout->y);
+    }
+
     auto* scroll = state.createNewChildElement (editorScrollTag);
 
     for (size_t area = 0; area < editorScrollAreas.size(); ++area)
@@ -258,6 +264,10 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 
         if (state->hasAttribute ("editorScale"))
             editorScale = EditorScale::constrain (state->getDoubleAttribute ("editorScale"));
+
+        if (state->hasAttribute ("editorLayoutWidth") && state->hasAttribute ("editorLayoutHeight"))
+            editorLayout = juce::Point<double> (EditorScale::constrainLayout (state->getDoubleAttribute ("editorLayoutWidth")),
+                EditorScale::constrainLayout (state->getDoubleAttribute ("editorLayoutHeight")));
 
         if (auto* controls = state->getChildByName (bayControlsTag))
             for (int i = 0; i < BayLink::numControls; ++i)

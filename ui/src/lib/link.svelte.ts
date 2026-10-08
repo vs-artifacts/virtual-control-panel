@@ -7,7 +7,7 @@ const autoStates = ['off', 'checking', 'oneBlock', 'fellBack'] as const
 const lagStates = ['notMeasured', 'measuring', 'found', 'noReturn', 'noMatch'] as const
 const probeStates = ['notRun', 'running', 'found', 'noReturn', 'noChange'] as const
 export const slotStates = ['active', 'mute', 'bypass', 'off'] as const
-const readings = ['none', 'measured', 'unreadable', 'outOfRange', 'noInput'] as const
+const readings = ['none', 'measured', 'unreadable', 'outOfRange', 'noInput', 'held'] as const
 
 export type AutoState = (typeof autoStates)[number]
 export type SlotState = (typeof slotStates)[number]
@@ -70,6 +70,7 @@ export interface LinkStatus {
     settleMs: number
     heldBack: number
     heldStamped: number
+    heldByTransmitter: number
     dropouts: (typeof dropoutModes)[number]
     crossfadeMs: number
     missing: number
@@ -157,6 +158,7 @@ export function readLink(raw: unknown): LinkStatus | null {
         settleMs: count(fields.settleMs),
         heldBack: count(fields.heldBack),
         heldStamped: count(fields.heldStamped),
+        heldByTransmitter: count(fields.heldByTransmitter),
         dropouts: oneOf(dropoutModes, fields.dropouts) ?? 'silence',
         crossfadeMs: count(fields.crossfadeMs),
         missing: count(fields.missing),

@@ -144,6 +144,7 @@ namespace
             case HS_LINK_LATENCY_UNKNOWN:
             case HS_LINK_LATENCY_UNREADABLE:
             case HS_LINK_LATENCY_NO_INPUT:
+            case HS_LINK_LATENCY_HELD:
                 return samples == 0;
             default:
                 return false;

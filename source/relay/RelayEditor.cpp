@@ -93,7 +93,7 @@ namespace
                 return juce::String ("Marker: the Marker input is switched off") + stamp;
             case State::silent:
                 if (status.markerHeld)
-                    return "Marker: nothing arriving, return held back for up to " + juce::String (juce::roundToInt (1000.0 * RelayLink::markerHoldSeconds)) + " ms" + unreadable;
+                    return "Marker: nothing arriving, return held back for up to " + juce::String (RelayLink::markerHoldSamples) + " samples" + unreadable;
 
                 return "Marker: nothing arriving" + unreadable + stamp;
             case State::unreadable:

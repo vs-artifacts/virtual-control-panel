@@ -410,10 +410,11 @@ void RelayLink::transmit (const juce::AudioBuffer<float>& buffer, int markerInpu
         return;
     }
 
-    if (markerNow == MarkerState::silent && markerInUse && static_cast<double> (markerQuiet) < markerHoldSeconds * ownSampleRate.load (std::memory_order_relaxed))
+    if (markerNow == MarkerState::silent && markerInUse && markerQuiet < markerHoldSamples + ownMaxBlock.load (std::memory_order_relaxed))
     {
         markerQuiet += numSamples;
         markerHeld.store (true, std::memory_order_relaxed);
+        reportLatency (HS_LINK_LATENCY_HELD, 0);
         return;
     }
 

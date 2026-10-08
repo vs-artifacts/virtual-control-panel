@@ -10,6 +10,8 @@ namespace
     constexpr auto resizeRenderingKey = "resizeRendering";
     constexpr auto flipAltResizeKey = "resizeFlipAlt";
     constexpr auto lastEditorScaleKey = "lastEditorScale";
+    constexpr auto lastEditorLayoutWidthKey = "lastEditorLayoutWidth";
+    constexpr auto lastEditorLayoutHeightKey = "lastEditorLayoutHeight";
     constexpr auto flOutputCorrectionKey = "flOutputCorrection";
     constexpr auto roundTripBlocksKey = "bayRoundTrip";
     constexpr auto bypassCrossfadeKey = "bayBypassCrossfadeMs";
@@ -92,6 +94,18 @@ double PluginSettings::getLastEditorScale() const
 void PluginSettings::setLastEditorScale (double scale)
 {
     file.setValue (lastEditorScaleKey, scale);
+}
+
+juce::Point<double> PluginSettings::getLastEditorLayout() const
+{
+    return { EditorScale::constrainLayout (file.getDoubleValue (lastEditorLayoutWidthKey, 1.0)),
+        EditorScale::constrainLayout (file.getDoubleValue (lastEditorLayoutHeightKey, 1.0)) };
+}
+
+void PluginSettings::setLastEditorLayout (juce::Point<double> layout)
+{
+    file.setValue (lastEditorLayoutWidthKey, layout.x);
+    file.setValue (lastEditorLayoutHeightKey, layout.y);
 }
 
 bool PluginSettings::getFlOutputCorrection() const

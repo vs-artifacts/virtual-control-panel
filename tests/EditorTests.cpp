@@ -12,12 +12,14 @@ TEST_CASE ("The editor reopens as its instance left it: tab, Diagnostics, scroll
     // Opening an editor records its size as the one new instances use; this test mustn't change the user's
     juce::SharedResourcePointer<PluginSettings> settings;
     const auto previousScale = settings->getLastEditorScale();
+    const auto previousLayout = settings->getLastEditorLayout();
 
     PluginProcessor processor;
     CHECK (processor.getEditorTab() == 0);
 
     processor.setEditorTab (2);
     processor.setEditorScale (1.5);
+    processor.setEditorLayout ({ 1.25, 2.0 });
     processor.setDiagnosticsOpen (true);
     const auto panelBesideDiagnostics = PluginProcessor::findEditorScrollArea ("tab0.single");
     const auto diagnostics = PluginProcessor::findEditorScrollArea ("diagnostics");
@@ -31,6 +33,7 @@ TEST_CASE ("The editor reopens as its instance left it: tab, Diagnostics, scroll
 
     processor.setEditorTab (1);
     processor.setEditorScale (0.75);
+    processor.setEditorLayout ({ 1.0, 1.0 });
     processor.setDiagnosticsOpen (false);
     processor.setEditorScroll (*panelBesideDiagnostics, 0);
     processor.setEditorScroll (*diagnostics, -5);
@@ -38,17 +41,27 @@ TEST_CASE ("The editor reopens as its instance left it: tab, Diagnostics, scroll
     processor.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
     CHECK (processor.getEditorTab() == 2);
     CHECK_THAT (processor.getEditorScale().value_or (0.0), WithinAbs (1.5, 1e-9));
+    CHECK_THAT (processor.getEditorLayout().value_or (juce::Point<double>()).y, WithinAbs (2.0, 1e-9));
     CHECK (processor.isDiagnosticsOpen());
     CHECK (processor.getEditorScroll (*panelBesideDiagnostics) == 340);
     CHECK (processor.getEditorScroll (*diagnostics) == 75);
 
     {
         std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
-        CHECK (editor->getWidth() == juce::roundToInt (EditorScale::designWidth * 1.5));
-        CHECK (editor->getHeight() == juce::roundToInt (EditorScale::designHeight * 1.5));
+        CHECK (editor->getWidth() == juce::roundToInt (EditorScale::designWidth * 1.25 * 1.5));
+        CHECK (editor->getHeight() == juce::roundToInt (EditorScale::designHeight * 2.0 * 1.5));
         CHECK_FALSE (editor->isResizable());
 
         auto& pluginEditor = dynamic_cast<PluginEditor&> (*editor);
+
+        // Width and height apart keep the scale; the layout stays within its limits
+        pluginEditor.setLayout ({ 0.1, 9.0 });
+        CHECK_THAT (pluginEditor.getScale(), WithinAbs (1.5, 1e-9));
+        CHECK (editor->getWidth() == juce::roundToInt (EditorScale::designWidth * EditorScale::minimumLayout * 1.5));
+        CHECK (editor->getHeight() == juce::roundToInt (EditorScale::designHeight * EditorScale::maximumLayout * 1.5));
+        CHECK_THAT (processor.getEditorLayout().value_or (juce::Point<double>()).x, WithinAbs (EditorScale::minimumLayout, 1e-9));
+
+        pluginEditor.setLayout ({ 1.0, 1.0 });
         pluginEditor.setScale (0.1);
         CHECK (editor->getWidth() == juce::roundToInt (EditorScale::designWidth * EditorScale::minimum));
         CHECK_THAT (processor.getEditorScale().value_or (0.0), WithinAbs (EditorScale::minimum, 1e-9));
@@ -57,6 +70,7 @@ TEST_CASE ("The editor reopens as its instance left it: tab, Diagnostics, scroll
     }
 
     settings->setLastEditorScale (previousScale);
+    settings->setLastEditorLayout (previousLayout);
 }
 
 TEST_CASE ("The editor's scale", "[editor]")
@@ -86,6 +100,7 @@ TEST_CASE ("The editor's scale", "[editor]")
         // Steps stay within the limits
         CHECK_THAT (snap (0.3, 1.0), WithinAbs (0.5, 1e-9));
         CHECK_THAT (snap (9.0, 1.0), WithinAbs (5.0, 1e-9));
+        CHECK_THAT (snap (9.0, 1.0, EditorScale::minimumLayout, EditorScale::maximumLayout), WithinAbs (4.0, 1e-9));
     }
 }
 

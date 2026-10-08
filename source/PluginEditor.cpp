@@ -79,8 +79,20 @@ PluginEditor::PluginEditor (PluginProcessor& p)
     if (!p.isEditorPlaced())
         placement = std::make_unique<EditorPlacement> (*this, settings->getEditorPlacement(), settings->getAttachedPlacement(), [&p] { p.setEditorPlaced(); });
 
-    // Only our own corner handles resize the window (not the host's window frame), always at the design's aspect ratio
-    setScale (p.getEditorScale().value_or (settings->getLastEditorScale()));
+    // Only our own corner handles resize the window (not the host's window frame). A project saved before layouts
+    // existed opens at the design's aspect ratio.
+    if (const auto saved = p.getEditorScale())
+    {
+        scale = EditorScale::constrain (*saved);
+        layout = p.getEditorLayout().value_or (juce::Point<double> (1.0, 1.0));
+    }
+    else
+    {
+        scale = settings->getLastEditorScale();
+        layout = settings->getLastEditorLayout();
+    }
+
+    applySize();
 
     processingCheck.startTimerHz (4);
 }
@@ -96,7 +108,10 @@ WebUi::Handlers PluginEditor::createPageHandlers()
         { "menuChoice", [this] (const juce::var& choice) { hostMenus.choose (choice); } },
         { "menuClosed", [this] (const juce::var&) { hostMenus.close(); } },
         { "resize", [this] (const juce::var& message) { handleResize (message); } },
-        { "resetSize", [this] (const juce::var&) { setScale (1.0); } },
+        { "resetSize", [this] (const juce::var&) {
+             layout = { 1.0, 1.0 };
+             setScale (1.0);
+         } },
         { "setting", [this] (const juce::var& message) { handleSetting (message); } },
         { "tab", [this] (const juce::var& message) { handleTab (message); } },
         { "openPlugin", [this] (const juce::var& message) { handleOpenPlugin (message); } },
@@ -188,6 +203,7 @@ juce::var PluginEditor::describeLink() const
     link->setProperty ("settleMs", status.settleMs);
     link->setProperty ("heldBack", static_cast<juce::int64> (status.heldBack));
     link->setProperty ("heldStamped", static_cast<juce::int64> (status.heldStamped));
+    link->setProperty ("heldByTransmitter", static_cast<juce::int64> (status.heldByTransmitter));
     link->setProperty ("dropouts", BayLink::toName (status.dropouts));
     link->setProperty ("crossfadeMs", status.crossfadeMs);
     link->setProperty ("missing", static_cast<juce::int64> (status.missing));
@@ -450,17 +466,20 @@ void PluginEditor::handleResize (const juce::var& message)
 
 void PluginEditor::beginResize (Corner corner)
 {
-    drag = startDrag (corner, wantsCenterAnchor());
+    drag = startDrag (corner, wantsCenterAnchor(), KeyForwarder::readPhysicalModifiers().shift);
 }
 
-PluginEditor::Drag PluginEditor::startDrag (Corner corner, bool aroundCenter) const
+PluginEditor::Drag PluginEditor::startDrag (Corner corner, bool aroundCenter, bool freeAspect) const
 {
     return { corner,
         juce::Desktop::getInstance().getMainMouseSource().getScreenPosition(),
         getScale(),
+        layout,
         { getWidth(), getHeight() },
         EditorPlacement::getMovableWindowBounds (*this),
         aroundCenter,
+        freeAspect,
+        std::nullopt,
         std::nullopt };
 }
 
@@ -476,19 +495,32 @@ void PluginEditor::continueResize()
 
     const auto modifiers = KeyForwarder::readPhysicalModifiers();
 
-    // Alt pressed or released mid-drag: carry on from where the window is, so it doesn't jump
-    if (const auto aroundCenter = modifiers.alt != settings->getFlipAltResize(); aroundCenter != drag->aroundCenter)
+    // Alt or Shift pressed or released mid-drag: carry on from where the window is, so it doesn't jump
+    const auto aroundCenter = modifiers.alt != settings->getFlipAltResize();
+
+    if (aroundCenter != drag->aroundCenter || modifiers.shift != drag->freeAspect)
     {
         const auto virtualStep = drag->virtualStep;
-        drag = startDrag (drag->corner, aroundCenter);
+        const auto virtualLayoutStep = drag->virtualLayoutStep;
+        drag = startDrag (drag->corner, aroundCenter, modifiers.shift);
         drag->virtualStep = virtualStep;
+        drag->virtualLayoutStep = virtualLayoutStep;
     }
 
     // Ctrl steps by 25%, and the size Ctrl went down at stays a step until Ctrl is released
     if (!modifiers.ctrl)
+    {
         drag->virtualStep.reset();
-    else if (!drag->virtualStep.has_value())
+        drag->virtualLayoutStep.reset();
+    }
+    else if (drag->freeAspect && !drag->virtualLayoutStep.has_value())
+    {
+        drag->virtualLayoutStep = layout;
+    }
+    else if (!drag->freeAspect && !drag->virtualStep.has_value())
+    {
         drag->virtualStep = getScale();
+    }
 
     const auto moved = (juce::Desktop::getInstance().getMainMouseSource().getScreenPosition() - drag->startMouse) / getApproximateScaleFactorForComponent (this);
     const auto dx = static_cast<double> (isLeft (drag->corner) ? -moved.x : moved.x);
@@ -496,23 +528,38 @@ void PluginEditor::continueResize()
 
     // Growing around its center, the window grows on both sides, so twice as fast keeps the corner under the pointer.
     // Only windows we can move (floating ones, and FL's attached ones) can grow that way; others grow down and to the right.
-    const auto aroundCenter = drag->aroundCenter && drag->startWindow.has_value();
-    const auto speed = aroundCenter ? 2.0 : 1.0;
+    const auto growsAroundCenter = drag->aroundCenter && drag->startWindow.has_value();
+    const auto speed = growsAroundCenter ? 2.0 : 1.0;
 
     using namespace EditorScale;
-    const auto widthScale = drag->startScale + speed * dx / designWidth;
-    const auto heightScale = drag->startScale + speed * dy / designHeight;
 
-    // Placeholder: Shift will set width and height apart (each stepped with Ctrl) once the panel's layout can follow
-    auto scale = (widthScale + heightScale) / 2.0;
+    if (drag->freeAspect)
+    {
+        auto width = drag->startLayout.x + speed * dx / (designWidth * drag->startScale);
+        auto height = drag->startLayout.y + speed * dy / (designHeight * drag->startScale);
 
-    if (drag->virtualStep.has_value())
-        scale = snap (scale, *drag->virtualStep);
+        if (drag->virtualLayoutStep.has_value())
+        {
+            width = snap (width, drag->virtualLayoutStep->x, minimumLayout, maximumLayout);
+            height = snap (height, drag->virtualLayoutStep->y, minimumLayout, maximumLayout);
+        }
 
-    setScale (scale);
+        setLayout ({ width, height });
+    }
+    else
+    {
+        const auto widthScale = drag->startScale + speed * dx / (designWidth * drag->startLayout.x);
+        const auto heightScale = drag->startScale + speed * dy / (designHeight * drag->startLayout.y);
+        auto newScale = (widthScale + heightScale) / 2.0;
+
+        if (drag->virtualStep.has_value())
+            newScale = snap (newScale, *drag->virtualStep);
+
+        setScale (newScale);
+    }
 
     // Hosts keep a window's top-left corner when it grows, so the window moves to keep the anchor in place
-    if (!drag->startWindow.has_value() || !(aroundCenter || isLeft (drag->corner) || isTop (drag->corner)))
+    if (!drag->startWindow.has_value() || !(growsAroundCenter || isLeft (drag->corner) || isTop (drag->corner)))
         return;
 
     const auto& start = *drag->startWindow;
@@ -532,30 +579,38 @@ void PluginEditor::endResize()
     drag.reset();
 }
 
-void PluginEditor::setScale (double scale)
+void PluginEditor::setScale (double newScale)
 {
-    const auto constrained = constrainScale (scale);
-    setSize (juce::roundToInt (EditorScale::designWidth * constrained), juce::roundToInt (EditorScale::designHeight * constrained));
+    scale = EditorScale::constrain (newScale);
+    applySize();
 }
 
-double PluginEditor::getScale() const
+void PluginEditor::setLayout (juce::Point<double> newLayout)
 {
-    return getWidth() / static_cast<double> (EditorScale::designWidth);
+    layout = { EditorScale::constrainLayout (newLayout.x), EditorScale::constrainLayout (newLayout.y) };
+    applySize();
 }
 
-double PluginEditor::constrainScale (double scale) const
+void PluginEditor::applySize()
 {
-    return EditorScale::constrain (scale);
+    const auto width = juce::roundToInt (EditorScale::designWidth * layout.x * scale);
+    const auto height = juce::roundToInt (EditorScale::designHeight * layout.y * scale);
+
+    // The same size with another scale still has to reach the page and be saved
+    if (width == getWidth() && height == getHeight())
+        resized();
+    else
+        setSize (width, height);
 }
 
 double PluginEditor::getPhysicalPixelsPerPixel() const
 {
-    auto scale = static_cast<double> (getApproximateScaleFactorForComponent (this));
+    auto factor = static_cast<double> (getApproximateScaleFactorForComponent (this));
 
     if (auto* peer = getPeer())
-        scale *= peer->getPlatformScaleFactor();
+        factor *= peer->getPlatformScaleFactor();
 
-    return scale;
+    return factor;
 }
 
 void PluginEditor::paint (juce::Graphics& g)
@@ -576,5 +631,7 @@ void PluginEditor::resized()
     }
 
     pluginProcessor.setEditorScale (getScale());
+    pluginProcessor.setEditorLayout (layout);
     settings->setLastEditorScale (getScale());
+    settings->setLastEditorLayout (layout);
 }

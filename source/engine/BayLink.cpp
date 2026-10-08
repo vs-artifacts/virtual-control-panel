@@ -438,8 +438,6 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
         delayRun += numSamples;
     }
 
-    const auto delaySettled = static_cast<double> (delayRun) >= autoSettleSeconds * sampleRate;
-
     if (const auto minimum = minimumLinkPosition.load (std::memory_order_relaxed); start + linkOffset < minimum)
         linkOffset = minimum - start;
 
@@ -450,16 +448,45 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
     runTest (linkStart, numSamples, left, right);
     const auto testing = testStep.load (std::memory_order_relaxed) == testRunning;
 
-    // A bay in Bypass or Off gets silence (a test signal still goes out)
-    if (bayGetsSilence && !testing)
+    // Bypass and Off fade the bay's send out (once the output has crossfaded away from the bay's sound, so that never
+    // dips), and turn the tail cut on once it's silent. Leaving them, the send stays silent for the tail cut release
+    // (while the bay's plugin comes back), then fades in. A switch would click into the bay.
+    if (sentSilence && !bayGetsSilence)
+        sendSilentUntil = linkStart + static_cast<juce::int64> (tailCutReleaseMs.load (std::memory_order_relaxed) * sampleRate / 1000.0);
+
+    if (!sentSilence && bayGetsSilence)
+        sendFullUntil = linkStart + static_cast<juce::int64> (crossfadeMs.load (std::memory_order_relaxed) * sampleRate / 1000.0);
+
+    sentSilence = bayGetsSilence;
+    const auto tailCut = bayGetsSilence && sendGain <= 0.0f;
+
+    // A test signal still goes out
+    if (!testing)
     {
-        juce::FloatVectorOperations::clear (left, numSamples);
-        juce::FloatVectorOperations::clear (right, numSamples);
+        const auto step = crossfadeStep();
+        auto faded = false;
 
-        if (linkStart != silentEnd)
-            silentStart = linkStart;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const auto at = linkStart + i;
+            const auto target = (bayGetsSilence && at >= sendFullUntil) || at < sendSilentUntil ? 0.0f : 1.0f;
+            sendGain = target > sendGain ? std::min (target, sendGain + step) : std::max (target, sendGain - step);
 
-        silentEnd = linkStart + numSamples;
+            if (sendGain < 1.0f)
+            {
+                left[i] *= sendGain;
+                right[i] *= sendGain;
+                faded = true;
+            }
+        }
+
+        if (faded)
+        {
+            if (linkStart != silentEnd)
+                silentStart = linkStart;
+
+            silentEnd = linkStart + numSamples;
+        }
     }
 
     const auto* linkHub = hub.load (std::memory_order_acquire);
@@ -470,7 +497,7 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
     {
         const float* channels[] { left, right };
         linkHub->write (send, linkStart, channels, 2, numSamples);
-        sendValues (*linkHub, send, linkStart, bayGetsSilence);
+        sendValues (*linkHub, send, linkStart, tailCut);
     }
 
     // The receiver's misses since the last block: each leaves a gap in the return, which may still be far off
@@ -524,6 +551,10 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
                 lower (headroomLowest, headroom);
             }
         }
+        else
+        {
+            transmitterHolding = false;
+        }
     }
 
     flowingRun = flowing ? flowingRun + numSamples : 0;
@@ -537,14 +568,15 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
     // A new bay latency waiting to settle: the return is held back meanwhile
     const auto settling = candidate >= 0 && candidate != latencyInUse;
 
-    // Returned audio that isn't the bay's sound at those positions: a stretch it was sent as silence (and, after it, the
-    // tail cut release, while the bay's plugin may still be cleared), or audio stamped by the receiver's position (before
-    // the marker arrived) once a bay latency is in use
-    const auto release = static_cast<juce::int64> (tailCutReleaseMs.load (std::memory_order_relaxed) * sampleRate / 1000.0);
+    // Returned audio that isn't the bay's sound at those positions: a stretch it was sent faded or silent, or audio
+    // stamped by the receiver's position (before the marker arrived) once a bay latency is in use
     const auto hadSilence = silentEnd > silentStart;
-    const auto inSilentStretch = hadSilence && returnStart < silentEnd + release && returnStart + numSamples > silentStart;
+    const auto inSilentStretch = hadSilence && returnStart < silentEnd && returnStart + numSamples > silentStart;
     const auto stampedByReceiver = latencyInUse > 0 && returnStart < receiverStampedEnd;
     const auto notTheBay = inSilentStretch || stampedByReceiver;
+
+    // A change in the transmitter's reading (noted above) restarts the window, as any change of delay does
+    const auto delaySettled = static_cast<double> (delayRun) >= autoSettleSeconds * sampleRate;
 
     if (settling)
         heldBack.fetch_add (1, std::memory_order_relaxed);
@@ -569,9 +601,14 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
     }
     else
     {
-        // A return that's flowing but late or broken; not while a new one fills the round trip, nor while a new bay
-        // latency settles, nor while the relays line up again after a change of delay
-        if (flowing && warmedUp && !settling && delaySettled)
+        // Held back by the transmitter (marker unreadable, out of range, or paused): not a miss. Otherwise a return
+        // that's flowing but late or broken; not while a new one fills the round trip, nor while a new bay latency
+        // settles, nor while the relays line up again after a change of delay.
+        if (transmitterHolding)
+        {
+            heldByTransmitter.fetch_add (1, std::memory_order_relaxed);
+        }
+        else if (flowing && warmedUp && !settling && delaySettled)
         {
             missing.fetch_add (1, std::memory_order_relaxed);
             (result == HS_LINK_NOT_YET ? missingLate : result == HS_LINK_GONE ? missingGone
@@ -583,7 +620,7 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
     // The automatic round trip's check, once the return flows and the relays have lined up at the round trip being
     // checked. A miss on either side counts.
     if (autoCheckActive.load (std::memory_order_relaxed) && roundTripSamples == autoCheckRoundTrip.load (std::memory_order_relaxed)
-        && flowing && warmedUp && !settling && delaySettled)
+        && flowing && warmedUp && !settling && delaySettled && !transmitterHolding)
     {
         if (returned && !receiverMissed)
         {
@@ -605,8 +642,8 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
     const auto delayNow = dropped ? 0 : currentLinkDelay;
     const auto playable = returned && !notTheBay && !settling;
 
-    // The bay's sound is back once it plays positions sent after its latest silent stretch (and the release)
-    if (state == SlotState::active && playable && (!hadSilence || returnStart >= silentEnd + release))
+    // The bay's sound is back once it plays positions sent after its latest faded or silent stretch
+    if (state == SlotState::active && playable && (!hadSilence || returnStart >= silentEnd))
         awaiting = false;
 
     awaitingBay.store (awaiting, std::memory_order_relaxed);
@@ -706,6 +743,9 @@ void BayLink::noteLatencyReport (const hs_link_info& info, int numSamples)
         case HS_LINK_LATENCY_OUT_OF_RANGE:
             state = Reading::outOfRange;
             break;
+        case HS_LINK_LATENCY_HELD:
+            state = Reading::held;
+            break;
         default:
             break;
     }
@@ -714,8 +754,15 @@ void BayLink::noteLatencyReport (const hs_link_info& info, int numSamples)
     if (state == Reading::none || state == Reading::noInput)
         receiverStampedEnd = std::max (receiverStampedEnd, info.readable_end);
 
+    const auto samples = state == Reading::measured || state == Reading::outOfRange ? info.latency : 0;
+
+    // FL rearranging its latency compensation shows here first: the relays line up again from it
+    if (state != reading.load (std::memory_order_relaxed) || samples != readingSamples.load (std::memory_order_relaxed))
+        delayRun = 0;
+
+    transmitterHolding = state == Reading::unreadable || state == Reading::outOfRange || state == Reading::held;
     reading.store (state, std::memory_order_relaxed);
-    readingSamples.store (state == Reading::measured || state == Reading::outOfRange ? info.latency : 0, std::memory_order_relaxed);
+    readingSamples.store (samples, std::memory_order_relaxed);
 
     if (!value.has_value())
     {
@@ -1075,6 +1122,7 @@ void BayLink::resetCounters()
     valueSets.store (0);
     heldBack.store (0);
     heldStamped.store (0);
+    heldByTransmitter.store (0);
 
     for (auto* value : { &headroomNow, &headroomLowest, &blockMin, &blockMax, &readingLowest, &readingHighest })
         value->store (unset);
@@ -1130,6 +1178,7 @@ BayLink::Status BayLink::getStatus()
     status.settleMs = settleMs.load();
     status.heldBack = heldBack.load();
     status.heldStamped = heldStamped.load();
+    status.heldByTransmitter = heldByTransmitter.load();
 
     if (const auto packed = latencyCandidate.load(); sampleRate > 0.0)
     {
@@ -1219,6 +1268,7 @@ void BayLink::updateEventLog()
     logCount (receiverMisses, loggedReceiverMisses, "blocks missed by the receiver");
     logCount (heldBack, loggedHeldBack, "blocks held back (a new bay latency settling)");
     logCount (heldStamped, loggedHeldStamped, "blocks held back (stamped by the receiver's position)");
+    logCount (heldByTransmitter, loggedHeldByTransmitter, "blocks held back by the transmitter (marker unreadable, out of range or paused)");
 
     if (const auto now = reading.load(); loggedReading != now)
     {
@@ -1462,6 +1512,8 @@ const char* BayLink::toName (Reading value) noexcept
             return "outOfRange";
         case Reading::noInput:
             return "noInput";
+        case Reading::held:
+            return "held";
         case Reading::none:
             break;
     }

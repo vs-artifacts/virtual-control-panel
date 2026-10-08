@@ -131,9 +131,10 @@ public:
     // The first sample's position modulo 2^markerBits, if every sample is a marker and they run on without a gap
     static std::optional<juce::int64> readMarker (const float* left, const float* right, int numSamples) noexcept;
 
-    // A marker that goes silent after it was read: this long, its blocks aren't returned (a receiver's dropout arriving
-    // through the bay plugin's latency), then the transmitter stamps by the receiver's position again
-    static constexpr double markerHoldSeconds = 0.1;
+    // A marker that goes silent after it was read: this long (plus a block), its blocks aren't returned, then the
+    // transmitter stamps by the receiver's position again. As long as the largest bay latency: when a bay plugin's latency
+    // grows, FL's compensation plays silence on the marker's wire for up to the new latency.
+    static constexpr int markerHoldSamples = HS_LINK_MAX_LATENCY;
 
 private:
     void unlink();

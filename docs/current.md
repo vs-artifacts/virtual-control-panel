@@ -2,34 +2,42 @@
 
 The live handover: where things stand, what's next, and exactly what to read for it. Rewritten at the end of every session. Lasting decisions belong in `docs/decisions.md`; this file only points to them.
 
-**Last updated:** 2026-10-07, second session. "The next build" is built, not yet committed (last commit: `bb9f913`, the handover for it).
+**Last updated:** 2026-10-07, third session. "The next build" is committed and pushed (`b3ae956`) and FL-checked; the fixes after that check are built, not yet committed.
 
 ## Where things stand
 - **Slice 1b.4, the rest (planned 2026-10-06):** C (a bay plugin's own latency via the position marker), then A (regression fixes), then B (real blocks). The settings defaults file is postponed. Plan and reasons: `decisions.md`, "The rest of 1b.4: plan, and the position marker".
-- **C1 and C2 are built and FL-checked (2026-10-07).** Results: `decisions.md`, "FL check of C2".
-- **"The next build" is built (2026-10-07), needs the FL check:** event log and relay counters for the latency-change misses, the window after any change of delay, silence-only dropouts with a reversed-copy fade, four slot states (Active, Mute, Bypass, Off), the relay's Tail cut output and the tail cut release setting. What was confirmed and how it works: `decisions.md`, "The next build: confirmed and as built".
-- **Still failing until checked: missing blocks and Automatic falling back to 2 on latency changes.** This build ignores 0.25 s after any change of delay and logs every event, so the FL check should show whether that was all.
-- **Automated tests pass in Debug and Release** (72 test cases), warning-free.
+- **C1, C2 and "the next build" are FL-checked (2026-10-07).** Latency changes sound fine now. Results: `decisions.md`, "FL check of the next build".
+- **The fixes after that check are built (2026-10-07), need a short FL recheck:** the marker hold up to the latency cap, a "held" reading, held-back blocks no longer counted as missing (Automatic should stay at 1 block through latency changes); the bay's send fades for Bypass and Off, with the tail cut release now keeping the send silent while the plugin comes back (the hidden pop); crossfade up to 500 ms; Shift+drag for width and height apart; grouped Settings. How each works: `decisions.md`, "Fixes after that check".
+- **Automated tests pass in Debug and Release** (74 test cases), warning-free.
 
 ## Next
-1. **The user's FL check of this build** (checklist below). Then record the results in `decisions.md` under the build's section.
-2. **Then A: the regression fixes,** then **B: real blocks** (both specified in "Plan (user, 2026-10-06)"), shaped by what the event log shows.
+1. **The user's FL recheck** (checklist below), then record it in `decisions.md`.
+2. **Then the rest of A** (`decisions.md`, "Plan (user, 2026-10-06)": headroom from arriving blocks; Automatic counting receiver misses without a flowing return; matching miss counts; the "return silent while the sent audio isn't" line), then **B: real blocks**. The user wants to move on soon: propose trimming A to what the recheck still shows.
 3. **Then the settings defaults file** (postponed), then **slice 1b.5, plugin swap.**
 
-## FL checklist for this build
+## FL recheck for the fixes
+Fresh blank project, the same rig as before (Patcher: panel, receiver, linear-phase EQ 2 or a reverb, transmitter, marker wire; Tail cut through a Peak Controller to what clears the bay plugin). Diagnostics open. Round trip Automatic.
+
+1. **Latency changes:** linear phase on at the lowest, off, on at the highest, changed between 3,264 and 6,336 while on. **Expect:** Automatic stays at 1 block ("1 block works"); Missing blocks 0; Held back counts "by the transmitter"; the transmitter's fallbacks stay 0; the log shows "Marker reading: held" and one "Bay latency: now ..." per change (no detour through 0).
+2. **Marker wire cut:** held back for about 0.7 s (reading "held"), then stamped by the receiver (1 fallback); Automatic doesn't fall back. Relink: the latency comes back.
+3. **The hidden pop:** a reverb in the bay, audio playing. Bypass and Off, then back to Active, several times. **Expect:** no new tail from a pop; the reverb's tail is cut on entering; leaving, the bay's sound crossfades in a little later than before (the release plus one crossfade length). **Tail cut release** has a new meaning (silence sent while the plugin comes back): try 0, 10, 50 and 150 ms and note the smallest with no artefacts.
+4. **Crossfade above 50 ms** (e.g. 200, 500): Settings takes it; Bypass, Off and dropouts fade that long.
+5. **Shift+drag** a corner grip: width and height change apart while the page keeps its scale and shows more or less; press and release Shift mid-drag (no jump); Ctrl with Shift steps each axis by 25% of the design size; plain drag afterwards scales the whole page at the new aspect; Reset size returns to 1,120 × 600. Save and reopen: the size comes back.
+6. **Settings tab:** lines around the window group (centering, resizing, Size and Reset size) and the bay latency group.
+
+## Previous FL checklist (the next build; kept for regression runs)
 Before starting: close FL during the build (done), then the junctions pick up the Debug builds. Fresh blank project; 48 kHz, ASIO4ALL, buffer 512 as before. Inside Patcher (smart disable off): panel, receiver, an FL plugin, transmitter, with the marker wire (receiver's Marker output, target 1, into the transmitter's Marker input). Open Diagnostics; the new **Events** list is at the bottom of the Bay link section.
 
 **Record for every stage:** the Events lines (a screenshot is enough), Missing blocks (late, gone), Receiver missed, Held back; each relay window's new "Prepared by the host" line (and fallbacks on the transmitter); anything audible.
 
 1. **Latency changes (the old failure).** Bay plugin: linear-phase EQ 2. Round trip Automatic. Play, then turn linear phase on at its lowest, off, on at higher settings, as in the C2 check. **Expect:** no audible gap or click. **Read:** do missing blocks still appear, and if so, which cause and when (right after "Bay latency: now ...", or "Prepared" lines, i.e. FL re-preparing the panel)? Does Automatic still fall back ("Automatic: 1 block missed (panel N, receiver M)")? Do the relays' prepare counts rise on a latency change? Does the transmitter count fallbacks?
-2. **Dropouts are silence, faded.** Remove the transmitter while playing. **Expect:** the sound fades out quickly (a short reversed "ghost", about 30 ms) to silence, no click; Missing blocks don't count it (the status shows the transmitter gone). Add it back: the bay's sound fades in. Also try cutting the marker wire (held back 0.1 s, then stamped by the receiver).
+2. **Dropouts are silence, faded.** Remove the transmitter while playing. **Expect:** the sound fades out quickly (a short reversed "ghost", one crossfade length) to silence, no click; Missing blocks don't count it (the status shows the transmitter gone). Add it back: the bay's sound fades in. Also try cutting the marker wire (held back about 0.7 s, then stamped by the receiver).
 3. **A new panel plays before the bay returns.** New panel without relays: its sound plays, and the Slot line says (in orange) it's waiting for the bay's sound. Add the relays: it crossfades into the bay's sound, and the orange line goes.
 4. **Mute:** the panel's sound plays at the same delay; a reverb in the bay keeps its tail (bay fed); unmute: crossfade straight into the bay's sound, no gap.
-5. **Bypass:** the panel's sound plays at the same delay; the receiver's **Tail cut** output is 1 (the relay window's controls line says "tail cut 1"). Link Tail cut (a new mono output after Marker; assign it in Connections) through a Peak Controller to whatever clears the bay plugin (its bypass, a clear button, decay). Leave Bypass: the panel's sound plays on until the bay's new sound arrives, then crossfades; no silent gap, no old tail. Try **Bay tail cut release** (Settings) at 0, then e.g. 20 and 50 ms: which value hides the Peak Controller's late reaction?
+5. **Bypass:** the panel's sound plays at the same delay; the receiver's **Tail cut** output is 1 (the relay window's controls line says "tail cut 1"). Link Tail cut (a mono output after Marker; assign it in Connections) through a Peak Controller to whatever clears the bay plugin (its bypass, a clear button, decay). Leave Bypass: the panel's sound plays on until the bay's new sound arrives, then crossfades; no silent gap, no old tail.
 6. **Off:** the panel's sound at once (FL re-shifts the project, as in C2), bay silent, tail cut 1. Back to Active: as in 5, plus one blended jump of delay.
 7. **Leaving a state with the bay gone:** Bypass, remove the transmitter, back to Active: the panel's sound carries on, flagged orange; add the transmitter: crossfade into the bay's sound.
 8. **Save and reopen** in each state: the state comes back (an older project's Bypass opens as Mute). The relay keeps its Tail cut value.
-9. **Settings tab:** "Bay dropouts" and "While a bay is bypassed with its latency dropped, send it" are gone; "Bay tail cut release" is new.
 
 ## Bay link FL checklist (for regression runs when bays change)
 Before starting: the panel and relay junctions in the system VST3 folder point at the Debug builds, so FL picks up this build. If FL was open during the build, restart it. Note FL's sample rate and buffer length (Options > Audio settings). Terms changed after these were written: "Bay return" is now the slot's Active state, "Direct" (later "Bypass, synced") is now Mute, "Bypass, drop latency" is now Off, and dropouts are always silence (faded); "Missing bay return blocks" is Missing blocks. With no bay sound yet (or after leaving a state, until it's back), Active plays the panel's sound, flagged orange. Since C2, wire the marker (receiver's Marker output into the transmitter's Marker input) unless a stage says otherwise.
@@ -99,15 +107,15 @@ With the marker wired (C2), Diagnostics shows the plugin's latency as Bay latenc
 
 ## Current test builds
 - **Panel:**
-  - Window 1,120 × 600 at 100%; each tab in two columns (one beside Diagnostics).
+  - Window 1,120 × 600 at 100% by default; Shift+drag sets width and height apart (the page keeps its scale and shows more or less); each tab in two columns (one beside Diagnostics).
   - Panel tab: 17 sliders (the EQ's Low as Param 1; Bay 1 Control 1 to 16 as Param 2 to 17), the bridge line and "Audio: running". Double-click a slider to reset it to its default.
   - Plugins tab: as before, plus a Mute checkbox on each generator row (30 ms fade; saved with the project).
   - Diagnostics (toggle at the right end of the tab row):
     - The "Bay link (test build)" section: link, relays, round trip and how Automatic chose it; **Bay latency** (in use, the marker's reading, settling, readings since reset), **Output delay** (and what the host was told); **Slot**: Mute, Bypass and Off toggle buttons (pressing the selected one again: Active), with a line saying what plays (orange while Active waits for the bay's sound); missing blocks (late, gone), receiver missed, held back (settling; stamped by the receiver's position), value sets; headroom, block sizes (since the last reset), return vs sent; Lag > Measure, Control timing > Probe, Reset counters; **Events** (newest first, 30 lines).
     - "Keys forwarded to the host": the last 12 keys, newest first (mouse held or not, capture windows, which window took the key).
     - "Windows around the editor": the window chain from the editor's own window to the top.
-  - Settings tab: "Center a separate window when it first opens on" (as before), "Center a window attached inside FL Studio when it first opens" (Off, FL's workspace (default), the monitor where FL is open), "Resizing" (Smooth, Sharp; "Window resize: flip drag and alt+drag"), "Double-click on a control" (ms between the clicks, 1 to 2,000, default 500; "sets a value instead of resetting", a no-op placeholder), "Bay round trip" (Automatic, 1, 2, 3 blocks), "Bay bypass crossfade" (a number field, 0 to 50 ms, default 30; also blends jumps of the bay's delay and is the dropout fade's length), "Bay latency settle time" (0 to 1,000 ms, default 50), **"Bay tail cut release"** (0 to 1,000 ms, default 0).
-  - Corner grips: drag (opposite corner), Alt+drag (center; separate windows and, in FL, attached ones), Ctrl adds 25% steps; Shift does nothing yet. Smooth mode is a layer image while resizing, redrawn sharp 250 ms after it stops.
+  - Settings tab: "Center a separate window when it first opens on" (as before), "Center a window attached inside FL Studio when it first opens" (Off, FL's workspace (default), the monitor where FL is open), "Resizing" (Smooth, Sharp; "Window resize: flip drag and alt+drag"), "Double-click on a control" (ms between the clicks, 1 to 2,000, default 500; "sets a value instead of resetting", a no-op placeholder), "Bay round trip" (Automatic, 1, 2, 3 blocks), "Bay bypass crossfade" (a number field, 0 to 500 ms, default 30; also blends jumps of the bay's delay, fades the bay's send for Bypass and Off, and is the dropout fade's length), "Bay latency settle time" (0 to 1,000 ms, default 50), **"Bay tail cut release"** (0 to 1,000 ms, default 0).
+  - Corner grips: drag (opposite corner), Alt+drag (center; separate windows and, in FL, attached ones), Ctrl adds 25% steps, Shift sets width and height apart (Ctrl then steps each axis); Alt and Shift can change mid-drag. Smooth mode is a layer image while resizing, redrawn sharp 250 ms after it stops. Settings has lines around the window group (with Size and Reset size) and the bay latency group.
   - Saved with the instance and the project: the tab, whether Diagnostics is open, every scroll position, the size, the slot state, control values, mutes.
   - New instances start Active, playing their own sound until the bay's sound first arrives (flagged).
   - Unchanged: the fixed test routing, the FL gain correction setting. The panel always reports its delay as latency (round trip + bay latency, or nothing when Off), even with no relays.
@@ -135,7 +143,7 @@ With the marker wired (C2), Diagnostics shows the plugin's latency as Bay latenc
 - Fixed buffer sizes in the Fruity Wrapper: a measured test after the position marker.
 - Attached windows, first-open centering and the keys route: done (FL-checked 2026-10-05).
 - Double-click "sets a value": a popup with a text entry (and possibly more); the setting exists as a placeholder.
-- Shift+drag: free aspect ratio (each axis stepped with Ctrl), once the panel's layout can follow.
+- ~~Shift+drag: free aspect ratio~~ (built 2026-10-07).
 - **The settings defaults file (JSON): postponed** (user, 2026-10-06) until after 1b.4. Open question for its proposal: edited in the source only, or also a file beside the settings file (then it's untrusted input, validated like the settings file).
 - Optional: a panel-side "check 1 block again" button for Automatic.
 - Choosing and naming bay controls in the UI.
@@ -144,7 +152,7 @@ With the marker wired (C2), Diagnostics shows the plugin's latency as Bay latenc
 
 ## Read for this step
 In `docs/decisions.md`, by heading (all under "The rest of 1b.4: plan, and the position marker"):
-- **"C2 as built"**, **"FL check of C2"**, **"The next build (user, 2026-10-07)"**, **"The next build: confirmed and as built"** and **"Future refinement: dry dropouts"**.
+- **"C2 as built"**, **"FL check of C2"**, **"The next build (user, 2026-10-07)"**, **"The next build: confirmed and as built"**, **"FL check of the next build"**, **"Fixes after that check"** and **"Future refinement: dry dropouts"**.
 - Outside it: **"Bay link: the audio round-trip test"** > **"Timing"** (the receiver's lead, stamping), and **"Platforms and toolchain"** (macOS is required).
 
 For A and B, also **"Plan (user, 2026-10-06)"**. The code: chiefly `source/engine/BayLink.h/.cpp`, `source/relay/RelayLink.*`, `tests/LinkTests.cpp`.

@@ -20,7 +20,7 @@ export const renderings = ['smooth', 'sharp'] as const
 const roundTrips = [0, 1, 2, 3] as const
 
 // The bay bypass crossfade: whole milliseconds, 0 is off
-export const crossfadeRange = { min: 0, max: 50 } as const
+export const crossfadeRange = { min: 0, max: 500 } as const
 
 function isCrossfadeMs(value: unknown): value is number {
     return typeof value === 'number' && Number.isInteger(value) && value >= crossfadeRange.min && value <= crossfadeRange.max

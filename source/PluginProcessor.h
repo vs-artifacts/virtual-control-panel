@@ -78,6 +78,8 @@ public:
     void setEditorTab (int tab) noexcept { editorTab = tab; }
     std::optional<double> getEditorScale() const noexcept { return editorScale; }
     void setEditorScale (double scale) noexcept { editorScale = scale; }
+    std::optional<juce::Point<double>> getEditorLayout() const noexcept { return editorLayout; }
+    void setEditorLayout (juce::Point<double> layout) noexcept { editorLayout = layout; }
 
     // Whether the editor shows the Diagnostics panel beside the tabs; saved with the instance
     bool isDiagnosticsOpen() const noexcept { return diagnosticsOpen; }
@@ -113,6 +115,7 @@ private:
     bool editorPlaced = false;
     int editorTab = 0;
     std::optional<double> editorScale;
+    std::optional<juce::Point<double>> editorLayout;
     bool diagnosticsOpen = false;
     std::array<int, editorScrollAreas.size()> editorScroll {};
 

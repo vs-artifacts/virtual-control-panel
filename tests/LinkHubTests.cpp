@@ -142,6 +142,7 @@ TEST_CASE ("A writer reports its latency through the hub", "[link]")
         CHECK (hub.set_latency (writer, HS_LINK_LATENCY_OUT_OF_RANGE, HS_LINK_MAX_LATENCY + 1) == HS_LINK_OK);
         CHECK (hub.set_latency (writer, HS_LINK_LATENCY_UNREADABLE, 0) == HS_LINK_OK);
         CHECK (hub.set_latency (writer, HS_LINK_LATENCY_NO_INPUT, 0) == HS_LINK_OK);
+        CHECK (hub.set_latency (writer, HS_LINK_LATENCY_HELD, 0) == HS_LINK_OK);
         CHECK (hub.set_latency (writer, HS_LINK_LATENCY_UNKNOWN, 0) == HS_LINK_OK);
         const auto reports = infoFor (reader).latency_reports;
 
@@ -153,7 +154,8 @@ TEST_CASE ("A writer reports its latency through the hub", "[link]")
             { HS_LINK_LATENCY_UNKNOWN, 1 },
             { HS_LINK_LATENCY_UNREADABLE, 3 },
             { HS_LINK_LATENCY_NO_INPUT, -1 },
-            { 5, 0 },
+            { HS_LINK_LATENCY_HELD, 7 },
+            { 6, 0 },
             { -1, 0 },
         };
 

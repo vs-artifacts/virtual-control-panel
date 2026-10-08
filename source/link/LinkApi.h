@@ -68,6 +68,7 @@ enum {
     HS_LINK_LATENCY_UNREADABLE = 2, // something arrives that can't be read; samples 0
     HS_LINK_LATENCY_OUT_OF_RANGE = 3, // samples: the reading, below 0 or above HS_LINK_MAX_LATENCY
     HS_LINK_LATENCY_NO_INPUT = 4, // the writer can't measure (e.g. its Marker input is off); samples 0
+    HS_LINK_LATENCY_HELD = 5, // the measurement has paused (e.g. the marker went silent) and the writer holds back; samples 0
 };
 
 typedef struct hs_link_info

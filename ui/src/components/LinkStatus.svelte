@@ -65,6 +65,8 @@
                 return `${status.readingSamples} samples, out of range (0 to ${maxBayLatency}: the return is held back)`;
             case "noInput":
                 return "the transmitter's Marker input is off (counts as 0)";
+            case "held":
+                return "paused (FL refilling its compensation, or the wire cut): the return is held back for up to 32768 samples";
         }
     }
 
@@ -266,7 +268,8 @@
             <dt>Held back</dt>
             <dd id="link-held-back">
                 {status.heldBack} blocks while a new bay latency settled; {status.heldStamped}
-                stamped by the receiver's position
+                stamped by the receiver's position; {status.heldByTransmitter} by
+                the transmitter (marker unreadable, out of range or paused)
             </dd>
 
             <dt>Controls</dt>
