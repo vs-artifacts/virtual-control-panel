@@ -656,6 +656,47 @@ Parked by the user (2026-10-07) to get to functional machinery first; to come ba
   - `bay1RetryOneBlock` to `bay4RetryOneBlock`, "Bay N: retry 1-block round trip": one per bay, since each bay's relays can run in their own order. Planned for 4 bays (user); bays 2 to 4 do nothing until there are more bays (the next slice handles that, user).
 - **Tests (83 test cases, Debug and Release):** shrinking while stopped (never while playing or with the transport unreported; Always; Never; only when quiet, not while the panel plays); a new lowest tempo shrinks while playing; a recheck shrinks and Reset counters doesn't; Retry 1 block from a fallback settles on 1 block, and a fixed round trip ignores it; the jump crossfade (0: the new timing at once; 100 ms: still blending at 50) and Off on the bypass crossfade; the command parameters' IDs, names, one request per switch on, and the timer taking them; the settings file.
 
+### One fade per cause, one check per stop (user, 2026-10-08; built the same day, needs the FL check)
+Committed before this: `2ea1b11` (B and its additions). The user's tuning in FL had the old two crossfades doing different jobs at different lengths (tempo changes 6 ms, linear phase about 20, Off about 25, Bypass about 12). User: ironing out every pop will likely take separate parts per situation, since there are non-linear interactions in each; this is the start.
+- **"Bay bypass crossfade" and "Bay delay change crossfade" are replaced by six fades** (`BayLink::Fade`), a "Bay fades" section in Settings. Each fade picks its length when it starts and keeps it to the end, so overlapping causes never mix lengths.
+
+  | Fade | Covers | Default | Settings key |
+  |---|---|---|---|
+  | Round trip change | the timing jump when the round trip changes (tempo, Automatic, Settings) | 6 ms (0–100) | `bayJumpCrossfadeMs` (kept from the delay change crossfade) |
+  | Bay latency change | the fade-out and fade-in around a return held back for the bay latency (settling, the transmitter holding, stamped by the receiver), and the timing jump when a new latency is adopted | 20 | `bayLatencyFadeMs` |
+  | Mute | dry ↔ the bay's sound, entering and leaving Mute (its own control, user) | 12 | `bayMuteFadeMs` |
+  | Bypass | dry ↔ the bay's sound, and the bay's send, entering and leaving Bypass | 12 | `bayBypassFadeMs` |
+  | Off | the timing jump, the bay's send and the fade-in, entering and leaving Off | 25 | `bayOffFadeMs` |
+  | Dropouts | the fade-out and fade-in around a missing return, and the crossfade into the bay's first sound | 30 | `bayDropoutFadeMs` |
+
+  - State fades are 0 to 500 ms. The old `bayBypassCrossfadeMs` is no longer read.
+  - Leaving a state, the crossfade back into the bay's sound uses the state left.
+  - The bay's first sound is only crossfaded when a panel starts (a new instance, a project opening, FL preparing it) or relays first arrive. After a dropout, the bay's sound fades in from silence instead.
+  - A timing jump where both the round trip and the bay latency changed uses the longer of the two.
+- **Shrinking while stopped: one check per stop** (user: fewer pointless checks). Once shrinking is allowed (stopped, and quiet if so set), one check runs. Another runs only when the host's tempo changes (the playhead's BPM, now passed with the transport), the transport plays and stops again, or a check is asked for. A check that ended without being allowed to shrink is tried again. Diagnostics' Transport line shows the host's tempo.
+- **Tests (84 test cases, Debug and Release):**
+  - The simulated Patcher sets every fade to 30 ms, so the older tests keep their ramps.
+  - New: Mute (10 ms) and Bypass (40 ms) end their crossfades at their own lengths; a dropout's reversed fade-out lasts the dropout fade (30 ms), a settling bay latency's the bay latency fade (10 ms); one check per stop, with no further checks while nothing changes, and new ones on a tempo change or a stop after playing; the settings file keeps each fade and limits it.
+
+### FL check of real blocks, its additions and the fades (2026-10-08)
+- **Passed:** everything on the checklist (user).
+- **One bug, for the next session** (or a bug-fixing pass): with real blocks, switching from a fixed 1 block to 2 blocks often makes the panel miss blocks continuously ("late", 16 to 20 blocks per event line, i.e. nearly every block). Switching 1 → 3 and 2 → 3 doesn't.
+
+### Open bug: 1 → 2 real blocks misses nearly every block (diagnosed 2026-10-08, not fixed)
+- **Cause (confirmed with a throwaway test in the simulated Patcher):** the receiver lines up by `block = max (the panel's unit, its own largestBlock)` (`RelayLink::receive`). `largestBlock` is the relay's largest real block **since its prepare, never forgotten**. If the relay has ever had one block bigger than the panel's unit (e.g. a full 512-sample block, as FL may send around loading or starting), it stays at 512. Meanwhile the panel's unit has been rechecked down to 269 (its prepare survey, a recheck, a new lowest tempo, a stop).
+  - **2 blocks:** round trip 538 > block 512, so the receiver doesn't follow the newest block. Its lead is `max (512, 538 − 512)` = 512, which leaves the return only 26 samples of room. Almost every block arrives late; the receiver itself misses nothing (the misses are the panel's, "late").
+  - **1 block:** round trip 269 ≤ 512, so the receiver follows the newest block; the lead doesn't matter. No misses.
+  - **3 blocks:** 807 − 512 = 295 samples of room, more than FL's 215-sample ticks. No misses.
+
+  That matches all three of the user's observations.
+- **The reproduction:** relays and panel with real blocks at 1 block; one 512-sample block; `recheckBlockSize()` (so the panel forgets it, as its later checks do); 20 rounds of 215-sample blocks; then 2 blocks with FL-like varying blocks (1 to 215). Panel first: 28 missing of 200; receiver first: 179 of 200; random: 30. **Without the one 512 block: 0 in every order.** The test was removed; write it again as the regression test.
+- **Fix options (for the next agent to propose):**
+  1. Line up by the panel's unit (`info.max_block`), which now carries the real-block unit; use the relay's own largest block only when the panel announces nothing (or announced blocks).
+  2. Give the relay's `largestBlock` the panel's rules: reset it on every new session (each unit change sets new writer details, which starts one), so it only remembers recent blocks.
+  3. Cap the lead at `round trip − the panel's unit`, so the return always keeps at least one unit of room.
+
+  Agent's lean: 1 or 2 (simple, and they keep the relay in step with the panel's survey); 3 as a safety net. Check that Automatic's fallback to 2 blocks is affected the same way (likely: the user noted drastic tempo drops causing fallbacks).
+
 ### Future refinement: latency-change pop fade ("linear phase pop fade")
 Noted for a later quality-of-life pass (user, 2026-10-08). Reference it by either name.
 - **The problem:** a bay plugin that changes its own latency (linear phase on or off, its amount) pops at that moment: its output jumps, or it refills its delay line with silence and then starts abruptly. It happens inside the bay, before the panel knows. Our fades already hide the panel's own side (the ghost fade, held-back silence, the faded return). But a plugin after it in the bay, such as a reverb, rings the pop out loudly.

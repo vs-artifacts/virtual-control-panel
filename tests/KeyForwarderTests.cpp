@@ -188,8 +188,9 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
         CHECK (settings.getStoppedShrink() == BayLink::StoppedShrink::whenQuiet);
         CHECK (settings.getQuietLevelDb() == BayLink::defaultQuietLevelDb);
         CHECK (settings.getQuietMs() == BayLink::defaultQuietMs);
-        CHECK (settings.getJumpCrossfadeMs() == BayLink::defaultJumpCrossfadeMs);
-        CHECK (settings.getBypassCrossfadeMs() == BayLink::defaultCrossfadeMs);
+        for (const auto fade : BayLink::fades)
+            CHECK (settings.getFadeMs (fade) == BayLink::defaultFadeMs (fade));
+
         CHECK (settings.getLatencySettleMs() == BayLink::defaultSettleMs);
         CHECK (settings.getTailCutReleaseMs() == BayLink::defaultTailCutReleaseMs);
         CHECK (settings.getEditorPlacement() == EditorPlacement::Monitor::hostPlaced);
@@ -209,8 +210,9 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
         settings.setStoppedShrink (BayLink::StoppedShrink::always);
         settings.setQuietLevelDb (-500);
         settings.setQuietMs (99999);
-        settings.setJumpCrossfadeMs (1000);
-        settings.setBypassCrossfadeMs (50);
+        settings.setFadeMs (BayLink::Fade::roundTrip, 1000);
+        settings.setFadeMs (BayLink::Fade::bypass, 50);
+        settings.setFadeMs (BayLink::Fade::off, 5000);
         settings.setLatencySettleMs (5000);
         settings.setTailCutReleaseMs (5000);
         settings.setEditorPlacement (EditorPlacement::Monitor::mouse);
@@ -232,8 +234,10 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
     CHECK (reloaded.getStoppedShrink() == BayLink::StoppedShrink::always);
     CHECK (reloaded.getQuietLevelDb() == BayLink::minQuietLevelDb);
     CHECK (reloaded.getQuietMs() == BayLink::maxQuietMs);
-    CHECK (reloaded.getJumpCrossfadeMs() == BayLink::maxJumpCrossfadeMs);
-    CHECK (reloaded.getBypassCrossfadeMs() == 50);
+    CHECK (reloaded.getFadeMs (BayLink::Fade::roundTrip) == 100);
+    CHECK (reloaded.getFadeMs (BayLink::Fade::bypass) == 50);
+    CHECK (reloaded.getFadeMs (BayLink::Fade::off) == BayLink::maxFadeMs);
+    CHECK (reloaded.getFadeMs (BayLink::Fade::mute) == BayLink::defaultFadeMs (BayLink::Fade::mute));
     CHECK (reloaded.getLatencySettleMs() == BayLink::maxSettleMs);
     CHECK (reloaded.getTailCutReleaseMs() == BayLink::maxTailCutReleaseMs);
     CHECK (reloaded.getEditorPlacement() == EditorPlacement::Monitor::mouse);

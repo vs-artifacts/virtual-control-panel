@@ -57,6 +57,7 @@ export interface LinkStatus {
     surveyingBlocks: boolean
     // The host's transport as it reports it, and whether the panel's output has been quiet for the set time
     transport: (typeof transportStates)[number]
+    hostTempo: number
     outputQuiet: boolean
     sampleRate: number
     latency: number
@@ -154,6 +155,7 @@ export function readLink(raw: unknown): LinkStatus | null {
         realBlocks: fields.realBlocks === true,
         surveyingBlocks: fields.surveyingBlocks === true,
         transport: oneOf(transportStates, fields.transport) ?? 'unknown',
+        hostTempo: finiteOrNull(fields.hostTempo) ?? 0,
         outputQuiet: fields.outputQuiet === true,
         sampleRate: count(fields.sampleRate),
         latency: count(fields.latency),

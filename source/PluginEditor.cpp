@@ -150,8 +150,10 @@ juce::var PluginEditor::describeEditor() const
     current->setProperty ("bayStoppedShrink", BayLink::toName (settings->getStoppedShrink()));
     current->setProperty ("bayQuietLevelDb", settings->getQuietLevelDb());
     current->setProperty ("bayQuietMs", settings->getQuietMs());
-    current->setProperty ("bayJumpCrossfadeMs", settings->getJumpCrossfadeMs());
-    current->setProperty ("bypassCrossfadeMs", settings->getBypassCrossfadeMs());
+
+    for (const auto fade : BayLink::fades)
+        current->setProperty (PluginSettings::fadeKey (fade), settings->getFadeMs (fade));
+
     current->setProperty ("bayLatencySettleMs", settings->getLatencySettleMs());
     current->setProperty ("bayTailCutReleaseMs", settings->getTailCutReleaseMs());
     current->setProperty ("doubleClickMs", settings->getDoubleClickMs());
@@ -206,6 +208,7 @@ juce::var PluginEditor::describeLink() const
     link->setProperty ("realBlocks", status.realBlocks);
     link->setProperty ("surveyingBlocks", status.surveyingBlocks);
     link->setProperty ("transport", BayLink::toName (status.transport));
+    link->setProperty ("hostTempo", status.hostTempo);
     link->setProperty ("outputQuiet", status.outputQuiet);
     link->setProperty ("sampleRate", status.sampleRate);
     link->setProperty ("latency", pluginProcessor.getLatencySamples());
@@ -276,6 +279,20 @@ void PluginEditor::handleSetting (const juce::var& message)
 {
     const auto name = message["name"].toString();
     const auto& value = message["value"];
+
+    for (const auto fade : BayLink::fades)
+    {
+        if (name != PluginSettings::fadeKey (fade))
+            continue;
+
+        if (value.isInt() && static_cast<int> (value) >= 0 && static_cast<int> (value) <= BayLink::maxFadeMsFor (fade))
+        {
+            settings->setFadeMs (fade, static_cast<int> (value));
+            pluginProcessor.applyLinkSettings();
+        }
+
+        return;
+    }
 
     if (name == "keepWebViewWarm" && value.isBool())
     {
@@ -357,24 +374,6 @@ void PluginEditor::handleSetting (const juce::var& message)
         if (const auto milliseconds = static_cast<int> (value); milliseconds >= 0 && milliseconds <= BayLink::maxQuietMs)
         {
             settings->setQuietMs (milliseconds);
-            pluginProcessor.applyLinkSettings();
-        }
-    }
-    else if (name == "bayJumpCrossfadeMs" && value.isInt())
-    {
-        if (const auto milliseconds = static_cast<int> (value); milliseconds >= 0 && milliseconds <= BayLink::maxJumpCrossfadeMs)
-        {
-            settings->setJumpCrossfadeMs (milliseconds);
-            pluginProcessor.applyLinkSettings();
-        }
-    }
-    else if (name == "bypassCrossfadeMs" && value.isInt())
-    {
-        const auto milliseconds = static_cast<int> (value);
-
-        if (milliseconds >= 0 && milliseconds <= BayLink::maxCrossfadeMs)
-        {
-            settings->setBypassCrossfadeMs (milliseconds);
             pluginProcessor.applyLinkSettings();
         }
     }

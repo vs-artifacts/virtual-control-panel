@@ -73,14 +73,10 @@ public:
     int getQuietMs() const;
     void setQuietMs (int);
 
-    // How long a change of the round trip or bay latency blends the old timing into the new
-    int getJumpCrossfadeMs() const;
-    void setJumpCrossfadeMs (int);
-
-    // How long a bay's bypass switch fades between the return and the sent audio; 0 switches at once. Also the blend when
-    // the bay's delay changes.
-    int getBypassCrossfadeMs() const;
-    void setBypassCrossfadeMs (int);
+    // Each fade's length (see BayLink::Fade), by its key in the settings file and the page's messages
+    int getFadeMs (BayLink::Fade) const;
+    void setFadeMs (BayLink::Fade, int);
+    static const char* fadeKey (BayLink::Fade) noexcept;
 
     // How long a new bay latency must hold before the panel uses it
     int getLatencySettleMs() const;

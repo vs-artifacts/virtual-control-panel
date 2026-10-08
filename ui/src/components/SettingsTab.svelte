@@ -3,16 +3,16 @@
     import { view } from "../lib/display.svelte";
     import {
         changeSetting,
-        crossfadeRange,
         doubleClickRange,
         editor,
-        jumpCrossfadeRange,
+        fadeSettings,
         lowestTempoRange,
         quietLevelRange,
         quietMsRange,
         releaseRange,
         resetSize,
         settleRange,
+        type FadeKey,
         type Settings,
     } from "../lib/editor.svelte";
     import { link } from "../lib/link.svelte";
@@ -85,7 +85,7 @@
     // Whole numbers kept in range; anything else puts the field back
     function changeWhole(
         event: Event & { currentTarget: HTMLInputElement },
-        name: "bayQuietLevelDb" | "bayQuietMs" | "bayJumpCrossfadeMs",
+        name: "bayQuietLevelDb" | "bayQuietMs" | FadeKey,
         range: { min: number; max: number },
     ) {
         const typed = event.currentTarget.valueAsNumber;
@@ -97,23 +97,6 @@
             );
 
         event.currentTarget.value = String(editor.settings[name]);
-    }
-
-    // Typed values are rounded and kept in range; anything else puts the field back
-    function changeCrossfade(
-        event: Event & { currentTarget: HTMLInputElement },
-    ) {
-        const typed = event.currentTarget.valueAsNumber;
-
-        if (Number.isFinite(typed)) {
-            const milliseconds = Math.min(
-                crossfadeRange.max,
-                Math.max(crossfadeRange.min, Math.round(typed)),
-            );
-            changeSetting("bypassCrossfadeMs", milliseconds);
-        }
-
-        event.currentTarget.value = String(editor.settings.bypassCrossfadeMs);
     }
 
     function changeSettle(event: Event & { currentTarget: HTMLInputElement }) {
@@ -460,52 +443,31 @@
             ms
         </label>
         <p class="hint">
-            While stopped, the block size is checked again and again, so the
-            round trip follows a faster tempo. Playing, it only grows.
+            While stopped, the block size is checked once (as soon as the rule
+            allows), and again only if the host's tempo changes, or a check is
+            asked for. Playing, the round trip only grows.
         </p>
     </fieldset>
 
-    <fieldset>
-        <legend>Bay delay change crossfade</legend>
-        <label class="option">
-            <input
-                id="jump-crossfade"
-                class="milliseconds"
-                type="number"
-                min={jumpCrossfadeRange.min}
-                max={jumpCrossfadeRange.max}
-                step="1"
-                value={editor.settings.bayJumpCrossfadeMs}
-                onchange={(event) =>
-                    changeWhole(
-                        event,
-                        "bayJumpCrossfadeMs",
-                        jumpCrossfadeRange,
-                    )}
-            />
-            ms ({jumpCrossfadeRange.min} to {jumpCrossfadeRange.max}; 0 is off).
-            Blends the old timing into the new when the round trip or the bay
-            latency changes.
-        </label>
-    </fieldset>
-
-    <fieldset>
-        <legend>Bay bypass crossfade</legend>
-        <label class="option">
-            <input
-                id="bypass-crossfade"
-                class="milliseconds"
-                type="number"
-                min={crossfadeRange.min}
-                max={crossfadeRange.max}
-                step="1"
-                value={editor.settings.bypassCrossfadeMs}
-                onchange={changeCrossfade}
-            />
-            ms ({crossfadeRange.min} to {crossfadeRange.max}; 0 is off). Also
-            blends the jump when the slot goes Off or back, fades the bay's send
-            for Bypass and Off, and is the length of a dropout's fade.
-        </label>
+    <fieldset id="bay-fades">
+        <legend>Bay fades (ms, 0 is off)</legend>
+        {#each fadeSettings as fade (fade.key)}
+            <label class="option">
+                <input
+                    class="milliseconds"
+                    type="number"
+                    min="0"
+                    max={fade.max}
+                    step="1"
+                    value={editor.settings[fade.key]}
+                    onchange={(event) =>
+                        changeWhole(event, fade.key, { min: 0, max: fade.max })}
+                />
+                <span
+                    ><strong>{fade.label}</strong> (up to {fade.max}): {fade.covers}</span
+                >
+            </label>
+        {/each}
     </fieldset>
 
     <fieldset>

@@ -20,8 +20,6 @@ namespace
     constexpr auto stoppedShrinkKey = "bayStoppedShrink";
     constexpr auto quietLevelKey = "bayQuietLevelDb";
     constexpr auto quietMsKey = "bayQuietMs";
-    constexpr auto jumpCrossfadeKey = "bayJumpCrossfadeMs";
-    constexpr auto bypassCrossfadeKey = "bayBypassCrossfadeMs";
     constexpr auto latencySettleKey = "bayLatencySettleMs";
     constexpr auto tailCutReleaseKey = "bayTailCutReleaseMs";
     constexpr auto doubleClickMsKey = "doubleClickMs";
@@ -197,24 +195,37 @@ void PluginSettings::setQuietMs (int milliseconds)
     file.setValue (quietMsKey, juce::jlimit (0, BayLink::maxQuietMs, milliseconds));
 }
 
-int PluginSettings::getJumpCrossfadeMs() const
+int PluginSettings::getFadeMs (BayLink::Fade fade) const
 {
-    return juce::jlimit (0, BayLink::maxJumpCrossfadeMs, file.getIntValue (jumpCrossfadeKey, BayLink::defaultJumpCrossfadeMs));
+    return juce::jlimit (0, BayLink::maxFadeMsFor (fade), file.getIntValue (fadeKey (fade), BayLink::defaultFadeMs (fade)));
 }
 
-void PluginSettings::setJumpCrossfadeMs (int milliseconds)
+void PluginSettings::setFadeMs (BayLink::Fade fade, int milliseconds)
 {
-    file.setValue (jumpCrossfadeKey, juce::jlimit (0, BayLink::maxJumpCrossfadeMs, milliseconds));
+    file.setValue (fadeKey (fade), juce::jlimit (0, BayLink::maxFadeMsFor (fade), milliseconds));
 }
 
-int PluginSettings::getBypassCrossfadeMs() const
+const char* PluginSettings::fadeKey (BayLink::Fade fade) noexcept
 {
-    return juce::jlimit (0, BayLink::maxCrossfadeMs, file.getIntValue (bypassCrossfadeKey, BayLink::defaultCrossfadeMs));
-}
+    using Fade = BayLink::Fade;
 
-void PluginSettings::setBypassCrossfadeMs (int milliseconds)
-{
-    file.setValue (bypassCrossfadeKey, juce::jlimit (0, BayLink::maxCrossfadeMs, milliseconds));
+    switch (fade)
+    {
+        case Fade::roundTrip:
+            return "bayJumpCrossfadeMs"; // the name it had when it was the only delay change crossfade
+        case Fade::bayLatency:
+            return "bayLatencyFadeMs";
+        case Fade::mute:
+            return "bayMuteFadeMs";
+        case Fade::bypass:
+            return "bayBypassFadeMs";
+        case Fade::off:
+            return "bayOffFadeMs";
+        case Fade::dropout:
+            break;
+    }
+
+    return "bayDropoutFadeMs";
 }
 
 int PluginSettings::getLatencySettleMs() const

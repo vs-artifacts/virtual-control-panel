@@ -122,8 +122,8 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
 void PluginProcessor::applyLinkSettings()
 {
-    bayLink.setCrossfadeMs (settings->getBypassCrossfadeMs());
-    bayLink.setJumpCrossfadeMs (settings->getJumpCrossfadeMs());
+    for (const auto fade : BayLink::fades)
+        bayLink.setFadeMs (fade, settings->getFadeMs (fade));
     bayLink.setSettleMs (settings->getLatencySettleMs());
     bayLink.setTailCutReleaseMs (settings->getTailCutReleaseMs());
     bayLink.setRealBlocks (settings->getRoundTripRealBlocks());
@@ -196,12 +196,18 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     engine.process (buffer, midiMessages, getPlayHead());
 
     auto transport = BayLink::Transport::unknown;
+    auto tempo = 0.0;
 
     if (auto* host = getPlayHead())
+    {
         if (const auto position = host->getPosition())
+        {
             transport = position->getIsPlaying() ? BayLink::Transport::playing : BayLink::Transport::stopped;
+            tempo = position->getBpm().orFallback (0.0);
+        }
+    }
 
-    bayLink.setTransport (transport);
+    bayLink.setTransport (transport, tempo);
     bayLink.process (buffer);
 }
 

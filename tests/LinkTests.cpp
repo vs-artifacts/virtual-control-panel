@@ -18,6 +18,9 @@ namespace
     constexpr int tailCutChannel = markerOutChannel + 2;
     constexpr int markerInChannel = 2;
 
+    // Every fade's length in the simulated Patcher, unless a test sets its own
+    constexpr int testFadeMs = 30;
+
     BayLink::HubSearch inProcessHub()
     {
         return { heartseeker_link_get_api (HS_LINK_ABI_VERSION), {} };
@@ -57,6 +60,10 @@ namespace
             // choose it
             panel->setDropouts (Dropouts::safe);
             panel->setRealBlocks (realBlocks);
+
+            for (const auto fade : BayLink::fades)
+                panel->setFadeMs (fade, testFadeMs);
+
             panel->setLowestTempo (lowestTempo);
             panel->setRoundTripBlocks (roundTripBlocks);
             panel->prepare (rigRate, rigBlock);
@@ -484,7 +491,10 @@ TEST_CASE ("Relays and panels come and go in any order without stale audio", "[l
         // Without a crossfade, so a dropout is plain silence (no reversed fade) and the return comes back at once
         patcher.addAll (2);
         patcher.panel->setDropouts (Dropouts::silence);
-        patcher.panel->setCrossfadeMs (0);
+
+        for (const auto fade : BayLink::fades)
+            patcher.panel->setFadeMs (fade, 0);
+
         patcher.run (30, Order::random);
         patcher.receiver.reset();
         patcher.maintain();
@@ -944,7 +954,7 @@ TEST_CASE ("Mute crossfades, and a return coming back after a dropout fades in",
     patcher.bay = [] (juce::AudioBuffer<float>& audio) { audio.applyGain (0.5f); };
     patcher.run (warmUpBlocks, Order::random);
 
-    const auto fade = juce::roundToInt (BayLink::defaultCrossfadeMs * rigRate / 1000.0);
+    const auto fade = juce::roundToInt (testFadeMs * rigRate / 1000.0);
 
     // How much of a played sample is the return (0.5 × sent) rather than the sent audio; NaN where they're too close to tell
     const auto returnShare = [&patcher] (juce::int64 sample) {
@@ -1178,7 +1188,7 @@ namespace
         }
     }
 
-    constexpr int jumpFade = BayLink::defaultCrossfadeMs * static_cast<int> (rigRate) / 1000;
+    constexpr int jumpFade = testFadeMs * static_cast<int> (rigRate) / 1000;
 
     // Samples from `from` on that aren't the sent audio at the output delay in use then (Patcher::delays), leaving out
     // the blend after each change of delay
@@ -1601,7 +1611,7 @@ TEST_CASE ("A silent dropout starts with a reversed copy of what played, fading 
     REQUIRE (silentTo - silentFrom >= rigBlock);
 
     // Before it, the fade: the samples before the dropout, reversed, under a falling ramp ending at the first silent one
-    const auto fade = BayLink::defaultCrossfadeMs * static_cast<int> (rigRate) / 1000;
+    const auto fade = testFadeMs * static_cast<int> (rigRate) / 1000;
     const auto dropoutStart = silentFrom - (fade - 1);
     auto offMirror = 0;
 
@@ -1940,11 +1950,36 @@ TEST_CASE ("Real blocks: while the transport is stopped the round trip may shrin
     SECTION ("stopped, always")
     {
         patcher.panel->setStoppedShrink (Shrink::always);
-        patcher.panel->setTransport (Transport::stopped);
+        patcher.panel->setTransport (Transport::stopped, 140.0);
         runFaster();
         CHECK (patcher.panel->getBlockUnit() == unitFor (100));
         CHECK (patcher.roundTrip == unitFor (100));
         CHECK (patcher.panel->getStatus().events.joinIntoString ("\n").contains ("while stopped"));
+
+        // One check per stop: none while nothing changes
+        auto checks = 0;
+
+        for (int round = 0; round < 20; ++round)
+        {
+            patcher.run (10, Order::panelFirst, 100);
+            patcher.maintain();
+            checks += patcher.panel->getStatus().surveyingBlocks ? 1 : 0;
+        }
+
+        CHECK (checks == 0);
+
+        // A new tempo checks again, and so does stopping after playing
+        patcher.panel->setTransport (Transport::stopped, 150.0);
+        patcher.maintain();
+        CHECK (patcher.panel->getStatus().surveyingBlocks);
+        runFaster();
+        CHECK_FALSE (patcher.panel->getStatus().surveyingBlocks);
+
+        patcher.panel->setTransport (Transport::playing, 150.0);
+        patcher.maintain();
+        patcher.panel->setTransport (Transport::stopped, 150.0);
+        patcher.maintain();
+        CHECK (patcher.panel->getStatus().surveyingBlocks);
     }
 
     SECTION ("stopped, never")
@@ -2019,7 +2054,7 @@ TEST_CASE ("Retry 1 block: Automatic tries 1 block again; a fixed round trip ign
     CHECK (patcher.roundTrip == 3 * rigBlock);
 }
 
-TEST_CASE ("A change of the round trip blends over the jump crossfade; Off and back over the bypass crossfade", "[link]")
+TEST_CASE ("A change of the round trip blends over the round trip fade; Off and back over the Off fade", "[link]")
 {
     constexpr int fiftyMs = static_cast<int> (rigRate) / 20;
 
@@ -2036,9 +2071,9 @@ TEST_CASE ("A change of the round trip blends over the jump crossfade; Off and b
     patcher.run (warmUpBlocks, Order::panelFirst);
     patcher.maintain();
 
-    SECTION ("no jump crossfade: the new timing at once")
+    SECTION ("no round trip fade: the new timing at once")
     {
-        patcher.panel->setJumpCrossfadeMs (0);
+        patcher.panel->setFadeMs (BayLink::Fade::roundTrip, 0);
         patcher.panel->setRoundTripBlocks (3);
         patcher.maintain();
         patcher.run (warmUpBlocks, Order::panelFirst);
@@ -2047,7 +2082,7 @@ TEST_CASE ("A change of the round trip blends over the jump crossfade; Off and b
 
     SECTION ("100 ms: still blending after 50 ms, done after 100")
     {
-        patcher.panel->setJumpCrossfadeMs (100);
+        patcher.panel->setFadeMs (BayLink::Fade::roundTrip, 100);
         patcher.panel->setRoundTripBlocks (3);
         patcher.maintain();
         patcher.run (30, Order::panelFirst);
@@ -2055,10 +2090,10 @@ TEST_CASE ("A change of the round trip blends over the jump crossfade; Off and b
         CHECK (exactAfter (patcher, 2 * fiftyMs + 64));
     }
 
-    SECTION ("Off uses the bypass crossfade, not the jump crossfade")
+    SECTION ("Off uses the Off fade, not the round trip fade")
     {
-        patcher.panel->setJumpCrossfadeMs (0);
-        patcher.panel->setCrossfadeMs (50);
+        patcher.panel->setFadeMs (BayLink::Fade::roundTrip, 0);
+        patcher.panel->setFadeMs (BayLink::Fade::off, 50);
         patcher.panel->setSlotState (Slot::off);
         patcher.maintain();
         patcher.run (30, Order::panelFirst);
@@ -2201,6 +2236,94 @@ TEST_CASE ("The panel finds the hub in the real relay file once a host has loade
     transmitter.reset();
 }
 
+TEST_CASE ("Each fade has its own length: Mute, Bypass, a held-back bay latency and a dropout", "[link][fades]")
+{
+    using Fade = BayLink::Fade;
+
+    // From `from`, the first sample that isn't the sent audio at the delay in use (where a fade starts), and the first
+    // exactly silent one after it (where a dropout's reversed fade has ended)
+    const auto fadeOutLength = [] (const Patcher& patcher, juce::int64 from) {
+        const auto delay = patcher.roundTrip + patcher.latency;
+        auto start = from;
+
+        while (start < patcher.played && juce::exactlyEqual (patcher.outLeft[static_cast<size_t> (start)], sentSample (start - delay, 0)))
+            ++start;
+
+        auto end = start;
+
+        while (end < patcher.played && !juce::exactlyEqual (patcher.outLeft[static_cast<size_t> (end)], 0.0f))
+            ++end;
+
+        return static_cast<int> (end - start);
+    };
+
+    constexpr auto samplesPerMs = static_cast<int> (rigRate) / 1000;
+
+    SECTION ("Mute and Bypass crossfade over their own lengths")
+    {
+        Patcher patcher;
+        patcher.addAll (2);
+        patcher.bay = [] (juce::AudioBuffer<float>& audio) { audio.applyGain (0.5f); };
+        patcher.panel->setFadeMs (Fade::mute, 10);
+        patcher.panel->setFadeMs (Fade::bypass, 40);
+        patcher.run (warmUpBlocks, Order::panelFirst);
+
+        auto switchedAt = patcher.played;
+        patcher.panel->setSlotState (Slot::mute);
+        patcher.run (8, Order::panelFirst);
+        CHECK (patcher.countWrong (switchedAt + 10 * samplesPerMs) == 0);
+        CHECK (patcher.countWrong (switchedAt + 5 * samplesPerMs) > 0);
+
+        patcher.panel->setSlotState (Slot::active);
+        patcher.run (20, Order::panelFirst);
+
+        switchedAt = patcher.played;
+        patcher.panel->setSlotState (Slot::bypass);
+        patcher.run (8, Order::panelFirst);
+        CHECK (patcher.countWrong (switchedAt + 40 * samplesPerMs) == 0);
+        CHECK (patcher.countWrong (switchedAt + 20 * samplesPerMs) > 0);
+    }
+
+    SECTION ("a dropout fades out over the dropout fade")
+    {
+        Patcher patcher;
+        patcher.addAll (2);
+        patcher.panel->setDropouts (Dropouts::silence);
+        patcher.panel->setFadeMs (Fade::dropout, 30);
+        patcher.panel->setFadeMs (Fade::bayLatency, 10);
+        patcher.run (warmUpBlocks, Order::panelFirst);
+
+        const auto removed = patcher.played;
+        patcher.transmitter.reset();
+        patcher.maintain();
+        patcher.run (10, Order::panelFirst);
+        CHECK (std::abs (fadeOutLength (patcher, removed) - 30 * samplesPerMs) <= 1);
+    }
+
+    SECTION ("a return held back while a new bay latency settles fades out over the bay latency fade")
+    {
+        Patcher patcher;
+        patcher.addAll (2);
+        auto latency = std::make_shared<int> (576);
+        patcher.bay = latentBay (latency);
+        patcher.markerDelay = 576;
+        runWithTimers (patcher, 30, Order::panelFirst);
+        REQUIRE (patcher.panel->getBayLatency() == 576);
+
+        patcher.panel->setDropouts (Dropouts::silence);
+        patcher.panel->setFadeMs (Fade::dropout, 30);
+        patcher.panel->setFadeMs (Fade::bayLatency, 10);
+        patcher.panel->setSettleMs (1000);
+        const auto changed = patcher.played;
+        *latency = 192;
+        patcher.markerDelay = 192;
+        runWithTimers (patcher, 4, Order::panelFirst);
+
+        REQUIRE (patcher.panel->getStatus().settlingTo == 192);
+        CHECK (std::abs (fadeOutLength (patcher, changed) - 10 * samplesPerMs) <= 1);
+    }
+}
+
 TEST_CASE ("The processor's bay commands are parameters after the pool, with permanent IDs, acting once per switch on", "[processor][link]")
 {
     PluginProcessor processor;
@@ -2245,7 +2368,7 @@ TEST_CASE ("The panel tells the host its delay as latency, and keeps its slot st
 {
     juce::SharedResourcePointer<PluginSettings> settings;
     const auto previousBlocks = settings->getRoundTripBlocks();
-    const auto previousCrossfade = settings->getBypassCrossfadeMs();
+    const auto previousFade = settings->getFadeMs (BayLink::Fade::bypass);
     const auto previousSettle = settings->getLatencySettleMs();
     const auto previousRelease = settings->getTailCutReleaseMs();
 
@@ -2259,12 +2382,12 @@ TEST_CASE ("The panel tells the host its delay as latency, and keeps its slot st
 
         // A change from any instance's Settings tab
         settings->setRoundTripBlocks (1);
-        settings->setBypassCrossfadeMs (50);
+        settings->setFadeMs (BayLink::Fade::bypass, 50);
         settings->setLatencySettleMs (200);
         settings->setTailCutReleaseMs (40);
         processor.applyLinkSettings();
         CHECK (processor.getLatencySamples() == engineLatency + rigBlock);
-        CHECK (processor.getBayLink().getCrossfadeMs() == 50);
+        CHECK (processor.getBayLink().getFadeMs (BayLink::Fade::bypass) == 50);
         CHECK (processor.getBayLink().getSettleMs() == 200);
         CHECK (processor.getBayLink().getTailCutReleaseMs() == 40);
 
@@ -2327,7 +2450,7 @@ TEST_CASE ("The panel tells the host its delay as latency, and keeps its slot st
     }
 
     settings->setRoundTripBlocks (previousBlocks);
-    settings->setBypassCrossfadeMs (previousCrossfade);
+    settings->setFadeMs (BayLink::Fade::bypass, previousFade);
     settings->setLatencySettleMs (previousSettle);
     settings->setTailCutReleaseMs (previousRelease);
 }

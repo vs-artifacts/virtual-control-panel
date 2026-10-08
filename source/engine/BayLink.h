@@ -113,6 +113,18 @@ public:
         always,
     };
 
+    // What a fade is for; each has its own length, chosen when the fade starts
+    enum class Fade {
+        roundTrip, // the output's timing jumping with a round trip change (tempo, Automatic, Settings)
+        bayLatency, // around a return held back for the bay latency (settling, the transmitter holding), and its jump
+        mute, // dry and the bay's sound, entering and leaving Mute
+        bypass, // dry and the bay's sound, and the bay's send, entering and leaving Bypass
+        off, // the timing jump, the bay's send and the fade-in, entering and leaving Off
+        dropout, // around a missing return, and into the bay's first sound
+    };
+
+    static constexpr std::array<Fade, 6> fades { Fade::roundTrip, Fade::bayLatency, Fade::mute, Fade::bypass, Fade::off, Fade::dropout };
+
     // How long a step on control 1 takes to show in the return: the panel sends a steady tone instead of its sound,
     // holds control 1 at 0, then steps it to 1 and watches the return's level (control 1 must drive a level knob)
     struct Probe
@@ -146,6 +158,7 @@ public:
         bool surveyingBlocks = false; // real blocks: still watching them before choosing the unit
         double lowestTempo = 0.0; // BPM; 0: none
         Transport transport = Transport::unknown;
+        double hostTempo = 0.0; // BPM, as the host reports it; 0: not reported
         bool outputQuiet = false; // quiet for the set time
         StoppedShrink stoppedShrink = StoppedShrink::whenQuiet;
         double sampleRate = 0.0;
@@ -164,7 +177,7 @@ public:
         juce::uint64 heldStamped = 0; // blocks held back: stamped by the receiver's position while a bay latency is in use
         juce::uint64 heldByTransmitter = 0; // blocks the transmitter held back (marker unreadable, out of range or paused)
         Dropouts dropouts = Dropouts::silence;
-        int crossfadeMs = 0;
+        int crossfadeMs = 0; // the next crossfade into the bay's sound (after the state last left, or a dropout's)
         juce::uint64 missing = 0; // return blocks missing while the return was flowing
         juce::uint64 missingLate = 0, missingGone = 0; // of those: not written yet, or no longer there
         juce::uint64 receiverMisses = 0; // blocks the receiver couldn't play (each also leaves a gap in the return)
@@ -205,8 +218,12 @@ public:
     // Automatic: try 1 block again (message thread); a fixed round trip ignores it
     void retryOneBlock();
 
-    // Audio thread, before process(): the host's transport for this block
-    void setTransport (Transport newState) noexcept { transport.store (newState, std::memory_order_relaxed); }
+    // Audio thread, before process(): the host's transport and tempo (0: not reported) for this block
+    void setTransport (Transport newState, double bpm = 0.0) noexcept
+    {
+        transport.store (newState, std::memory_order_relaxed);
+        hostTempo.store (bpm, std::memory_order_relaxed);
+    }
 
     void setStoppedShrink (StoppedShrink rule) noexcept { stoppedShrink.store (rule); }
     StoppedShrink getStoppedShrink() const noexcept { return stoppedShrink.load(); }
@@ -214,9 +231,14 @@ public:
     // The panel's output counts as quiet below this level (dBFS) for this long
     void setQuiet (int levelDb, int milliseconds) noexcept;
 
-    // How long a change of the round trip or bay latency blends the old timing into the new
-    void setJumpCrossfadeMs (int milliseconds) noexcept { jumpCrossfadeMs.store (juce::jlimit (0, maxJumpCrossfadeMs, milliseconds)); }
-    int getJumpCrossfadeMs() const noexcept { return jumpCrossfadeMs.load(); }
+    void setFadeMs (Fade fade, int milliseconds) noexcept { fadeMs[index (fade)].store (juce::jlimit (0, maxFadeMsFor (fade), milliseconds)); }
+    int getFadeMs (Fade fade) const noexcept { return fadeMs[index (fade)].load(); }
+    static constexpr int maxFadeMsFor (Fade fade) noexcept { return fade == Fade::roundTrip ? 100 : maxFadeMs; }
+    static constexpr int defaultFadeMs (Fade fade) noexcept
+    {
+        constexpr std::array<int, fades.size()> defaults { 6, 20, 12, 12, 25, 30 }; // the user's tuning (2026-10-08)
+        return defaults[index (fade)];
+    }
     bool updateBayLatency(); // takes a new bay latency once it has held for the settle time; true if it did. A timer calls it.
     int getBayLatency() const noexcept { return bayLatency.load(); }
     int getDelaySamples() const noexcept; // what the output plays behind the engine, for the host's latency
@@ -228,8 +250,6 @@ public:
     int getSettleMs() const noexcept { return settleMs.load(); }
     void setDropouts (Dropouts newMode) noexcept { dropouts.store (newMode); }
     Dropouts getDropouts() const noexcept { return dropouts.load(); }
-    void setCrossfadeMs (int milliseconds) noexcept { crossfadeMs.store (juce::jlimit (0, maxCrossfadeMs, milliseconds)); }
-    int getCrossfadeMs() const noexcept { return crossfadeMs.load(); }
     void maintain(); // looks for the hub until it's found, then claims this panel's link; a timer calls it once a second
     void updateEventLog(); // turns the audio thread's counters into event lines; a timer calls it 10 times a second
     void measureLag();
@@ -259,14 +279,11 @@ public:
     static constexpr int ticksPerBeat = 96; // FL's sequencer, for the lowest tempo's tick
     static constexpr double maxLowestTempo = 999.0;
 
-    static constexpr int maxJumpCrossfadeMs = 100;
-    static constexpr int defaultJumpCrossfadeMs = 30;
-
     static constexpr int minQuietLevelDb = -120, maxQuietLevelDb = 0, defaultQuietLevelDb = -80;
     static constexpr int maxQuietMs = 5000, defaultQuietMs = 500;
 
-    static constexpr int maxCrossfadeMs = 500;
-    static constexpr int defaultCrossfadeMs = 30;
+    // The longest fade of any kind
+    static constexpr int maxFadeMs = 500;
 
     // How long a new bay latency must hold before it's used
     static constexpr int maxSettleMs = 1000;
@@ -372,12 +389,14 @@ private:
     void captureTest (juce::int64 returnStart, int numSamples, bool returned, juce::int64 linkEnd);
     void finishTest (juce::int64 linkEnd);
     void noteLatencyReport (const hs_link_info&, int numSamples);
-    void mix (float* left, float* right, int numSamples, bool returned, bool bypassed);
-    void playDropout (float* left, float* right, int numSamples);
+    void mix (float* left, float* right, int numSamples, bool returned, bool bypassed, Fade holdFade);
+    void playDropout (float* left, float* right, int numSamples, Fade holdFade);
     void fadeIn (float* left, float* right, int numSamples);
     void blendJump (const hs_link_api*, int32_t back, juce::int64 start, juce::int64 linkStart, int numSamples, float* left, float* right);
     void fadeOutput (float* left, float* right, int numSamples, float target);
-    float crossfadeStep() const noexcept;
+    float stepFor (Fade) const noexcept; // per sample
+    static constexpr size_t index (Fade fade) noexcept { return static_cast<size_t> (fade); }
+    static Fade fadeFor (SlotState) noexcept;
 
     static constexpr int unset = std::numeric_limits<int>::min();
     static void lower (std::atomic<int>&, int) noexcept;
@@ -420,16 +439,18 @@ private:
     std::atomic<int> unitLargest { std::numeric_limits<int>::min() }; // the largest block since the survey started
     std::atomic<bool> tempoFloorChanged { false };
     bool surveyWhileStopped = false; // message thread: its result may only shrink if shrinking is still allowed
+    bool stoppedChecked = false; // message thread: this stop's check is done (until playing, a new tempo or a request)
+    double checkedTempo = 0.0; // message thread: the host's tempo when last looked at
     std::atomic<Transport> transport { Transport::unknown };
+    std::atomic<double> hostTempo { 0.0 };
     std::atomic<StoppedShrink> stoppedShrink { StoppedShrink::whenQuiet };
     std::atomic<float> quietLevel { juce::Decibels::decibelsToGain (static_cast<float> (defaultQuietLevelDb)) };
     std::atomic<int> quietMs { defaultQuietMs };
     std::atomic<juce::int64> quietSamples { 0 }; // audio thread: how long the output has been below quietLevel
-    std::atomic<int> jumpCrossfadeMs { defaultJumpCrossfadeMs };
+    std::array<std::atomic<int>, fades.size()> fadeMs;
     std::atomic<AutoState> autoState { AutoState::checking };
     std::atomic<SlotState> slotState { SlotState::active };
     std::atomic<Dropouts> dropouts { Dropouts::silence };
-    std::atomic<int> crossfadeMs { defaultCrossfadeMs };
     std::atomic<int> settleMs { defaultSettleMs };
     std::atomic<int> tailCutReleaseMs { defaultTailCutReleaseMs };
     std::atomic<int> bayLatency { 0 }; // the one in use; set on the message thread
@@ -465,6 +486,12 @@ private:
     std::array<float, numControls + 1> valuesSent {};
     SlotState lastSlotState = SlotState::active;
 
+    // Audio thread: which fade each ramp uses, chosen when it starts
+    Fade sendFade = Fade::bypass; // the bay's send: the state silencing it, or the one that last did
+    Fade mixFade = Fade::dropout; // dry and the bay's sound: likewise, or (before the bay's first sound) dropout
+    Fade levelFade = Fade::dropout; // the fade-in after a silent stretch: what held the return back
+    std::atomic<Fade> shownFade { Fade::dropout }; // mixFade, for the status
+
     // Audio thread: the bay's send fades out for Bypass and Off, and in after them (once the release has passed)
     float sendGain = 1.0f;
     bool sentSilence = false;
@@ -498,7 +525,8 @@ private:
     float jumpFromMix = 0.0f; // the old timeline's share of return, held through the blend
     float jumpFromLevel = 1.0f;
     float jumpGain = 0.0f; // the old timeline's share of the output, falling to 0
-    float jumpStep = 1.0f; // per sample: the bypass crossfade for Off, the jump crossfade otherwise
+    float jumpStep = 1.0f; // per sample, by what changed: Off, the bay latency, or the round trip
+    int outputRoundTrip = 0, outputLatency = 0; // what the output's delay was made of
     bool lastDropped = false; // the slot was Off last block
     std::vector<float> jumpLeft, jumpRight, jumpReturnLeft, jumpReturnRight;
 

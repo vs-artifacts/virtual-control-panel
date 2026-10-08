@@ -223,9 +223,9 @@
             <dd id="link-transport">
                 {status.transport === "unknown"
                     ? "not reported by the host"
-                    : status.transport}{status.outputQuiet
-                    ? "; output quiet"
-                    : ""}
+                    : status.transport}{status.hostTempo > 0
+                    ? ` at ${Math.round(status.hostTempo * 100) / 100} BPM`
+                    : ""}{status.outputQuiet ? "; output quiet" : ""}
             </dd>
 
             <dt>Bay latency</dt>

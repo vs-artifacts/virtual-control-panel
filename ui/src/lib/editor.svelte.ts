@@ -25,18 +25,22 @@ export const quietLevelRange = { min: -120, max: 0 } as const
 export const quietMsRange = { min: 0, max: 5000 } as const
 
 // How long a change of the round trip or bay latency blends the old timing into the new: whole milliseconds
-export const jumpCrossfadeRange = { min: 0, max: 100 } as const
 
 function isWholeIn(value: unknown, range: { min: number; max: number }): value is number {
     return typeof value === 'number' && Number.isInteger(value) && value >= range.min && value <= range.max
 }
 
-// The bay bypass crossfade: whole milliseconds, 0 is off
-export const crossfadeRange = { min: 0, max: 500 } as const
+// The bay's fades, one per cause (whole milliseconds, 0 is off), by their settings keys
+export const fadeSettings = [
+    { key: 'bayJumpCrossfadeMs', max: 100, label: 'Round trip change', covers: 'the timing jump when the round trip changes (tempo, Automatic, Settings)' },
+    { key: 'bayLatencyFadeMs', max: 500, label: 'Bay latency change', covers: "the fade out and back in around the bay's sound held back for a latency change (e.g. linear phase), and the timing jump" },
+    { key: 'bayMuteFadeMs', max: 500, label: 'Mute', covers: "between the dry sound and the bay's, entering and leaving Mute" },
+    { key: 'bayBypassFadeMs', max: 500, label: 'Bypass', covers: "between the dry sound and the bay's, and the bay's send, entering and leaving Bypass" },
+    { key: 'bayOffFadeMs', max: 500, label: 'Off', covers: "the timing jump, the bay's send and the fade back in, entering and leaving Off" },
+    { key: 'bayDropoutFadeMs', max: 500, label: 'Dropouts', covers: "the fade out and back in around a missing return, and into the bay's first sound" },
+] as const
 
-function isCrossfadeMs(value: unknown): value is number {
-    return typeof value === 'number' && Number.isInteger(value) && value >= crossfadeRange.min && value <= crossfadeRange.max
-}
+export type FadeKey = (typeof fadeSettings)[number]['key']
 
 // How long a new bay latency must hold before it's used: whole milliseconds
 export const settleRange = { min: 0, max: 1000 } as const
@@ -85,7 +89,11 @@ export interface Settings {
     bayQuietLevelDb: number
     bayQuietMs: number
     bayJumpCrossfadeMs: number
-    bypassCrossfadeMs: number
+    bayLatencyFadeMs: number
+    bayMuteFadeMs: number
+    bayBypassFadeMs: number
+    bayOffFadeMs: number
+    bayDropoutFadeMs: number
     bayLatencySettleMs: number
     bayTailCutReleaseMs: number
     doubleClickMs: number
@@ -123,8 +131,12 @@ export const editor = $state({
         bayStoppedShrink: 'whenQuiet',
         bayQuietLevelDb: -80,
         bayQuietMs: 500,
-        bayJumpCrossfadeMs: 30,
-        bypassCrossfadeMs: 30,
+        bayJumpCrossfadeMs: 6,
+        bayLatencyFadeMs: 20,
+        bayMuteFadeMs: 12,
+        bayBypassFadeMs: 12,
+        bayOffFadeMs: 25,
+        bayDropoutFadeMs: 30,
         bayLatencySettleMs: 50,
         bayTailCutReleaseMs: 0,
         doubleClickMs: 500,
@@ -189,8 +201,11 @@ function readSettings(raw: unknown): void {
     settings.bayStoppedShrink = oneOf(stoppedShrinkRules, fields.bayStoppedShrink) ?? settings.bayStoppedShrink
     if (isWholeIn(fields.bayQuietLevelDb, quietLevelRange)) settings.bayQuietLevelDb = fields.bayQuietLevelDb
     if (isWholeIn(fields.bayQuietMs, quietMsRange)) settings.bayQuietMs = fields.bayQuietMs
-    if (isWholeIn(fields.bayJumpCrossfadeMs, jumpCrossfadeRange)) settings.bayJumpCrossfadeMs = fields.bayJumpCrossfadeMs
-    if (isCrossfadeMs(fields.bypassCrossfadeMs)) settings.bypassCrossfadeMs = fields.bypassCrossfadeMs
+    for (const fade of fadeSettings) {
+        const value = fields[fade.key]
+
+        if (isWholeIn(value, { min: 0, max: fade.max })) settings[fade.key] = value
+    }
     if (isSettleMs(fields.bayLatencySettleMs)) settings.bayLatencySettleMs = fields.bayLatencySettleMs
     if (isReleaseMs(fields.bayTailCutReleaseMs)) settings.bayTailCutReleaseMs = fields.bayTailCutReleaseMs
 }
