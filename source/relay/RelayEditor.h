@@ -19,7 +19,7 @@ private:
     void timerCallback() override;
 
     RelayProcessor& relay;
-    juce::Label title, audioStatus, inputLevel, linkStatus, roundTrip, missed, headroom, blocks, marker, controlsStatus, controlValues, panels;
+    juce::Label title, audioStatus, prepared, inputLevel, linkStatus, roundTrip, missed, headroom, blocks, marker, controlsStatus, controlValues, panels;
     juce::ToggleButton receiverButton { "Receiver (before the FL plugin)" };
     juce::ToggleButton transmitterButton { "Transmitter (after the FL plugin)" };
     juce::TextButton resetButton { "Reset counters" };

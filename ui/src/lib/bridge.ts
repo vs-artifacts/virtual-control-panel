@@ -88,9 +88,9 @@ export function onLink(listener: (status: unknown) => void): void {
     window.__JUCE__.backend.addEventListener('link', listener)
 }
 
-// The bay's bypass: off (the return plays), synced (the sent audio, delayed like the return), or dropLatency (the sent
-// audio at once: the bay's delay is dropped from the latency the host is told)
-export function sendBayBypass(value: 'off' | 'synced' | 'dropLatency'): void {
+// The bay's slot state: active (the bay's sound), mute or bypass (the sent audio, delayed like the return; bypass sends
+// the bay silence), or off (the sent audio at once: the bay's delay leaves the latency the host is told)
+export function sendBayBypass(value: 'active' | 'mute' | 'bypass' | 'off'): void {
     window.__JUCE__.backend.emitEvent('bayBypass', { value })
 }
 

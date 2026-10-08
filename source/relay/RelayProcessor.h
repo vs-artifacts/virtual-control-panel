@@ -13,6 +13,7 @@ public:
     static constexpr int numControlOutputs = RelayLink::numControls;
     static constexpr int markerInputBus = 1;
     static constexpr int markerOutputBus = 1 + numControlOutputs;
+    static constexpr int tailCutOutputBus = markerOutputBus + 1;
 
     RelayProcessor();
 
@@ -36,7 +37,7 @@ public:
     const juce::String getProgramName (int) override { return "Default"; }
     void changeProgramName (int, const juce::String&) override {}
 
-    // Saves and restores the mode and the control values
+    // Saves and restores the mode, the control values and the tail cut
     void getStateInformation (juce::MemoryBlock&) override;
     void setStateInformation (const void*, int) override;
 

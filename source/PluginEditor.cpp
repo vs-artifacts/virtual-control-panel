@@ -120,11 +120,10 @@ juce::var PluginEditor::describeEditor() const
     current->setProperty ("resizeRendering", EditorScale::toSettingsValue (settings->getResizeRendering()));
     current->setProperty ("resizeFlipAlt", settings->getFlipAltResize());
     current->setProperty ("flOutputCorrection", settings->getFlOutputCorrection());
-    current->setProperty ("bayDropouts", BayLink::toName (settings->getBayDropouts()));
     current->setProperty ("roundTripBlocks", settings->getRoundTripBlocks());
     current->setProperty ("bypassCrossfadeMs", settings->getBypassCrossfadeMs());
     current->setProperty ("bayLatencySettleMs", settings->getLatencySettleMs());
-    current->setProperty ("bayDropSends", BayLink::toName (settings->getDropSends()));
+    current->setProperty ("bayTailCutReleaseMs", settings->getTailCutReleaseMs());
     current->setProperty ("doubleClickMs", settings->getDoubleClickMs());
     current->setProperty ("doubleClickSets", settings->getDoubleClickSets());
 
@@ -175,8 +174,9 @@ juce::var PluginEditor::describeLink() const
     link->setProperty ("maxBlock", status.maxBlock);
     link->setProperty ("sampleRate", status.sampleRate);
     link->setProperty ("latency", pluginProcessor.getLatencySamples());
-    link->setProperty ("bypass", BayLink::toName (status.bypass));
-    link->setProperty ("dropSends", BayLink::toName (status.dropSends));
+    link->setProperty ("slotState", BayLink::toName (status.slotState));
+    link->setProperty ("awaitingBay", status.awaitingBay);
+    link->setProperty ("tailCutReleaseMs", status.tailCutReleaseMs);
     link->setProperty ("delay", status.delay);
     link->setProperty ("bayLatency", status.bayLatency);
     link->setProperty ("reading", BayLink::toName (status.reading));
@@ -187,9 +187,12 @@ juce::var PluginEditor::describeLink() const
     link->setProperty ("settledMs", status.settledMs);
     link->setProperty ("settleMs", status.settleMs);
     link->setProperty ("heldBack", static_cast<juce::int64> (status.heldBack));
+    link->setProperty ("heldStamped", static_cast<juce::int64> (status.heldStamped));
     link->setProperty ("dropouts", BayLink::toName (status.dropouts));
     link->setProperty ("crossfadeMs", status.crossfadeMs);
     link->setProperty ("missing", static_cast<juce::int64> (status.missing));
+    link->setProperty ("missingLate", static_cast<juce::int64> (status.missingLate));
+    link->setProperty ("missingGone", static_cast<juce::int64> (status.missingGone));
     link->setProperty ("receiverMisses", static_cast<juce::int64> (status.receiverMisses));
     link->setProperty ("replaced", static_cast<juce::int64> (status.replaced));
     link->setProperty ("oversized", static_cast<juce::int64> (status.oversized));
@@ -229,6 +232,7 @@ juce::var PluginEditor::describeLink() const
     probe->setProperty ("before", status.probe.before);
     probe->setProperty ("after", status.probe.after);
     link->setProperty ("probe", probe);
+    link->setProperty ("events", status.events);
     return link;
 }
 
@@ -269,14 +273,6 @@ void PluginEditor::handleSetting (const juce::var& message)
     {
         settings->setFlOutputCorrection (static_cast<bool> (value));
     }
-    else if (name == "bayDropouts" && value.isString())
-    {
-        if (const auto dropouts = BayLink::dropoutsFromName (value.toString()))
-        {
-            settings->setBayDropouts (*dropouts);
-            pluginProcessor.applyLinkSettings();
-        }
-    }
     else if (name == "roundTripBlocks" && value.isInt())
     {
         const auto blocks = static_cast<int> (value);
@@ -307,11 +303,13 @@ void PluginEditor::handleSetting (const juce::var& message)
             pluginProcessor.applyLinkSettings();
         }
     }
-    else if (name == "bayDropSends" && value.isString())
+    else if (name == "bayTailCutReleaseMs" && value.isInt())
     {
-        if (const auto sends = BayLink::dropSendsFromName (value.toString()))
+        const auto milliseconds = static_cast<int> (value);
+
+        if (milliseconds >= 0 && milliseconds <= BayLink::maxTailCutReleaseMs)
         {
-            settings->setDropSends (*sends);
+            settings->setTailCutReleaseMs (milliseconds);
             pluginProcessor.applyLinkSettings();
         }
     }
@@ -382,11 +380,11 @@ void PluginEditor::handleBayBypass (const juce::var& message)
     if (!value.isString())
         return;
 
-    if (const auto mode = BayLink::bypassFromName (value.toString()))
+    if (const auto state = BayLink::slotStateFromName (value.toString()))
     {
-        pluginProcessor.getBayLink().setBypass (*mode);
+        pluginProcessor.getBayLink().setSlotState (*state);
 
-        // Dropping the bay's latency changes what the host must be told
+        // Off drops the bay's delay: that changes what the host must be told
         pluginProcessor.applyLinkSettings();
     }
 }

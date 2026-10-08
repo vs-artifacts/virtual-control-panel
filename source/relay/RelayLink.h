@@ -70,6 +70,9 @@ public:
         std::optional<int> blockMin, blockMax;
         bool controlsLive = false; // receiver: the last block's values came from the panel (otherwise they're held)
         std::array<float, numControls> controls {};
+        float tailCut = 0.0f; // receiver: 1 while the panel's slot is Bypass or Off
+        juce::uint64 prepares = 0; // the host preparing the relay
+        juce::uint64 fallbacks = 0; // transmitter: a marker in use went, so the return is stamped by the receiver again
         MarkerState marker = MarkerState::unknown;
         std::optional<int> bayLatencyNow, bayLatencyLowest, bayLatencyHighest; // transmitter: samples, from the marker
         juce::uint64 markerUnreadable = 0; // transmitter: blocks
@@ -110,6 +113,11 @@ public:
     // relay's state so knobs don't drop when a project opens. Any thread.
     float getControl (int index) const noexcept { return controls[static_cast<size_t> (index)].load (std::memory_order_relaxed); }
     void setControl (int index, float value) noexcept;
+
+    // The tail cut output's value (the value after the controls in the panel's sets): 1 while the slot is Bypass or Off,
+    // for a Peak Controller to clear the bay's plugin. Held and kept like the controls. Any thread.
+    float getTailCut() const noexcept { return tailCut.load (std::memory_order_relaxed); }
+    void setTailCut (float value) noexcept;
 
     // Blocks without new audio from the other side before it counts as stopped rather than missed
     static constexpr int stallBlocks = 2;
@@ -165,7 +173,8 @@ private:
     // Audio thread to message thread
     std::atomic<bool> otherSideRunning { false }, sampleRateDiffers { false }, controlsLive { false };
     std::array<std::atomic<float>, numControls> controls {};
-    std::atomic<juce::uint64> missed { 0 };
+    std::atomic<float> tailCut { 0.0f };
+    std::atomic<juce::uint64> missed { 0 }, prepares { 0 }, fallbacks { 0 };
     std::atomic<Miss> lastMiss { Miss::none };
     std::atomic<MarkerState> markerState { MarkerState::unknown };
     std::atomic<juce::uint64> markerUnreadable { 0 };

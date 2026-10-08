@@ -5,6 +5,7 @@
         crossfadeRange,
         doubleClickRange,
         editor,
+        releaseRange,
         resetSize,
         settleRange,
         type Settings,
@@ -40,31 +41,6 @@
         {
             value: "sharp",
             text: "Sharp (laid out again at every size: crisp, but elements can shift by a pixel)",
-        },
-    ];
-
-    const dropoutModes: {
-        value: Settings["bayDropouts"];
-        text: string;
-    }[] = [
-        {
-            value: "safe",
-            text: "Safe (plays the audio that was sent, so only the bay is skipped)",
-        },
-        { value: "silence", text: "Silence (makes dropouts audible)" },
-    ];
-
-    const dropSendsModes: {
-        value: Settings["bayDropSends"];
-        text: string;
-    }[] = [
-        {
-            value: "silence",
-            text: "Silence (FL's smart disable may switch the bay's plugin off; switching back, the bay's sound returns a round trip and its latency later)",
-        },
-        {
-            value: "audio",
-            text: "The panel's sound (the bay keeps processing, its tails carry on)",
         },
     ];
 
@@ -110,6 +86,20 @@
         }
 
         event.currentTarget.value = String(editor.settings.bayLatencySettleMs);
+    }
+
+    function changeRelease(event: Event & { currentTarget: HTMLInputElement }) {
+        const typed = event.currentTarget.valueAsNumber;
+
+        if (Number.isFinite(typed)) {
+            const milliseconds = Math.min(
+                releaseRange.max,
+                Math.max(releaseRange.min, Math.round(typed)),
+            );
+            changeSetting("bayTailCutReleaseMs", milliseconds);
+        }
+
+        event.currentTarget.value = String(editor.settings.bayTailCutReleaseMs);
     }
 
     function changeDoubleClick(
@@ -241,21 +231,6 @@
 </fieldset>
 
 <fieldset>
-    <legend>Bay dropouts (missing return blocks)</legend>
-    {#each dropoutModes as option (option.value)}
-        <label class="option">
-            <input
-                type="radio"
-                name="bayDropouts"
-                checked={editor.settings.bayDropouts === option.value}
-                onchange={() => changeSetting("bayDropouts", option.value)}
-            />
-            {option.text}
-        </label>
-    {/each}
-</fieldset>
-
-<fieldset>
     <legend>Bay round trip (the host is told it as latency)</legend>
     {#each roundTrips as option (option.value)}
         <label class="option">
@@ -305,23 +280,30 @@
     </label>
     <p class="hint">
         A new bay latency must hold this long before the panel uses it;
-        meanwhile the bay's sound is held back and the sent audio plays.
+        meanwhile the bay's sound is held back (silence, faded).
     </p>
 </fieldset>
 
 <fieldset>
-    <legend>While a bay is bypassed with its latency dropped, send it</legend>
-    {#each dropSendsModes as option (option.value)}
-        <label class="option">
-            <input
-                type="radio"
-                name="bayDropSends"
-                checked={editor.settings.bayDropSends === option.value}
-                onchange={() => changeSetting("bayDropSends", option.value)}
-            />
-            {option.text}
-        </label>
-    {/each}
+    <legend>Bay tail cut release</legend>
+    <label class="option">
+        <input
+            id="tail-cut-release"
+            class="milliseconds"
+            type="number"
+            min={releaseRange.min}
+            max={releaseRange.max}
+            step="1"
+            value={editor.settings.bayTailCutReleaseMs}
+            onchange={changeRelease}
+        />
+        ms ({releaseRange.min} to {releaseRange.max})
+    </label>
+    <p class="hint">
+        After a bay leaves Bypass or Off, its sound is held back this much
+        longer (the sent audio plays on), since a plugin cleared through the
+        relay's Tail cut output reacts some ms late.
+    </p>
 </fieldset>
 
 <div class="size">

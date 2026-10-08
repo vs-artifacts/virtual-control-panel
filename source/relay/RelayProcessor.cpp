@@ -14,7 +14,8 @@ juce::AudioProcessor::BusesProperties RelayProcessor::createBuses()
         buses = buses.withOutput ("Control " + juce::String (number), juce::AudioChannelSet::mono(), true);
 
     // After the controls, so FL's target numbers for them stay put
-    return buses.withOutput ("Marker", juce::AudioChannelSet::stereo(), true);
+    return buses.withOutput ("Marker", juce::AudioChannelSet::stereo(), true)
+        .withOutput ("Tail cut", juce::AudioChannelSet::mono(), true);
 }
 
 RelayProcessor::RelayProcessor()
@@ -67,17 +68,24 @@ void RelayProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     // Outputs share their channels with the inputs; every output is silent except what the link plays
     link.process (buffer, stereoPin (true, markerInputBus), stereoPin (false, markerOutputBus));
 
-    // A receiver's control outputs: each value as a steady level, held when the panel's values don't arrive
+    // A receiver's control outputs and tail cut: each value as a steady level, held when the panel's values don't arrive
     if (getMode() != RelayLink::Mode::receiver)
         return;
 
-    for (int bus = 1; bus <= std::min (numControlOutputs, getBusCount (false) - 1); ++bus)
-    {
+    const auto fill = [this, &buffer] (int bus, float value) {
+        if (bus >= getBusCount (false))
+            return;
+
         auto output = getBusBuffer (buffer, false, bus);
 
         for (int channel = 0; channel < output.getNumChannels(); ++channel)
-            juce::FloatVectorOperations::fill (output.getWritePointer (channel), link.getControl (bus - 1), output.getNumSamples());
-    }
+            juce::FloatVectorOperations::fill (output.getWritePointer (channel), value, output.getNumSamples());
+    };
+
+    for (int bus = 1; bus <= numControlOutputs; ++bus)
+        fill (bus, link.getControl (bus - 1));
+
+    fill (tailCutOutputBus, link.getTailCut());
 }
 
 void RelayProcessor::getStateInformation (juce::MemoryBlock& destData)
@@ -88,6 +96,7 @@ void RelayProcessor::getStateInformation (juce::MemoryBlock& destData)
     for (int i = 0; i < numControlOutputs; ++i)
         state.setAttribute ("control" + juce::String (i + 1), static_cast<double> (link.getControl (i)));
 
+    state.setAttribute ("tailCut", static_cast<double> (link.getTailCut()));
     copyXmlToBinary (state, destData);
 }
 
@@ -109,6 +118,9 @@ void RelayProcessor::setStateInformation (const void* data, int sizeInBytes)
     for (int i = 0; i < numControlOutputs; ++i)
         if (const auto name = "control" + juce::String (i + 1); state->hasAttribute (name))
             link.setControl (i, static_cast<float> (state->getDoubleAttribute (name)));
+
+    if (state->hasAttribute ("tailCut"))
+        link.setTailCut (static_cast<float> (state->getDoubleAttribute ("tailCut")));
 }
 
 bool RelayProcessor::isBeingProcessed() const noexcept

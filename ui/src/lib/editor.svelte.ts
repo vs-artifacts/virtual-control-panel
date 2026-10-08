@@ -17,8 +17,6 @@ export function tabScrollArea(tab: number, layout: TabLayout): string {
 const placements = ['off', 'hostPlaced', 'mouse', 'hostMainWindow'] as const
 const attachedPlacements = ['off', 'workspace', 'hostMonitor'] as const
 export const renderings = ['smooth', 'sharp'] as const
-const dropoutModes = ['safe', 'silence'] as const
-const dropSendsModes = ['silence', 'audio'] as const
 const roundTrips = [0, 1, 2, 3] as const
 
 // The bay bypass crossfade: whole milliseconds, 0 is off
@@ -33,6 +31,13 @@ export const settleRange = { min: 0, max: 1000 } as const
 
 function isSettleMs(value: unknown): value is number {
     return typeof value === 'number' && Number.isInteger(value) && value >= settleRange.min && value <= settleRange.max
+}
+
+// How much longer a bay's sound is held back after it leaves Bypass or Off: whole milliseconds
+export const releaseRange = { min: 0, max: 1000 } as const
+
+function isReleaseMs(value: unknown): value is number {
+    return typeof value === 'number' && Number.isInteger(value) && value >= releaseRange.min && value <= releaseRange.max
 }
 
 // The longest gap between the clicks of a double-click, in whole milliseconds
@@ -50,13 +55,11 @@ export interface Settings {
     resizeRendering: (typeof renderings)[number]
     resizeFlipAlt: boolean
     flOutputCorrection: boolean
-    bayDropouts: (typeof dropoutModes)[number]
     // 0: automatic
     roundTripBlocks: (typeof roundTrips)[number]
     bypassCrossfadeMs: number
     bayLatencySettleMs: number
-    // What a bay bypassed with its latency dropped is sent
-    bayDropSends: (typeof dropSendsModes)[number]
+    bayTailCutReleaseMs: number
     doubleClickMs: number
     // Placeholder: double-click will open a value entry instead of resetting
     doubleClickSets: boolean
@@ -85,11 +88,10 @@ export const editor = $state({
         resizeRendering: 'smooth',
         resizeFlipAlt: false,
         flOutputCorrection: true,
-        bayDropouts: 'safe',
         roundTripBlocks: 0,
         bypassCrossfadeMs: 30,
         bayLatencySettleMs: 50,
-        bayDropSends: 'silence',
+        bayTailCutReleaseMs: 0,
         doubleClickMs: 500,
         doubleClickSets: false,
     } as Settings,
@@ -145,11 +147,10 @@ function readSettings(raw: unknown): void {
     settings.editorPlacement = oneOf(placements, fields.editorPlacement) ?? settings.editorPlacement
     settings.attachedPlacement = oneOf(attachedPlacements, fields.attachedPlacement) ?? settings.attachedPlacement
     settings.resizeRendering = oneOf(renderings, fields.resizeRendering) ?? settings.resizeRendering
-    settings.bayDropouts = oneOf(dropoutModes, fields.bayDropouts) ?? settings.bayDropouts
     settings.roundTripBlocks = roundTrips.find((blocks) => blocks === fields.roundTripBlocks) ?? settings.roundTripBlocks
     if (isCrossfadeMs(fields.bypassCrossfadeMs)) settings.bypassCrossfadeMs = fields.bypassCrossfadeMs
     if (isSettleMs(fields.bayLatencySettleMs)) settings.bayLatencySettleMs = fields.bayLatencySettleMs
-    settings.bayDropSends = oneOf(dropSendsModes, fields.bayDropSends) ?? settings.bayDropSends
+    if (isReleaseMs(fields.bayTailCutReleaseMs)) settings.bayTailCutReleaseMs = fields.bayTailCutReleaseMs
 }
 
 function readLines(raw: unknown, limit: number): string[] {

@@ -11,11 +11,10 @@ namespace
     constexpr auto flipAltResizeKey = "resizeFlipAlt";
     constexpr auto lastEditorScaleKey = "lastEditorScale";
     constexpr auto flOutputCorrectionKey = "flOutputCorrection";
-    constexpr auto dropoutModeKey = "bayDropouts";
     constexpr auto roundTripBlocksKey = "bayRoundTrip";
     constexpr auto bypassCrossfadeKey = "bayBypassCrossfadeMs";
     constexpr auto latencySettleKey = "bayLatencySettleMs";
-    constexpr auto dropSendsKey = "bayDropSends";
+    constexpr auto tailCutReleaseKey = "bayTailCutReleaseMs";
     constexpr auto doubleClickMsKey = "doubleClickMs";
     constexpr auto doubleClickSetsKey = "doubleClickSets";
 }
@@ -105,16 +104,6 @@ void PluginSettings::setFlOutputCorrection (bool shouldCorrect)
     file.setValue (flOutputCorrectionKey, shouldCorrect);
 }
 
-BayLink::Dropouts PluginSettings::getBayDropouts() const
-{
-    return BayLink::dropoutsFromName (file.getValue (dropoutModeKey)).value_or (BayLink::Dropouts::safe);
-}
-
-void PluginSettings::setBayDropouts (BayLink::Dropouts dropouts)
-{
-    file.setValue (dropoutModeKey, BayLink::toName (dropouts));
-}
-
 int PluginSettings::getRoundTripBlocks() const
 {
     const auto blocks = file.getIntValue (roundTripBlocksKey, BayLink::defaultRoundTripBlocks);
@@ -146,14 +135,14 @@ void PluginSettings::setLatencySettleMs (int milliseconds)
     file.setValue (latencySettleKey, juce::jlimit (0, BayLink::maxSettleMs, milliseconds));
 }
 
-BayLink::DropSends PluginSettings::getDropSends() const
+int PluginSettings::getTailCutReleaseMs() const
 {
-    return BayLink::dropSendsFromName (file.getValue (dropSendsKey)).value_or (BayLink::DropSends::silence);
+    return juce::jlimit (0, BayLink::maxTailCutReleaseMs, file.getIntValue (tailCutReleaseKey, BayLink::defaultTailCutReleaseMs));
 }
 
-void PluginSettings::setDropSends (BayLink::DropSends value)
+void PluginSettings::setTailCutReleaseMs (int milliseconds)
 {
-    file.setValue (dropSendsKey, BayLink::toName (value));
+    file.setValue (tailCutReleaseKey, juce::jlimit (0, BayLink::maxTailCutReleaseMs, milliseconds));
 }
 
 int PluginSettings::getDoubleClickMs() const

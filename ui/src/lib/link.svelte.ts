@@ -6,12 +6,11 @@ const dropoutModes = ['safe', 'silence'] as const
 const autoStates = ['off', 'checking', 'oneBlock', 'fellBack'] as const
 const lagStates = ['notMeasured', 'measuring', 'found', 'noReturn', 'noMatch'] as const
 const probeStates = ['notRun', 'running', 'found', 'noReturn', 'noChange'] as const
-export const bypassModes = ['off', 'synced', 'dropLatency'] as const
-const dropSendsModes = ['silence', 'audio'] as const
+export const slotStates = ['active', 'mute', 'bypass', 'off'] as const
 const readings = ['none', 'measured', 'unreadable', 'outOfRange', 'noInput'] as const
 
 export type AutoState = (typeof autoStates)[number]
-export type BypassMode = (typeof bypassModes)[number]
+export type SlotState = (typeof slotStates)[number]
 export type Reading = (typeof readings)[number]
 
 // A delay at which the panel's test burst comes back, and how strongly (1: as loud as sent)
@@ -53,10 +52,11 @@ export interface LinkStatus {
     maxBlock: number
     sampleRate: number
     latency: number
-    bypass: BypassMode
-    // What a bay bypassed with its latency dropped is sent
-    dropSends: (typeof dropSendsModes)[number]
-    // Samples the output plays behind the engine: round trip + bay latency, or 0 with latency dropped
+    slotState: SlotState
+    // Active, but the bay's sound isn't back yet (since a state was left, or ever): the sent audio plays
+    awaitingBay: boolean
+    tailCutReleaseMs: number
+    // Samples the output plays behind the engine: round trip + bay latency, or 0 when Off
     delay: number
     // The bay plugin's own latency in use, and the transmitter's latest reading of it (from the position marker)
     bayLatency: number
@@ -69,9 +69,12 @@ export interface LinkStatus {
     settledMs: number
     settleMs: number
     heldBack: number
+    heldStamped: number
     dropouts: (typeof dropoutModes)[number]
     crossfadeMs: number
     missing: number
+    missingLate: number
+    missingGone: number
     receiverMisses: number
     replaced: number
     oversized: number
@@ -84,6 +87,8 @@ export interface LinkStatus {
     differenceLargest: number | null
     lag: Lag
     probe: Probe
+    // The event log, newest first
+    events: string[]
 }
 
 // Unknown (null) until the plugin says
@@ -138,8 +143,9 @@ export function readLink(raw: unknown): LinkStatus | null {
         maxBlock: count(fields.maxBlock),
         sampleRate: count(fields.sampleRate),
         latency: count(fields.latency),
-        bypass: oneOf(bypassModes, fields.bypass) ?? 'off',
-        dropSends: oneOf(dropSendsModes, fields.dropSends) ?? 'silence',
+        slotState: oneOf(slotStates, fields.slotState) ?? 'active',
+        awaitingBay: fields.awaitingBay === true,
+        tailCutReleaseMs: count(fields.tailCutReleaseMs),
         delay: count(fields.delay),
         bayLatency: count(fields.bayLatency),
         reading: oneOf(readings, fields.reading) ?? 'none',
@@ -150,9 +156,12 @@ export function readLink(raw: unknown): LinkStatus | null {
         settledMs: count(fields.settledMs),
         settleMs: count(fields.settleMs),
         heldBack: count(fields.heldBack),
-        dropouts: oneOf(dropoutModes, fields.dropouts) ?? 'safe',
+        heldStamped: count(fields.heldStamped),
+        dropouts: oneOf(dropoutModes, fields.dropouts) ?? 'silence',
         crossfadeMs: count(fields.crossfadeMs),
         missing: count(fields.missing),
+        missingLate: count(fields.missingLate),
+        missingGone: count(fields.missingGone),
         receiverMisses: count(fields.receiverMisses),
         replaced: count(fields.replaced),
         oversized: count(fields.oversized),
@@ -165,6 +174,7 @@ export function readLink(raw: unknown): LinkStatus | null {
         differenceLargest: finiteOrNull(fields.differenceLargest),
         lag: readLag(fields.lag),
         probe: readProbe(fields.probe),
+        events: Array.isArray(fields.events) ? fields.events.slice(0, 40).filter((line): line is string => typeof line === 'string').map((line) => text(line, 200)) : [],
     }
 }
 
@@ -177,11 +187,11 @@ export function listenForLink(): void {
 }
 
 // Only offered once the plugin has reported the link, so the bridge is known to be there
-export function setBayBypass(bypass: BypassMode): void {
+export function setBaySlotState(state: SlotState): void {
     if (link.status === null) return
 
-    link.status.bypass = bypass
-    sendBayBypass(bypass)
+    link.status.slotState = state
+    sendBayBypass(state)
 }
 
 export function measureLag(): void {

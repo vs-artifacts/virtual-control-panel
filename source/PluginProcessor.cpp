@@ -110,22 +110,22 @@ void PluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 
 void PluginProcessor::applyLinkSettings()
 {
-    bayLink.setDropouts (settings->getBayDropouts());
     bayLink.setCrossfadeMs (settings->getBypassCrossfadeMs());
     bayLink.setSettleMs (settings->getLatencySettleMs());
-    bayLink.setDropSends (settings->getDropSends());
+    bayLink.setTailCutReleaseMs (settings->getTailCutReleaseMs());
 
     if (const auto blocks = settings->getRoundTripBlocks(); blocks != bayLink.getRoundTripBlocks())
         bayLink.setRoundTripBlocks (blocks);
 
     bayLink.updateRoundTrip();
     bayLink.updateBayLatency();
+    bayLink.updateEventLog();
     reportLatency();
 }
 
 void PluginProcessor::reportLatency()
 {
-    // The bay's delay (round trip + its plugin's latency, unless dropped) delays everything we play, the direct sound
+    // The bay's delay (round trip + its plugin's latency, unless Off) delays everything we play, the direct sound
     // included. Only a change reaches the host.
     setLatencySamples (engine.getLatencySamples() + bayLink.getDelaySamples());
 }
@@ -205,7 +205,7 @@ void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setAttribute ("editorPlaced", editorPlaced);
     state.setAttribute ("editorTab", editorTab);
     state.setAttribute ("diagnosticsOpen", diagnosticsOpen);
-    state.setAttribute ("bayBypassMode", BayLink::toName (bayLink.getBypass()));
+    state.setAttribute ("baySlotState", BayLink::toName (bayLink.getSlotState()));
 
     if (editorScale.has_value())
         state.setAttribute ("editorScale", *editorScale);
@@ -243,15 +243,18 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
                 if (const auto area = findEditorScrollArea (entry->getStringAttribute ("name")))
                     setEditorScroll (*area, entry->getIntAttribute ("top"));
 
-        // Earlier projects have a bypass on/off switch (now "synced"), or before that the output switch
-        using Bypass = BayLink::BypassMode;
+        // Earlier projects have a three-way bypass, before that an on/off switch, before that the output switch: any of
+        // them on opens as Mute
+        using Slot = BayLink::SlotState;
 
-        if (state->hasAttribute ("bayBypassMode"))
-            bayLink.setBypass (BayLink::bypassFromName (state->getStringAttribute ("bayBypassMode")).value_or (Bypass::off));
+        if (state->hasAttribute ("baySlotState"))
+            bayLink.setSlotState (BayLink::slotStateFromName (state->getStringAttribute ("baySlotState")).value_or (Slot::active));
+        else if (state->hasAttribute ("bayBypassMode"))
+            bayLink.setSlotState (juce::StringArray { "synced", "dropLatency" }.contains (state->getStringAttribute ("bayBypassMode")) ? Slot::mute : Slot::active);
         else if (state->hasAttribute ("bayBypass"))
-            bayLink.setBypass (state->getBoolAttribute ("bayBypass") ? Bypass::synced : Bypass::off);
+            bayLink.setSlotState (state->getBoolAttribute ("bayBypass") ? Slot::mute : Slot::active);
         else
-            bayLink.setBypass (state->getStringAttribute ("bayOutput") == "direct" ? Bypass::synced : Bypass::off);
+            bayLink.setSlotState (state->getStringAttribute ("bayOutput") == "direct" ? Slot::mute : Slot::active);
 
         if (state->hasAttribute ("editorScale"))
             editorScale = EditorScale::constrain (state->getDoubleAttribute ("editorScale"));

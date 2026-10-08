@@ -47,10 +47,6 @@ public:
     bool getFlOutputCorrection() const;
     void setFlOutputCorrection (bool);
 
-    // What plays when a bay's return block is missing: the audio that was sent (safe), or silence (makes dropouts audible)
-    BayLink::Dropouts getBayDropouts() const;
-    void setBayDropouts (BayLink::Dropouts);
-
     // A bay's round trip: BayLink::autoRoundTrip, or blocks of the host's largest block size. Reported to the host as latency.
     int getRoundTripBlocks() const;
     void setRoundTripBlocks (int);
@@ -64,9 +60,10 @@ public:
     int getLatencySettleMs() const;
     void setLatencySettleMs (int);
 
-    // What a bay bypassed with its latency dropped is sent: silence, or the panel's sound
-    BayLink::DropSends getDropSends() const;
-    void setDropSends (BayLink::DropSends);
+    // After a bay leaves Bypass or Off, its sound is held back this much longer (its plugin, cleared through a Peak
+    // Controller, reacts some ms late)
+    int getTailCutReleaseMs() const;
+    void setTailCutReleaseMs (int);
 
     // The longest gap between the two clicks of a double-click on the page's controls
     static constexpr int minDoubleClickMs = 1, maxDoubleClickMs = 2000, defaultDoubleClickMs = 500;

@@ -169,7 +169,7 @@ RelayEditor::RelayEditor (RelayProcessor& p)
 
     addAndMakeVisible (resetButton);
 
-    for (auto* label : { &title, &audioStatus, &inputLevel, &linkStatus, &roundTrip, &missed, &headroom, &blocks, &marker, &controlsStatus, &controlValues, &panels })
+    for (auto* label : { &title, &audioStatus, &prepared, &inputLevel, &linkStatus, &roundTrip, &missed, &headroom, &blocks, &marker, &controlsStatus, &controlValues, &panels })
         addAndMakeVisible (label);
 
     controlValues.setJustificationType (juce::Justification::topLeft);
@@ -179,7 +179,7 @@ RelayEditor::RelayEditor (RelayProcessor& p)
 
     timerCallback();
     startTimerHz (4);
-    setSize (680, 640);
+    setSize (680, 666);
 }
 
 void RelayEditor::paint (juce::Graphics& g)
@@ -196,7 +196,7 @@ void RelayEditor::resized()
     receiverButton.setBounds (modes.removeFromTop (24));
     transmitterButton.setBounds (modes);
 
-    for (auto* label : { &linkStatus, &roundTrip, &missed, &headroom, &blocks, &marker, &audioStatus, &inputLevel, &controlsStatus })
+    for (auto* label : { &linkStatus, &roundTrip, &missed, &headroom, &blocks, &marker, &audioStatus, &prepared, &inputLevel, &controlsStatus })
         label->setBounds (area.removeFromTop (26));
 
     controlValues.setBounds (area.removeFromTop (80));
@@ -208,7 +208,7 @@ juce::StringArray RelayEditor::getStatusLines() const
 {
     juce::StringArray lines;
 
-    for (const auto* label : { &linkStatus, &roundTrip, &missed, &headroom, &blocks, &marker, &audioStatus, &inputLevel, &controlsStatus, &controlValues, &panels })
+    for (const auto* label : { &linkStatus, &roundTrip, &missed, &headroom, &blocks, &marker, &audioStatus, &prepared, &inputLevel, &controlsStatus, &controlValues, &panels })
         lines.add (label->getText());
 
     return lines;
@@ -239,16 +239,20 @@ void RelayEditor::timerCallback()
     marker.setText (describeMarker (status), juce::dontSendNotification);
     panels.setText (describePanels (relay.getLink().getPanels(), relay.getLink().getLinkedPanel()), juce::dontSendNotification);
     audioStatus.setText (relay.isBeingProcessed() ? "Audio: running" : "Audio: not running (stopped by the host)", juce::dontSendNotification);
+    prepared.setText ("Prepared by the host: " + juce::String (status.prepares) + " times"
+                          + (receiver ? juce::String() : "; fallbacks to the receiver's position: " + juce::String (status.fallbacks)) + " (since reset)",
+        juce::dontSendNotification);
     inputLevel.setText ("Input peak: " + juce::String (relay.getInputPeak(), 7), juce::dontSendNotification);
 
     if (!receiver)
     {
-        controlsStatus.setText ("Control outputs: silent (receivers only)", juce::dontSendNotification);
+        controlsStatus.setText ("Control outputs and tail cut: silent (receivers only)", juce::dontSendNotification);
         controlValues.setText ({}, juce::dontSendNotification);
         return;
     }
 
-    controlsStatus.setText (status.controlsLive ? "Control outputs: from the panel" : "Control outputs: holding the last values", juce::dontSendNotification);
+    controlsStatus.setText (juce::String (status.controlsLive ? "Control outputs: from the panel" : "Control outputs: holding the last values") + "; tail cut " + juce::String (status.tailCut, 7),
+        juce::dontSendNotification);
 
     // Exact values, four to a line
     juce::String values;

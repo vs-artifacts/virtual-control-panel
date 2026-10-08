@@ -3,31 +3,53 @@
         link,
         measureLag,
         resetLinkCounters,
-        setBayBypass,
+        setBaySlotState,
         startProbe,
-        type BypassMode,
         type Lag,
         type LinkStatus,
         type Probe,
+        type SlotState,
     } from "../lib/link.svelte";
 
-    const bypassChoices: { value: BypassMode; text: string }[] = [
-        { value: "off", text: "Off" },
-        { value: "synced", text: "Bypass, synced" },
-        { value: "dropLatency", text: "Bypass, drop latency" },
+    // Each a toggle that acts like a radio button: pressing the selected one again goes back to Active
+    const slotChoices: { value: SlotState; text: string; title: string }[] = [
+        {
+            value: "mute",
+            text: "Mute",
+            title: "The sent audio plays at the same delay; the bay keeps getting the panel's sound, so its tails carry on",
+        },
+        {
+            value: "bypass",
+            text: "Bypass",
+            title: "The sent audio plays at the same delay; the bay gets silence and its tail cut output is on",
+        },
+        {
+            value: "off",
+            text: "Off",
+            title: "The sent audio plays at once, without the bay's delay (the host is told the lower latency); the bay gets silence and its tail cut output is on",
+        },
     ];
 
     // The most bay latency the panel takes (HS_LINK_MAX_LATENCY)
     const maxBayLatency = 32768;
 
-    function describeBypass(status: LinkStatus): string {
-        switch (status.bypass) {
+    function describeSlot(status: LinkStatus): string {
+        const release =
+            status.tailCutReleaseMs > 0
+                ? ` (after Bypass or Off, plus the ${status.tailCutReleaseMs} ms tail cut release)`
+                : "";
+
+        switch (status.slotState) {
+            case "active":
+                return status.awaitingBay
+                    ? `Active: the sent audio plays until the bay's sound is back${release}, then crossfades (${status.crossfadeMs} ms)`
+                    : `Active: the bay's sound plays (crossfade ${status.crossfadeMs} ms)`;
+            case "mute":
+                return "Mute: the sent audio plays, at the same delay; the bay keeps getting the panel's sound";
+            case "bypass":
+                return "Bypass: the sent audio plays, at the same delay; the bay gets silence, tail cut 1";
             case "off":
-                return `the bay's sound plays (crossfade ${status.crossfadeMs} ms)`;
-            case "synced":
-                return `the sent audio plays, at the same delay (crossfade ${status.crossfadeMs} ms)`;
-            case "dropLatency":
-                return `the sent audio plays at once, without the bay's delay; the bay is sent ${status.dropSends === "silence" ? "silence" : "the panel's sound"}`;
+                return "Off: the sent audio plays at once, without the bay's delay; the bay gets silence, tail cut 1";
         }
     }
 
@@ -199,33 +221,39 @@
                 {status.delay} samples ({milliseconds(
                     status.delay,
                     status.sampleRate,
-                )} ms; {status.bypass === "dropLatency"
-                    ? "bay latency dropped"
+                )} ms; {status.slotState === "off"
+                    ? "Off: bay delay dropped"
                     : "round trip + bay latency"}); host told {status.latency}
             </dd>
 
-            <dt>Bypass</dt>
+            <dt>Slot</dt>
             <dd class="choices">
-                {#each bypassChoices as choice (choice.value)}
-                    <label>
-                        <input
-                            id="link-bypass-{choice.value}"
-                            type="radio"
-                            name="link-bypass"
-                            checked={status.bypass === choice.value}
-                            onchange={() => setBayBypass(choice.value)}
-                        />
-                        {choice.text}
-                    </label>
+                {#each slotChoices as choice (choice.value)}
+                    <button
+                        id="link-slot-{choice.value}"
+                        type="button"
+                        class="toggle"
+                        aria-pressed={status.slotState === choice.value}
+                        title={choice.title}
+                        onclick={() =>
+                            setBaySlotState(
+                                status.slotState === choice.value
+                                    ? "active"
+                                    : choice.value,
+                            )}>{choice.text}</button
+                    >
                 {/each}
             </dd>
 
             <dt></dt>
-            <dd id="link-bypass-note">{describeBypass(status)}</dd>
+            <dd id="link-slot-note" class:warning={status.awaitingBay}>
+                {describeSlot(status)}
+            </dd>
 
             <dt>Missing blocks</dt>
             <dd id="link-missing">
-                {status.missing} (dropouts play {status.dropouts === "safe"
+                {status.missing} (late {status.missingLate}, gone {status.missingGone};
+                dropouts play {status.dropouts === "safe"
                     ? "the sent audio"
                     : "silence"})
             </dd>
@@ -237,7 +265,8 @@
 
             <dt>Held back</dt>
             <dd id="link-held-back">
-                {status.heldBack} blocks while a new bay latency settled
+                {status.heldBack} blocks while a new bay latency settled; {status.heldStamped}
+                stamped by the receiver's position
             </dd>
 
             <dt>Controls</dt>
@@ -303,6 +332,15 @@
 
         <button type="button" onclick={resetLinkCounters}>Reset counters</button
         >
+
+        <h3>Events (newest first)</h3>
+        <ul id="link-events" class="events">
+            {#each status.events as line, index (index)}
+                <li>{line}</li>
+            {:else}
+                <li>none yet</li>
+            {/each}
+        </ul>
     </section>
 {:else}
     <p class="waiting">No bay link status from the plugin</p>
@@ -338,23 +376,37 @@
         gap: 14px;
     }
 
-    .choices label {
-        display: flex;
-        align-items: center;
-        gap: 5px;
-    }
-
     .choices button {
         flex-shrink: 0;
-    }
-
-    input {
-        margin: 0;
     }
 
     .warning {
         margin: 0 0 8px;
         color: #ffb36b;
+    }
+
+    dd.warning {
+        margin: 0;
+    }
+
+    .toggle[aria-pressed="true"] {
+        background: #ffb36b;
+        color: #000;
+    }
+
+    h3 {
+        margin: 12px 0 4px;
+        font-size: 13px;
+        font-weight: 500;
+        opacity: 0.7;
+    }
+
+    .events {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        font-variant-numeric: tabular-nums;
+        overflow-wrap: anywhere;
     }
 
     .waiting {

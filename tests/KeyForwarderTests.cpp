@@ -181,11 +181,10 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
         CHECK (juce::exactlyEqual (settings.getLastEditorScale(), 1.0));
         CHECK_FALSE (settings.getFlipAltResize());
         CHECK (settings.getFlOutputCorrection());
-        CHECK (settings.getBayDropouts() == BayLink::Dropouts::safe);
         CHECK (settings.getRoundTripBlocks() == BayLink::autoRoundTrip);
         CHECK (settings.getBypassCrossfadeMs() == BayLink::defaultCrossfadeMs);
         CHECK (settings.getLatencySettleMs() == BayLink::defaultSettleMs);
-        CHECK (settings.getDropSends() == BayLink::DropSends::silence);
+        CHECK (settings.getTailCutReleaseMs() == BayLink::defaultTailCutReleaseMs);
         CHECK (settings.getEditorPlacement() == EditorPlacement::Monitor::hostPlaced);
         CHECK (settings.getAttachedPlacement() == EditorPlacement::Attached::workspace);
         CHECK (settings.getDoubleClickMs() == PluginSettings::defaultDoubleClickMs);
@@ -196,11 +195,10 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
         settings.setFlipAltResize (true);
         settings.setLastEditorScale (99.0);
         settings.setFlOutputCorrection (false);
-        settings.setBayDropouts (BayLink::Dropouts::silence);
         settings.setRoundTripBlocks (7);
         settings.setBypassCrossfadeMs (50);
         settings.setLatencySettleMs (5000);
-        settings.setDropSends (BayLink::DropSends::audio);
+        settings.setTailCutReleaseMs (5000);
         settings.setEditorPlacement (EditorPlacement::Monitor::mouse);
         settings.setAttachedPlacement (EditorPlacement::Attached::hostMonitor);
         settings.setDoubleClickMs (5000);
@@ -213,11 +211,10 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
     CHECK (reloaded.getFlipAltResize());
     CHECK (juce::exactlyEqual (reloaded.getLastEditorScale(), EditorScale::maximum));
     CHECK_FALSE (reloaded.getFlOutputCorrection());
-    CHECK (reloaded.getBayDropouts() == BayLink::Dropouts::silence);
     CHECK (reloaded.getRoundTripBlocks() == BayLink::maxRoundTripBlocks);
     CHECK (reloaded.getBypassCrossfadeMs() == 50);
     CHECK (reloaded.getLatencySettleMs() == BayLink::maxSettleMs);
-    CHECK (reloaded.getDropSends() == BayLink::DropSends::audio);
+    CHECK (reloaded.getTailCutReleaseMs() == BayLink::maxTailCutReleaseMs);
     CHECK (reloaded.getEditorPlacement() == EditorPlacement::Monitor::mouse);
     CHECK (reloaded.getAttachedPlacement() == EditorPlacement::Attached::hostMonitor);
     CHECK (reloaded.getDoubleClickMs() == PluginSettings::maxDoubleClickMs);

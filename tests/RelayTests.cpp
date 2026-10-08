@@ -11,12 +11,13 @@ TEST_CASE ("The relay test build", "[relay]")
 {
     RelayProcessor relay;
     REQUIRE (relay.getBusCount (true) == 2);
-    REQUIRE (relay.getBusCount (false) == 1 + RelayProcessor::numControlOutputs + 1);
+    REQUIRE (relay.getBusCount (false) == 1 + RelayProcessor::numControlOutputs + 1 + 1);
     CHECK (RelayProcessor::numControlOutputs == 16);
-    CHECK (relay.getTotalNumOutputChannels() == 2 + RelayProcessor::numControlOutputs + 2); // controls mono, and all start active
+    CHECK (relay.getTotalNumOutputChannels() == 2 + RelayProcessor::numControlOutputs + 2 + 1); // controls and tail cut mono, and all start active
     CHECK (relay.getTotalNumInputChannels() == 4);
     CHECK (relay.getBus (false, 1)->getName() == "Control 1");
     CHECK (relay.getBus (false, RelayProcessor::markerOutputBus)->getName() == "Marker");
+    CHECK (relay.getBus (false, RelayProcessor::tailCutOutputBus)->getName() == "Tail cut");
     CHECK (relay.getBus (true, RelayProcessor::markerInputBus)->getName() == "Marker");
     CHECK_FALSE (relay.isBeingProcessed());
     CHECK (relay.getMode() == RelayLink::Mode::receiver);
@@ -46,11 +47,12 @@ TEST_CASE ("The relay test build", "[relay]")
         }
     }
 
-    SECTION ("it saves and restores its mode and control values, and ignores anything else")
+    SECTION ("it saves and restores its mode, control values and tail cut, and ignores anything else")
     {
         relay.setMode (RelayLink::Mode::transmitter);
         relay.getLink().setControl (0, 0.3f);
         relay.getLink().setControl (15, 1.0f);
+        relay.getLink().setTailCut (1.0f);
         juce::MemoryBlock saved;
         relay.getStateInformation (saved);
 
@@ -60,6 +62,7 @@ TEST_CASE ("The relay test build", "[relay]")
         CHECK (juce::exactlyEqual (restored.getLink().getControl (0), 0.3f));
         CHECK (juce::exactlyEqual (restored.getLink().getControl (15), 1.0f));
         CHECK (juce::exactlyEqual (restored.getLink().getControl (1), 0.0f));
+        CHECK (juce::exactlyEqual (restored.getLink().getTailCut(), 1.0f));
 
         const auto unknown = [&restored] (const juce::String& xml) {
             juce::MemoryBlock data;
@@ -78,14 +81,19 @@ TEST_CASE ("The relay test build", "[relay]")
         CHECK (restored.getMode() == RelayLink::Mode::receiver);
     }
 
-    SECTION ("a receiver plays its control values as steady levels, even without a panel")
+    SECTION ("a receiver plays its control values and tail cut as steady levels, even without a panel")
     {
         relay.getLink().setControl (2, 0.4f);
+        relay.getLink().setTailCut (1.0f);
         buffer.clear();
         relay.processBlock (buffer, midi);
+        const auto tailCut = relay.getChannelIndexInProcessBlockBuffer (false, RelayProcessor::tailCutOutputBus, 0);
 
         for (int i = 0; i < relayBlockSize; ++i)
+        {
             CHECK (juce::exactlyEqual (buffer.getSample (2 + 2, i), 0.4f));
+            CHECK (juce::exactlyEqual (buffer.getSample (tailCut, i), 1.0f));
+        }
 
         CHECK (juce::exactlyEqual (buffer.getMagnitude (2 + 3, 0, relayBlockSize), 0.0f));
     }
@@ -101,7 +109,8 @@ TEST_CASE ("The relay test build", "[relay]")
         CHECK (lines[1] == "Round trip: -");
         CHECK (lines[2] == "Missed blocks: 0");
         CHECK (lines[5] == "Marker: -");
-        CHECK (lines[8] == "Control outputs: silent (receivers only)");
+        CHECK (lines[7] == "Prepared by the host: 1 times; fallbacks to the receiver's position: 0 (since reset)");
+        CHECK (lines[9] == "Control outputs and tail cut: silent (receivers only)");
         relay.editorBeingDeleted (editor.get());
         editor.reset();
 
@@ -109,8 +118,8 @@ TEST_CASE ("The relay test build", "[relay]")
         relay.getLink().setControl (0, 0.5f);
         editor.reset (relay.createEditorAndMakeActive());
         lines = dynamic_cast<RelayEditor&> (*editor).getStatusLines();
-        CHECK (lines[8] == "Control outputs: holding the last values");
-        CHECK (lines[9].startsWith (" 1: 0.5000000   2: 0.0000000"));
+        CHECK (lines[9] == "Control outputs: holding the last values; tail cut 0.0000000");
+        CHECK (lines[10].startsWith (" 1: 0.5000000   2: 0.0000000"));
         relay.editorBeingDeleted (editor.get());
     }
 

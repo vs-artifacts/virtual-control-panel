@@ -51,6 +51,7 @@ void RelayLink::setMode (Mode newMode)
 
 void RelayLink::prepare (double sampleRate, int maxBlockSize)
 {
+    prepares.fetch_add (1);
     ownSampleRate.store (sampleRate);
     ownMaxBlock.store (maxBlockSize);
 
@@ -272,15 +273,19 @@ void RelayLink::receive (juce::AudioBuffer<float>& buffer, int markerOutput)
 
 void RelayLink::receiveControls (int32_t reader, juce::int64 position)
 {
-    // The values in effect by the end of the block just played, so they stay in step with the audio
-    std::array<float, numControls> values {};
+    // The values in effect by the end of the block just played, so they stay in step with the audio; the tail cut follows
+    // the controls
+    std::array<float, numControls + 1> values {};
     auto count = int32_t { 0 };
 
-    if (hub.read_values (reader, position, values.data(), numControls, &count) != HS_LINK_OK)
+    if (hub.read_values (reader, position, values.data(), static_cast<int32_t> (values.size()), &count) != HS_LINK_OK)
         return;
 
     for (int i = 0; i < std::min<int> (count, numControls); ++i)
         setControl (i, values[static_cast<size_t> (i)]);
+
+    if (count > numControls)
+        setTailCut (values[static_cast<size_t> (numControls)]);
 
     controlsLive.store (true, std::memory_order_relaxed);
 }
@@ -290,6 +295,12 @@ void RelayLink::setControl (int index, float value) noexcept
     // Checked by its bits: fast-math builds may assume NaN never happens
     if ((std::bit_cast<juce::uint32> (value) & 0x7f800000u) != 0x7f800000u)
         controls[static_cast<size_t> (index)].store (juce::jlimit (0.0f, 1.0f, value), std::memory_order_relaxed);
+}
+
+void RelayLink::setTailCut (float value) noexcept
+{
+    if ((std::bit_cast<juce::uint32> (value) & 0x7f800000u) != 0x7f800000u)
+        tailCut.store (juce::jlimit (0.0f, 1.0f, value), std::memory_order_relaxed);
 }
 
 void RelayLink::transmit (const juce::AudioBuffer<float>& buffer, int markerInput)
@@ -407,6 +418,9 @@ void RelayLink::transmit (const juce::AudioBuffer<float>& buffer, int markerInpu
     }
 
     // No marker (none wired, its pin off, or silent for longer than the hold): stamped by the receiver's position
+    if (markerInUse)
+        fallbacks.fetch_add (1, std::memory_order_relaxed);
+
     markerInUse = false;
     markerQuiet = 0;
     lastLatency.reset();
@@ -545,6 +559,8 @@ void RelayLink::resetCounters()
     missed.store (0);
     lastMiss.store (Miss::none);
     markerUnreadable.store (0);
+    prepares.store (0);
+    fallbacks.store (0);
 
     for (auto* value : { &headroomNow, &headroomLowest, &blockMin, &blockMax, &bayLatencyNow, &bayLatencyLowest, &bayLatencyHighest })
         value->store (unset);
@@ -584,6 +600,9 @@ RelayLink::Status RelayLink::getStatus()
     status.markerUnreadable = markerUnreadable.load();
     status.stamp = stamp.load();
     status.markerHeld = markerHeld.load();
+    status.tailCut = getTailCut();
+    status.prepares = prepares.load();
+    status.fallbacks = fallbacks.load();
 
     for (int i = 0; i < numControls; ++i)
         status.controls[static_cast<size_t> (i)] = getControl (i);
