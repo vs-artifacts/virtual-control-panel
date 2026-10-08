@@ -2,7 +2,7 @@
 
 The live handover: where things stand, what's next, and exactly what to read for it. Rewritten at the end of every session. Lasting decisions belong in `docs/decisions.md`; this file only points to them.
 
-**Last updated:** 2026-10-07, third session. "The next build" is committed and pushed (`b3ae956`) and FL-checked; the fixes after that check are built, not yet committed.
+**Last updated:** 2026-10-07, third session. "The next build" (`b3ae956`) is FL-checked; the fixes after that check are committed and pushed (`c0a1758`). The user's quick check looked good; the formal recheck (below) is for the next session.
 
 ## Where things stand
 - **Slice 1b.4, the rest (planned 2026-10-06):** C (a bay plugin's own latency via the position marker), then A (regression fixes), then B (real blocks). The settings defaults file is postponed. Plan and reasons: `decisions.md`, "The rest of 1b.4: plan, and the position marker".
