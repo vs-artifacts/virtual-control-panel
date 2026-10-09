@@ -443,3 +443,65 @@ TEST_CASE ("The Plugins tab mutes generators only", "[webui][webview]")
     CHECK (static_cast<int> (muted["slot"]) == 0);
     CHECK (muted["muted"] == juce::var (true));
 }
+
+TEST_CASE ("Right-clicking a setting makes its value the default or resets it; Reset all asks first", "[webui][webview]")
+{
+    if (!WebUi::isSupported())
+        SKIP ("No supported web view on this system");
+
+    juce::Array<juce::var> defaults, resets;
+    WebUi::Handlers handlers;
+    handlers.describeEditor = [] {
+        return juce::JSON::parse (R"({ "title": "test", "tab": 2, "settings": { "bayQuietMs": 700 },
+            "userDefaults": { "bayQuietMs": 900, "bayQuietLevelDb": 5 }, "plugins": [] })");
+    };
+    handlers.events["settingDefault"] = [&defaults] (const juce::var& message) { defaults.add (message); };
+    handlers.events["resetSettings"] = [&resets] (const juce::var& message) { resets.add (message); };
+
+    KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
+    ControlSession noParameters ({});
+    OffscreenWebUi page (keys, noParameters, std::move (handlers));
+    REQUIRE (page.waitFor ("document.getElementById('quiet-ms')?.value ?? ''", "700") == "700");
+
+    const auto menuTexts = "Array.from (document.querySelectorAll('.context-menu button')).map (b => b.textContent.trim()).join ('|')";
+    const auto rightClick = [&page] (const juce::String& element) {
+        page.evaluate (element + ".dispatchEvent (new MouseEvent ('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 60 }))");
+    };
+    const auto choose = [&page] (int item) {
+        page.evaluate ("document.querySelectorAll('.context-menu button')[" + juce::String (item) + "].click()");
+    };
+
+    // A typed value not committed yet: Set as default takes it; the user's own default and the factory's are offered
+    page.evaluate ("document.getElementById('quiet-ms').value = '1234'");
+    rightClick ("document.getElementById('quiet-ms')");
+    const auto quietMsItems = "Set as default|Reset to default (900 ms)|Reset to factory default (500 ms)";
+    CHECK (page.waitFor (menuTexts, quietMsItems) == quietMsItems);
+    choose (0);
+    page.pumpUntil ([&defaults] { return !defaults.isEmpty(); });
+    REQUIRE (defaults.size() == 1);
+    CHECK (defaults[0]["name"] == "bayQuietMs");
+    CHECK (defaults[0]["value"] == juce::var (1234));
+    CHECK (page.waitFor ("String (document.querySelector('.context-menu') === null)", "true") == "true");
+
+    // A user default that doesn't fit is ignored
+    rightClick ("document.getElementById('quiet-level')");
+    const auto quietLevelItems = "Set as default|Reset to default (-80 dBFS)";
+    CHECK (page.waitFor (menuTexts, quietLevelItems) == quietLevelItems);
+
+    // A radio option: its own value; reset by name
+    rightClick ("document.querySelectorAll('input[name=bayStoppedShrink]')[2].closest('label')");
+    const auto shrinkItems = "Set as default|Reset to default (Only when quiet)";
+    CHECK (page.waitFor (menuTexts, shrinkItems) == shrinkItems);
+    choose (1);
+    page.pumpUntil ([&resets] { return !resets.isEmpty(); });
+    REQUIRE (resets.size() == 1);
+    CHECK (resets[0]["name"] == "bayStoppedShrink");
+
+    // Reset all asks first
+    page.evaluate ("document.getElementById('reset-all-settings').click()");
+    CHECK (page.waitFor ("String (document.getElementById('confirm-reset-all') !== null)", "true") == "true");
+    CHECK (resets.size() == 1);
+    page.evaluate ("document.getElementById('confirm-reset-all').click()");
+    page.pumpUntil ([&resets] { return resets.size() >= 2; });
+    CHECK (resets[1]["all"] == juce::var (true));
+}

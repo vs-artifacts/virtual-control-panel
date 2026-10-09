@@ -226,5 +226,19 @@ TEST_CASE ("Host controls", "[control]")
         CHECK (log.changes.empty());
     }
 
+    SECTION ("a renamed control tells the host once per change, without control characters, within the length limit")
+    {
+        controls.setName (4, "SLOT 1.1: Serum 2 - Cutoff");
+        controls.setName (4, "SLOT 1.1: Serum 2 - Cutoff");
+        CHECK (controls[4].getName (128) == "SLOT 1.1: Serum 2 - Cutoff");
+        CHECK (controls[4].getName (8) == "SLOT 1.1");
+        CHECK (log.infoChanges == 1);
+
+        controls.setName (4, juce::String ("  Bad\n\tname\x7f") + juce::String::repeatedString ("x", 300));
+        CHECK (controls[4].getName (1000) == "Badname" + juce::String::repeatedString ("x", HostControls::maxNameLength - 7));
+        CHECK (log.infoChanges == 2);
+        CHECK (controls[5].getName (64) == "Param 6");
+    }
+
     processor.removeListener (&log);
 }

@@ -15,6 +15,15 @@ const maxDepth = 8
 // Only the latest right-click gets its menu, however long the replies take
 let latestRequest = 0
 
+// A menu the page made: each item's action, by its id. Null for the plugin's menus, whose choices go to the plugin.
+let pageActions: (() => void)[] | null = null
+
+export interface PageMenuItem {
+    text: string
+    enabled: boolean
+    action: () => void
+}
+
 function parseItems(raw: unknown, depth: number): MenuItem[] {
     if (!Array.isArray(raw) || depth > maxDepth) return []
 
@@ -50,9 +59,24 @@ export async function openParameterMenu(h: number, clientX: number, clientY: num
     if (request !== latestRequest || typeof reply !== 'object' || reply === null) return
 
     const items = parseItems((reply as Record<string, unknown>).items, 0)
-    const zoom = currentZoom()
+    pageActions = null
+    show(items.length > 0 ? items : [{ kind: 'header', text: 'No options from the host' }], clientX, clientY)
+}
 
-    menu.items = items.length > 0 ? items : [{ kind: 'header', text: 'No options from the host' }]
+export function openPageMenu(items: PageMenuItem[], clientX: number, clientY: number): void {
+    closeMenu()
+    ++latestRequest
+    pageActions = items.map((item) => item.action)
+    show(
+        items.map((item, id) => ({ kind: 'action', id, text: item.text, enabled: item.enabled, checked: false })),
+        clientX,
+        clientY,
+    )
+}
+
+function show(items: MenuItem[], clientX: number, clientY: number): void {
+    const zoom = currentZoom()
+    menu.items = items
     menu.x = clientX / zoom
     menu.y = clientY / zoom
     menu.open = true
@@ -60,12 +84,23 @@ export async function openParameterMenu(h: number, clientX: number, clientY: num
 
 export function chooseMenuItem(id: number): void {
     menu.open = false
-    sendMenuChoice(id)
+
+    if (pageActions === null) {
+        sendMenuChoice(id)
+        return
+    }
+
+    const action = pageActions[id]
+    pageActions = null
+    action?.()
 }
 
 export function closeMenu(): void {
     if (!menu.open) return
 
     menu.open = false
-    sendMenuClosed()
+
+    if (pageActions === null) sendMenuClosed()
+
+    pageActions = null
 }

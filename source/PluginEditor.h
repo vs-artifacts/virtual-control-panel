@@ -70,6 +70,9 @@ private:
     juce::var describeLink() const;
     void handleResize (const juce::var&);
     void handleSetting (const juce::var&);
+    void handleSettingDefault (const juce::var&);
+    void handleResetSettings (const juce::var&);
+    void applyKeepWebViewWarm();
     void handleTab (const juce::var&);
     void handleOpenPlugin (const juce::var&);
     void handleMutePlugin (const juce::var&);

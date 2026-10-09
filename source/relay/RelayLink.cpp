@@ -54,7 +54,6 @@ void RelayLink::prepare (double sampleRate, int maxBlockSize)
     prepares.fetch_add (1);
     ownSampleRate.store (sampleRate);
     ownMaxBlock.store (maxBlockSize);
-    largestBlock = 0; // the host never runs audio during a prepare
 
     if (const auto writer = returnWriter.load(); writer >= 0)
         hub.set_writer_details (writer, sampleRate, maxBlockSize, 0);
@@ -219,10 +218,10 @@ void RelayLink::receive (juce::AudioBuffer<float>& buffer, int markerOutput)
     // Far enough behind the panel's newest audio to be safe whichever of us runs first in a cycle, and no further
     // than the round trip allows (docs/decisions.md, "Bay link timing"). A 1-block round trip only works by playing
     // the very block the panel has just written, which needs the receiver to run after the panel. Blocks are the
-    // panel's (it may count in real blocks) or our own largest real one.
+    // panel's unit (real or announced), never less than this block: a larger block remembered from long ago would
+    // leave the return no room at 2 blocks.
     const auto numSamples = buffer.getNumSamples();
-    largestBlock = std::max (largestBlock, numSamples);
-    const auto block = static_cast<juce::int64> (std::max (info.max_block, largestBlock));
+    const auto block = static_cast<juce::int64> (std::max (info.max_block, numSamples));
     const auto followNewest = info.round_trip <= block;
     const auto lead = followNewest ? static_cast<juce::int64> (numSamples) : std::max (block, static_cast<juce::int64> (info.round_trip) - block);
 

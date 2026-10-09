@@ -1,3 +1,4 @@
+#include "helpers/ParameterHost.h"
 #include <PluginProcessor.h>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -333,7 +334,20 @@ TEST_CASE ("The EQ's low band gain is exposed to the host as Param 1", "[process
     auto& eqLow = *exposed[0].parameter;
     auto& param1 = *processor.getParameters()[0];
     CHECK (eqLow.getName (64) == "Low");
-    CHECK (param1.getName (64) == "Param 1");
+    CHECK (param1.getName (64) == "SLOT 1.1: kHs 3-Band EQ - Low");
+    CHECK (processor.getParameters()[1]->getName (64) == "Param 2");
+
+    // The names probe: the host is told each time Param 1's name changes
+    {
+        HostLog log;
+        processor.addListener (&log);
+        processor.toggleNamesProbe();
+        CHECK (param1.getName (64) == "SLOT 1.1: Low");
+        processor.toggleNamesProbe();
+        CHECK (param1.getName (64) == "SLOT 1.1: kHs 3-Band EQ - Low");
+        processor.removeListener (&log);
+        CHECK (log.infoChanges == 2);
+    }
     CHECK (juce::exactlyEqual (param1.getValue(), eqLow.getValue()));
     CHECK (param1.getCurrentValueAsText() == eqLow.getCurrentValueAsText());
 
@@ -354,7 +368,7 @@ TEST_CASE ("The EQ's low band gain is exposed to the host as Param 1", "[process
         CHECK (catalog[0]["slot"] == "FX 1");
         CHECK (catalog[0]["plugin"] == processor.getEngine().getPlugins()[2]->getName());
         CHECK (catalog[0]["name"] == "Low");
-        CHECK (catalog[0]["host"] == "Param 1");
+        CHECK (catalog[0]["host"] == "SLOT 1.1: kHs 3-Band EQ - Low");
         CHECK (catalog[1]["slot"] == "Bay 1");
         CHECK (catalog[1]["name"] == "Control 1");
         CHECK (catalog[1]["host"] == "Param 2");

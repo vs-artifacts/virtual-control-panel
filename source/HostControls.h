@@ -21,6 +21,11 @@ public:
 
     juce::AudioProcessorParameter& operator[] (int index) const;
 
+    // Renames a control and tells the host (which may show the new name at once, or keep the old one in places, e.g.
+    // FL's automation clips). Message thread only.
+    void setName (int index, const juce::String&);
+    static constexpr int maxNameLength = 100;
+
     // Tells the host about bound parameters changed from elsewhere, e.g. the hosted plugin's own window. Message thread only.
     void reportTargetChanges();
 
@@ -30,6 +35,7 @@ public:
 private:
     void timerCallback() override { reportTargetChanges(); }
 
+    juce::AudioProcessor& processor;
     std::vector<HostControl*> controls;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HostControls)

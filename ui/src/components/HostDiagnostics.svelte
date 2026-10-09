@@ -1,6 +1,18 @@
 <script lang="ts">
-    import { editor } from "../lib/editor.svelte";
+    import { editor, toggleNamesProbe } from "../lib/editor.svelte";
 </script>
+
+<section>
+    <h2>Names probe (test build)</h2>
+    <p class="line">
+        Param 1 is called: <strong id="probe-name"
+            >{editor.probeName || "not known"}</strong
+        >
+    </p>
+    <button type="button" id="names-probe" onclick={toggleNamesProbe}
+        >Show or hide the plugin's name</button
+    >
+</section>
 
 <section>
     <h2>Keys forwarded to the host (test build)</h2>
@@ -54,5 +66,9 @@
     .waiting {
         margin: 0;
         opacity: 0.7;
+    }
+
+    .line {
+        margin: 0 0 6px;
     }
 </style>

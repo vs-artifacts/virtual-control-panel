@@ -1,5 +1,5 @@
 import { svelte } from '@sveltejs/vite-plugin-svelte'
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, searchForWorkspaceRoot, type Plugin } from 'vite'
 
 // The built page is embedded in the plugin: it may only load its own files, with no inline code and no network
 const contentSecurityPolicy = [
@@ -28,6 +28,10 @@ function contentSecurityPolicyInBuild(): Plugin {
 export default defineConfig({
     plugins: [svelte(), contentSecurityPolicyInBuild()],
     base: './',
+    // The dev server may also serve the settings' defaults, which live with the plugin's source (nothing else outside ui/)
+    server: {
+        fs: { allow: [searchForWorkspaceRoot(process.cwd()), '../source/SettingsDefaults.json'] },
+    },
     build: {
         modulePreload: { polyfill: false },
         assetsInlineLimit: 0,

@@ -5,8 +5,22 @@ class HostControl final : public juce::AudioProcessorParameterWithID
 {
 public:
     explicit HostControl (int number)
-        : AudioProcessorParameterWithID ({ "param" + juce::String (number), 1 }, "Param " + juce::String (number))
+        : AudioProcessorParameterWithID ({ "param" + juce::String (number), 1 }, "Param " + juce::String (number)),
+          currentName (name)
     {
+    }
+
+    juce::String getName (int maximumStringLength) const override
+    {
+        const juce::ScopedLock lock (nameLock);
+        return currentName.substring (0, maximumStringLength);
+    }
+
+    // True if it changed
+    bool rename (const juce::String& newName)
+    {
+        const juce::ScopedLock lock (nameLock);
+        return std::exchange (currentName, newName) != newName;
     }
 
     void bind (juce::AudioProcessorParameter& newTarget)
@@ -65,9 +79,12 @@ public:
 private:
     std::atomic<juce::AudioProcessorParameter*> target { nullptr };
     std::atomic<float> value { 0.0f };
+    juce::CriticalSection nameLock;
+    juce::String currentName;
 };
 
-HostControls::HostControls (juce::AudioProcessor& processor)
+HostControls::HostControls (juce::AudioProcessor& processorIn)
+    : processor (processorIn)
 {
     for (int number = 1; number <= count; ++number)
     {
@@ -87,6 +104,19 @@ void HostControls::bind (int index, juce::AudioProcessorParameter& target)
 juce::AudioProcessorParameter& HostControls::operator[] (int index) const
 {
     return *controls[static_cast<size_t> (index)];
+}
+
+void HostControls::setName (int index, const juce::String& newName)
+{
+    // Plugin-supplied parts are untrusted: no control characters, and a length every format can hold
+    juce::String clean;
+
+    for (const auto character : newName)
+        if (character >= 0x20 && character != 0x7f)
+            clean += character;
+
+    if (controls[static_cast<size_t> (index)]->rename (clean.trim().substring (0, maxNameLength)))
+        processor.updateHostDisplay (juce::AudioProcessor::ChangeDetails().withParameterInfoChanged (true));
 }
 
 void HostControls::reportTargetChanges()

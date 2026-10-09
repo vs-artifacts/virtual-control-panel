@@ -165,7 +165,6 @@ private:
     juce::uint32 seenLinks = 0;
     bool synced = false, primed = false;
     juce::int64 cursor = 0, returnedEnd = 0;
-    int largestBlock = 0; // the largest real block since prepare (FL's are far below the announced one)
     juce::uint64 session = 0, lastPanelWrites = 0, lastReads = 0;
     int panelStall = 0, receiverStall = 0;
     bool markerInUse = false; // transmitter: a marker has arrived on this link (unreadable ones too)

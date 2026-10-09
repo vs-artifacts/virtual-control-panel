@@ -1,0 +1,153 @@
+{
+    "keepWebViewWarm": {
+        "type": "flag",
+        "default": true
+    },
+    "flOutputCorrection": {
+        "type": "flag",
+        "default": true
+    },
+    "resizeBlocksLanguageSwitch": {
+        "type": "flag",
+        "default": true
+    },
+    "editorPlacement": {
+        "type": "choice",
+        "default": "hostPlaced",
+        "choices": [
+            "off",
+            "hostPlaced",
+            "mouse",
+            "hostMainWindow"
+        ]
+    },
+    "attachedPlacement": {
+        "type": "choice",
+        "default": "workspace",
+        "choices": [
+            "off",
+            "workspace",
+            "hostMonitor"
+        ]
+    },
+    "resizeRendering": {
+        "type": "choice",
+        "default": "smooth",
+        "choices": [
+            "smooth",
+            "sharp"
+        ]
+    },
+    "resizeFlipAlt": {
+        "type": "flag",
+        "default": false
+    },
+    "doubleClickMs": {
+        "type": "whole",
+        "default": 500,
+        "min": 1,
+        "max": 2000,
+        "unit": "ms"
+    },
+    "doubleClickSets": {
+        "type": "flag",
+        "default": false
+    },
+    "bayRoundTrip": {
+        "type": "whole",
+        "default": 0,
+        "min": 0,
+        "max": 3,
+        "unit": "blocks"
+    },
+    "bayRealBlocks": {
+        "type": "flag",
+        "default": true
+    },
+    "bayLowestTempo": {
+        "type": "decimal",
+        "default": 0,
+        "min": 0,
+        "max": 999,
+        "unit": "BPM"
+    },
+    "bayStoppedShrink": {
+        "type": "choice",
+        "default": "whenQuiet",
+        "choices": [
+            "never",
+            "whenQuiet",
+            "always"
+        ]
+    },
+    "bayQuietLevelDb": {
+        "type": "whole",
+        "default": -80,
+        "min": -120,
+        "max": 0,
+        "unit": "dBFS"
+    },
+    "bayQuietMs": {
+        "type": "whole",
+        "default": 500,
+        "min": 0,
+        "max": 5000,
+        "unit": "ms"
+    },
+    "bayJumpCrossfadeMs": {
+        "type": "whole",
+        "default": 6,
+        "min": 0,
+        "max": 100,
+        "unit": "ms"
+    },
+    "bayLatencyFadeMs": {
+        "type": "whole",
+        "default": 20,
+        "min": 0,
+        "max": 500,
+        "unit": "ms"
+    },
+    "bayMuteFadeMs": {
+        "type": "whole",
+        "default": 12,
+        "min": 0,
+        "max": 500,
+        "unit": "ms"
+    },
+    "bayBypassFadeMs": {
+        "type": "whole",
+        "default": 12,
+        "min": 0,
+        "max": 500,
+        "unit": "ms"
+    },
+    "bayOffFadeMs": {
+        "type": "whole",
+        "default": 25,
+        "min": 0,
+        "max": 500,
+        "unit": "ms"
+    },
+    "bayDropoutFadeMs": {
+        "type": "whole",
+        "default": 30,
+        "min": 0,
+        "max": 500,
+        "unit": "ms"
+    },
+    "bayLatencySettleMs": {
+        "type": "whole",
+        "default": 50,
+        "min": 0,
+        "max": 1000,
+        "unit": "ms"
+    },
+    "bayTailCutReleaseMs": {
+        "type": "whole",
+        "default": 0,
+        "min": 0,
+        "max": 1000,
+        "unit": "ms"
+    }
+}

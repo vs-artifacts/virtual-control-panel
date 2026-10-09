@@ -246,3 +246,102 @@ TEST_CASE ("Plugin settings persist in their file", "[settings]")
     CHECK (reloaded.getDoubleClickSets());
     file.deleteFile();
 }
+
+TEST_CASE ("Settings: the user's own defaults, resetting, and the defaults file", "[settings]")
+{
+    // Declared first, so it deletes the file after the settings have saved it
+    const juce::TemporaryFile temporary (".settings");
+    PluginSettings settings (temporary.getFile());
+
+    SECTION ("every choice in the defaults file is one the plugin knows")
+    {
+        for (const auto choice : SettingsDefaults::editorPlacement.choices)
+            CHECK (EditorPlacement::fromSettingsValue (juce::String (choice.data(), choice.size())).has_value());
+
+        for (const auto choice : SettingsDefaults::attachedPlacement.choices)
+            CHECK (EditorPlacement::attachedFromSettingsValue (juce::String (choice.data(), choice.size())).has_value());
+
+        for (const auto choice : SettingsDefaults::resizeRendering.choices)
+            CHECK (EditorScale::renderingFromSettingsValue (juce::String (choice.data(), choice.size())).has_value());
+
+        for (const auto choice : SettingsDefaults::bayStoppedShrink.choices)
+            CHECK (BayLink::stoppedShrinkFromName (juce::String (choice.data(), choice.size())).has_value());
+    }
+
+    SECTION ("a user default replaces the factory's until the value is set; reset goes back to it")
+    {
+        CHECK (settings.setUserDefault ("bayQuietMs", 1200));
+        CHECK (settings.getQuietMs() == 1200);
+        CHECK (settings.getUserDefaults()["bayQuietMs"] == juce::var (1200));
+
+        settings.setQuietMs (300);
+        CHECK (settings.getQuietMs() == 300);
+        CHECK (settings.reset ("bayQuietMs"));
+        CHECK (settings.getQuietMs() == 1200);
+
+        // Equal to the factory's: forgotten
+        CHECK (settings.setUserDefault ("bayQuietMs", BayLink::defaultQuietMs));
+        CHECK_FALSE (settings.getUserDefaults().hasProperty ("bayQuietMs"));
+        CHECK (settings.getQuietMs() == BayLink::defaultQuietMs);
+    }
+
+    SECTION ("every kind of setting takes a user default; values that don't fit are refused")
+    {
+        CHECK (settings.setUserDefault ("keepWebViewWarm", false));
+        CHECK_FALSE (settings.getKeepWebViewWarm());
+        CHECK (settings.setUserDefault ("bayLowestTempo", 92.5));
+        CHECK (juce::exactlyEqual (settings.getLowestTempo(), 92.5));
+        CHECK (settings.setUserDefault ("bayStoppedShrink", "always"));
+        CHECK (settings.getStoppedShrink() == BayLink::StoppedShrink::always);
+        CHECK (settings.setUserDefault ("bayJumpCrossfadeMs", 40));
+        CHECK (settings.getFadeMs (BayLink::Fade::roundTrip) == 40);
+
+        CHECK_FALSE (settings.setUserDefault ("noSuchSetting", 1));
+        CHECK_FALSE (settings.setUserDefault ("bayQuietMs", 99999));
+        CHECK_FALSE (settings.setUserDefault ("bayQuietMs", "500"));
+        CHECK_FALSE (settings.setUserDefault ("bayQuietMs", 2.5));
+        CHECK_FALSE (settings.setUserDefault ("keepWebViewWarm", 1));
+        CHECK_FALSE (settings.setUserDefault ("bayStoppedShrink", "sometimes"));
+        CHECK_FALSE (settings.setUserDefault ("bayLowestTempo", 1000.0));
+        CHECK_FALSE (settings.reset ("noSuchSetting"));
+        CHECK (settings.getUserDefaults().getDynamicObject()->getProperties().size() == 4);
+    }
+
+    SECTION ("reset all puts every setting back, and leaves the remembered size and forwarded keys")
+    {
+        settings.setUserDefault ("doubleClickMs", 800);
+        settings.setDoubleClickMs (100);
+        settings.setFadeMs (BayLink::Fade::off, 200);
+        settings.setRoundTripBlocks (3);
+        settings.setLastEditorScale (1.5);
+        settings.resetAll();
+
+        CHECK (settings.getDoubleClickMs() == 800);
+        CHECK (settings.getFadeMs (BayLink::Fade::off) == BayLink::defaultFadeMs (BayLink::Fade::off));
+        CHECK (settings.getRoundTripBlocks() == BayLink::defaultRoundTripBlocks);
+        CHECK (juce::exactlyEqual (settings.getLastEditorScale(), 1.5));
+    }
+}
+
+TEST_CASE ("Settings: a hand-edited file's user defaults are checked like its values", "[settings]")
+{
+    const juce::TemporaryFile temporary (".settings");
+    temporary.getFile().replaceWithText (R"(<?xml version="1.0" encoding="UTF-8"?>
+<PROPERTIES>
+  <VALUE name="default.bayQuietMs" val="99999"/>
+  <VALUE name="default.bayLowestTempo" val="5000"/>
+  <VALUE name="default.bayStoppedShrink" val="sometimes"/>
+  <VALUE name="default.doubleClickMs" val="750"/>
+</PROPERTIES>
+)");
+
+    PluginSettings settings (temporary.getFile());
+    CHECK (settings.getQuietMs() == BayLink::defaultQuietMs);
+    CHECK (juce::exactlyEqual (settings.getLowestTempo(), 0.0));
+    CHECK (settings.getStoppedShrink() == BayLink::StoppedShrink::whenQuiet);
+    CHECK (settings.getDoubleClickMs() == 750);
+
+    const auto defaults = settings.getUserDefaults();
+    CHECK (defaults.getDynamicObject()->getProperties().size() == 1);
+    CHECK (defaults["doubleClickMs"] == juce::var (750));
+}

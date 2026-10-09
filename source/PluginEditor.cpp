@@ -113,6 +113,9 @@ WebUi::Handlers PluginEditor::createPageHandlers()
              setScale (1.0);
          } },
         { "setting", [this] (const juce::var& message) { handleSetting (message); } },
+        { "settingDefault", [this] (const juce::var& message) { handleSettingDefault (message); } },
+        { "resetSettings", [this] (const juce::var& message) { handleResetSettings (message); } },
+        { "namesProbe", [this] (const juce::var&) { pluginProcessor.toggleNamesProbe(); } },
         { "tab", [this] (const juce::var& message) { handleTab (message); } },
         { "openPlugin", [this] (const juce::var& message) { handleOpenPlugin (message); } },
         { "mutePlugin", [this] (const juce::var& message) { handleMutePlugin (message); } },
@@ -144,7 +147,7 @@ juce::var PluginEditor::describeEditor() const
     current->setProperty ("resizeFlipAlt", settings->getFlipAltResize());
     current->setProperty ("resizeBlocksLanguageSwitch", settings->getResizeBlocksLanguageSwitch());
     current->setProperty ("flOutputCorrection", settings->getFlOutputCorrection());
-    current->setProperty ("roundTripBlocks", settings->getRoundTripBlocks());
+    current->setProperty ("bayRoundTrip", settings->getRoundTripBlocks());
     current->setProperty ("bayRealBlocks", settings->getRoundTripRealBlocks());
     current->setProperty ("bayLowestTempo", settings->getLowestTempo());
     current->setProperty ("bayStoppedShrink", BayLink::toName (settings->getStoppedShrink()));
@@ -176,6 +179,8 @@ juce::var PluginEditor::describeEditor() const
     state->setProperty ("diagnostics", pluginProcessor.isDiagnosticsOpen());
     state->setProperty ("scroll", scroll);
     state->setProperty ("settings", current);
+    state->setProperty ("userDefaults", settings->getUserDefaults());
+    state->setProperty ("probeName", pluginProcessor.getHostControls()[0].getName (HostControls::maxNameLength));
     state->setProperty ("plugins", plugins);
     state->setProperty ("processing", pluginProcessor.isBeingProcessed());
     state->setProperty ("link", describeLink());
@@ -297,11 +302,7 @@ void PluginEditor::handleSetting (const juce::var& message)
     if (name == "keepWebViewWarm" && value.isBool())
     {
         settings->setKeepWebViewWarm (static_cast<bool> (value));
-
-        if (static_cast<bool> (value))
-            webViewKeepAlive->start();
-        else
-            webViewKeepAlive->stop();
+        applyKeepWebViewWarm();
     }
     else if (name == "editorPlacement" && value.isString())
     {
@@ -330,7 +331,7 @@ void PluginEditor::handleSetting (const juce::var& message)
     {
         settings->setFlOutputCorrection (static_cast<bool> (value));
     }
-    else if (name == "roundTripBlocks" && value.isInt())
+    else if (name == "bayRoundTrip" && value.isInt())
     {
         const auto blocks = static_cast<int> (value);
 
@@ -408,6 +409,32 @@ void PluginEditor::handleSetting (const juce::var& message)
     {
         settings->setDoubleClickSets (static_cast<bool> (value));
     }
+}
+
+void PluginEditor::handleSettingDefault (const juce::var& message)
+{
+    // The value is set as well; neither happens unless it fits the setting
+    if (settings->setUserDefault (message["name"].toString(), message["value"]))
+        handleSetting (message);
+}
+
+void PluginEditor::handleResetSettings (const juce::var& message)
+{
+    if (const auto& all = message["all"]; all.isBool() && static_cast<bool> (all))
+        settings->resetAll();
+    else if (!settings->reset (message["name"].toString()))
+        return;
+
+    applyKeepWebViewWarm();
+    pluginProcessor.applyLinkSettings();
+}
+
+void PluginEditor::applyKeepWebViewWarm()
+{
+    if (settings->getKeepWebViewWarm())
+        webViewKeepAlive->start();
+    else
+        webViewKeepAlive->stop();
 }
 
 void PluginEditor::handleTab (const juce::var& message)

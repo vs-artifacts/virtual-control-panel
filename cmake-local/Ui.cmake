@@ -18,7 +18,8 @@ list(APPEND UI_SOURCES
     "${UI_SOURCE_DIR}/tsconfig.json"
     "${UI_SOURCE_DIR}/tsconfig.app.json"
     "${UI_SOURCE_DIR}/tsconfig.node.json"
-    "${UI_SOURCE_DIR}/vite.config.ts")
+    "${UI_SOURCE_DIR}/vite.config.ts"
+    "${SETTINGS_DEFAULTS_JSON}")
 
 # Once per build folder, and again when the dependencies change. `npm install` rather than `npm ci`:
 # ci always deletes node_modules first, which fails on Windows while an editor has a package file open.

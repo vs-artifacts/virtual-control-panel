@@ -46,6 +46,21 @@ export function sendSetting(name: string, value: string | boolean | number): voi
     window.__JUCE__.backend.emitEvent('setting', { name, value })
 }
 
+// Sets the value and makes it the setting's own default
+export function sendSettingDefault(name: string, value: string | boolean | number): void {
+    window.__JUCE__.backend.emitEvent('settingDefault', { name, value })
+}
+
+// Back to the default (the user's own or the factory's)
+export function sendResetSettings(which: { name: string } | { all: true }): void {
+    window.__JUCE__.backend.emitEvent('resetSettings', which)
+}
+
+// Names probe (test build): Param 1's name with or without the plugin's name
+export function sendNamesProbe(): void {
+    window.__JUCE__.backend.emitEvent('namesProbe', {})
+}
+
 export function sendResetSize(): void {
     window.__JUCE__.backend.emitEvent('resetSize', {})
 }

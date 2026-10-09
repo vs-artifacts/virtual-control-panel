@@ -26,6 +26,15 @@ Short log of settled decisions. Newest at the bottom. Update when something chan
 ## Target production form (user's brief, 2026-09-25)
 In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with the user's own UI design language and UX decisions on top. The blueprint docs will expand on this.
 - **Hosting and routing:** an arbitrary (configurable) number of generators, routed to an arbitrary number of buses; each bus holds an arbitrary number of FX slots. Any slot (hosted plugin) can route or sidechain to any other slot on any bus: fully modular, grid-style routing.
+- **The slot structure (user, 2026-10-08):**
+  - **Generator stage** first: each generator chooses its own output bus or buses (a new generator: BUS 1). Generators that take input (sidechains) are possible but rare, so they're kept conceptually as the first stage.
+  - **Buses** process their slots in sequence. A bus's input is whatever is routed to it, by default from the generator stage; its output goes to the master bus's end stage by default, but can be routed into other buses or slots. A new bus gets no generators and outputs to BUS X.0.
+  - **Sub-buses** are a submix: a bus whose output feeds its parent bus's end stage by default (unless, or as well as, it's routed elsewhere). Example: generator 2 → bus 2, whose frequency splitter sends each band to a sub-bus, recombined in bus 2's end stage, then to master. Under the hood, possibly just buses (the splitter's slot routes its bands into buses 3, 4 and 5, which route to master); buses are an organizing and routing aid.
+  - **Numbering:** slots are "b.n" (bus.slot). Each scope has a pre stage numbered 0 and a post stage numbered X: every bus has b.0 (pre-FX) and b.X (post-FX), and the whole FX grid has **BUS X** (the master) with slots X.0, X.1 … X.X. The 0 and X stages hold utilities (gain, pan, simple adjustments and effects not part of a patch's "flavor"). Unique bus types may come later, still numbered b.n underneath.
+  - **Default routing** is sequential within a bus; "out of chain" routes (any slot to any other slot or generator, sidechains) come later.
+  - **Summing** where routes meet: for now simply added; a toggleable, probably configurable option per bus or stage later.
+  - **Slots can be dragged** to another position on any bus and re-route by the default sequential rule. **Each slot's plugin can be hot-swapped.**
+  - **Each slot exposes** any number of its plugin's parameters as knobs, sliders or other inputs, and more can be added.
 - **Exposed parameters:** each FX slot (in its default mode, at least) exposes a configurable set of parameters linked to its hosted plugin. Only the parameters the user chooses are exposed, in one consistent format and style matching the design theme.
 - **Live performance UX:** stored parameter sets act as waypoints; transitions between them follow arbitrary automation curves or settings, interpolating groups of parameters together.
 - **Design:** the glassmorphism/light style; by virtue of its design, the UI doubles as a stage visualiser.
@@ -34,6 +43,7 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
 
 ### Architectural implications (agent's reading; revisit with the blueprint)
 - **Routing is data.** The engine should build its graph from a saved, editable routing model (slots, buses, connections), not hard-coded wiring. `juce::AudioProcessorGraph` supports adding and removing nodes and connections while running.
+- **Slots have permanent IDs** (agent, agreed 2026-10-08): swaps, drags, states, bindings and bays all key on them, so the structure comes before plugin swap. **Each slot is one permanent box in the graph with its plugin inside**: states, fades, swaps and latency bookkeeping happen inside the box, so most actions don't rewire the graph (only adding, removing or moving slots, and Off, do). **A bay is a kind of slot.** Once anything can route anywhere, loops are refused with a message.
 - **Sidechains and multiple ins/outs:** the current stereo-only rule (aux buses disabled) must go; slots need addressable input/output buses.
 - **A parameter-mapping layer per slot:** which hosted parameters are exposed, with display names, ranges and curves. Plugins expose hundreds (Serum 2: 541 automatable).
 - **Waypoint interpolation lives in the engine, not the UI,** so transitions stay smooth regardless of UI frame rate or network, and keep running with the UI disconnected.
@@ -65,7 +75,14 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
    - **1b.2. One slider, two-way** (kHs 3-Band EQ low band gain) via the native bridge, **also exposed to the host** for automation and controllers (added to this slice: a core mechanic, so test it early). **Built 2026-09-27; FL check passed 2026-09-27** (slider both ways, Param 1 in the browser, last tweaked, automation playback and recording, Patcher nodes and internal controller links; a hardware controller and plugin swaps weren't testable). Centring on first open built and passed. Its findings are being wrapped up in the same slice (see "1b.2 wrap-up" below): tabs, scaling and corner resizing, the host's right-click menu, and key pass-through while the mouse is down (first pass: diagnosis). **Wrap-up built 2026-09-27; awaiting the FL check.**
    - **1b.3. Parameter outputs:** can our plugin hand values to FL as *outputs* (Patcher's controls list, internal controller links)? Two temporary test parameters appended after the pool (a meter-category one, which JUCE marks read-only in VST3, and an ordinary automatable one), both moved by an internal slow wave from the audio thread (VST3's output-parameter route; Param 1's plugin-driven changes go through the message-thread edit route and appear only as an input). No MIDI CC out: the user found it doesn't drive FL plugins in Patcher. **FL check 2026-10-01: no parameter outputs** (details in "Module bays and relay nodes"); the test parameters are removed.
    - **1b.4. External module bays:** our way to use FL's own plugins, which we can't host (see "1b.2 wrap-up"). FL forbids feedback loops, so relay nodes on both sides of the FL plugin talk to our plugin directly instead of over Patcher wires (see "Module bays and relay nodes" below). Placed before plugin swap to validate the idea, or to settle a full move away from FL's plugins. **FL experiments done 2026-10-01** (outputs, Peak Controller, gain, smart disable; relay test plugin built and checked). **Link test (audio round trip) built and FL-checked 2026-10-02:** everything passed except the 1-block round trip and confusing lag readouts, both fixed the same day and **passed the FL re-check**. **Control outputs built 2026-10-02** (with the automatic round trip, the bypass switch and crossfade, safe dropouts, and the timing probe; see "Bay control outputs" below); **FL re-check and merge experiment 2026-10-03** (Patcher lines up merging paths: the position marker works). Then: a bay plugin's own latency (the plan for the rest: "The rest of 1b.4" below; **C1, the position marker on the relay side, FL-checked 2026-10-07; C2, the panel uses the bay latency, built 2026-10-07**). Status and next step: `docs/current.md`.
-   - **1b.5. Plugin swap** (core, non-negotiable: choosing the plugin in a slot): a button per slot in the Plugins tab that swaps the plugin from a copy of FL's plugin menu (its categories and favourites, plus "More plugins…" with everything installed), read from FL's plugin database (`Documents\Image-Line\FL Studio\Presets\Plugin database`) each time the menu opens so it follows FL's changes, and styleable like the rest of our UI later. Needs: swapping while audio runs, safe unbinding of host controls, saving each slot's plugin and the bindings with the project, and a rudimentary "Bind…" menu per host control (the real solution is each parameter item in a slot's UI linking to the exposed-parameters list). Lets us test automation across swaps.
+   - **1b.5. Slots and plugin swap** (core, non-negotiable: choosing the plugin in a slot). Split into sub-slices, each with its FL check (agreed 2026-10-08; details in "Slots: decided with the user (2026-10-08)"):
+     - **a. Structure and graph:** the generator stage, buses (with sub-buses) and slots with permanent IDs, routed in sequence within each bus, saved with the project (old projects open as today's routing); add, remove and move slots (a rudimentary drag if it's cheap, else buttons).
+     - **b. Slot states** inside each slot's box: Mute, Bypass, Off, and "End signal path when off"; the default slot controls (M, B, X, MIX).
+     - **c. Plugin swap** from a flat list of installed plugins, with a rule for the slot's bindings.
+     - **d. Exposed controls per slot,** host-control binding ("Bind…") and dynamic names ("SLOT 1.1: parameter").
+     - **e. Bays as slots:** relays choose a bay number; per-bay control values; Bay 2 to 4's parameters work.
+     - **f. A copy of FL's plugin menu** (its categories and favourites, plus "More plugins…"), read from FL's plugin database (`Documents\Image-Line\FL Studio\Presets\Plugin database`; Documents may be in OneDrive, so the path comes from Windows) each time it opens. Only folder and file names are read (the `.fst` files are an undocumented binary format: never parsed), matched against our own scan. Styleable like the rest of our UI later.
+     - Lets us test automation across swaps.
    - **1b.6. Remote server:** Crow WebSocket server behind a remote-control toggle, own update thread, security tests, "Open in browser" button.
 3. **1c. Shader knob:** the slider becomes a WebGL2 glass/light-scatter knob with a frame-time readout, running inside FL.
 - Style work starts after 1c.
@@ -682,7 +699,7 @@ Committed before this: `2ea1b11` (B and its additions). The user's tuning in FL 
 - **Passed:** everything on the checklist (user).
 - **One bug, for the next session** (or a bug-fixing pass): with real blocks, switching from a fixed 1 block to 2 blocks often makes the panel miss blocks continuously ("late", 16 to 20 blocks per event line, i.e. nearly every block). Switching 1 → 3 and 2 → 3 doesn't.
 
-### Open bug: 1 → 2 real blocks misses nearly every block (diagnosed 2026-10-08, not fixed)
+### Bug: 1 → 2 real blocks misses nearly every block (diagnosed 2026-10-08; fixed the same day, FL-checked)
 - **Cause (confirmed with a throwaway test in the simulated Patcher):** the receiver lines up by `block = max (the panel's unit, its own largestBlock)` (`RelayLink::receive`). `largestBlock` is the relay's largest real block **since its prepare, never forgotten**. If the relay has ever had one block bigger than the panel's unit (e.g. a full 512-sample block, as FL may send around loading or starting), it stays at 512. Meanwhile the panel's unit has been rechecked down to 269 (its prepare survey, a recheck, a new lowest tempo, a stop).
   - **2 blocks:** round trip 538 > block 512, so the receiver doesn't follow the newest block. Its lead is `max (512, 538 − 512)` = 512, which leaves the return only 26 samples of room. Almost every block arrives late; the receiver itself misses nothing (the misses are the panel's, "late").
   - **1 block:** round trip 269 ≤ 512, so the receiver follows the newest block; the lead doesn't matter. No misses.
@@ -696,6 +713,9 @@ Committed before this: `2ea1b11` (B and its additions). The user's tuning in FL 
   3. Cap the lead at `round trip − the panel's unit`, so the return always keeps at least one unit of room.
 
   Agent's lean: 1 or 2 (simple, and they keep the relay in step with the panel's survey); 3 as a safety net. Check that Automatic's fallback to 2 blocks is affected the same way (likely: the user noted drastic tempo drops causing fallbacks).
+- **The user's addition:** 3 → 2 blocks shows the same bug. It confirms the cause: the trigger is the receiver lining up again at 2 blocks (every round trip change starts a new session) with a stale large block, whatever it comes from. A shrink at a fixed 2 blocks (a recheck, a stop, a new lowest tempo) does the same.
+- **Fix (option 1, user's choice):** the receiver lines up by the panel's unit (`info.max_block`: real or announced blocks), never less than the block being processed. The relay's `largestBlock` is gone. Option 3 follows from it (the lead is 1 unit at 2 blocks, 2 at 3). No hub version change.
+- **Regression test** (`[blocks]`, "one big block long ago doesn't starve a 2-block round trip, however it's reached"): 1 → 2, 3 → 2, Automatic's fallback to 2 and a shrink at a fixed 2, each panel first, receiver first and random (Automatic keeps 1 block with the panel first, so it isn't run there). Before the fix: 173 to 180 of 200 missing with the receiver first (and random, for the fallback and the shrink); after: 0 everywhere.
 
 ### Future refinement: latency-change pop fade ("linear phase pop fade")
 Noted for a later quality-of-life pass (user, 2026-10-08). Reference it by either name.
@@ -718,3 +738,54 @@ Parked by the user (2026-10-08), low priority. Reference it by that name.
 - **The problem:** with real blocks, a sudden tempo drop makes FL's blocks outgrow the round trip before the panel notices (up to its 0.1 s check). Those blocks are missed (faded silence), and Automatic can fall back to 2 blocks.
 - **The idea (user):** a copy of the project's tempo automation clip, moved slightly earlier, drives a panel parameter ("upcoming tempo"). The panel grows the round trip before the real tempo drops.
 - **Reading the project's automation directly would be better, but plugins can't:** VST3 and CLAP only hand a plugin parameter changes for the block being processed, and the playhead reports the current tempo, not future ones. FL's Python scripting API might reach automation clips; not checked.
+
+### Settings defaults file and Set as default (user, 2026-10-08; built the same day with the bug fix, FL-checked)
+- **Defaults in the source only for now** (user). Updating the factory defaults for release is handled then.
+- **`source/SettingsDefaults.json`** lists each plugin-wide setting by its key (as in the settings file and the page's messages): its type (flag, whole, decimal or choice), factory default, limits (min and max, or the choices) and, for numbers, a unit for the menu.
+  - CMake (`cmake-local/SettingsDefaults.cmake`) turns it into `SettingsDefaults.h` when the build is configured. Editing the JSON reconfigures; a malformed entry, or a default outside its limits, stops the build.
+  - `PluginSettings` and `BayLink` take their defaults and limits from it; so does the page (`editor.svelte.ts` imports the same file), so the limits are no longer written twice.
+  - Not in the file: the forwarded keys (no page; a list edited in the settings file) and the remembered editor size.
+  - The round trip's key on the page is now `bayRoundTrip`, as in the settings file (was `roundTripBlocks`).
+- **The user's own defaults** (user's choice A): kept in the settings file as `default.<key>`, beside the values. A setting's default is the user's own where there is one, else the factory's. Every value and user default is checked (the file is untrusted): one that doesn't fit is ignored and the default used; decimals are checked by their bits (fast-math).
+- **Right-click any setting** (an in-page menu, like the parameter menu; it will also work on a tablet):
+  - **Set as default** takes the right-clicked radio option, the box's state, or a text field's typed value (committed as its change handler would). It sets the value too. A default equal to the factory's forgets the user's own.
+  - **Reset to default (X)**: forgets the setting's value, so it follows its default.
+  - **Reset to factory default (Y)**, where the user has a default of their own.
+- **"Reset all settings to defaults"** (top of the Settings tab; asks first): every setting in the file back to its default (the user's own where set). The remembered size and the forwarded keys stay.
+- **Tests (88 test cases, Debug and Release):** user defaults of each kind, values that don't fit refused, one equal to the factory's forgotten; reset and reset all; a hand-edited file's user defaults checked; every choice in the file converts to the plugin's own value; the page's menu (a typed value, the user's and the factory's defaults, a user default that doesn't fit ignored, a radio option, Reset all asking first).
+
+### Names probe (test build, 2026-10-08)
+- **Host controls can be renamed** (`HostControls::setName`), and the host is told: JUCE turns it into VST3's `kParamTitlesChanged`, a CLAP rescan of names, an AU parameter list change. Plugin-supplied parts are untrusted: control characters go, and names stop at 100 characters.
+- **The probe:** Param 1 is called "SLOT 1.1: kHs 3-Band EQ - Low". Diagnostics' "Names probe" button toggles the plugin's name ("SLOT 1.1: Low"). The FL check shows what FL updates live, what it keeps, and whether automation still drives Param 1 after a rename and a reload.
+- **What JUCE allows** (checked in its source): renames in both directions (a hosted plugin's renames reach us as `parameterInfoChanged`, so names like Snap Heap's can pass through). Not possible without editing JUCE: hiding unused controls (JUCE never sets VST3's hidden flag, and reads "automatable" only once) or changing their number (most hosts don't support it). So FL always sees all 256, with real names on bound ones.
+- **Tests:** a rename tells the host once per change, cleaned and capped; the probe's names and its reports to the host.
+
+### FL check of the bug fix, the settings defaults and the names probe (2026-10-08)
+- **Passed:** everything on the checklist (user): 1 → 2, 3 → 2, Automatic's fallback and a shrink at 2 without missing blocks; settings kept, Set as default, the resets, Reset all.
+- **What FL does with a renamed parameter:**
+  - Renamed at once: the plugin parameter browser.
+  - Renamed on reopening: the remote control settings window of a controller link, the automation clip's list of target links (its properties window), "last tweaked" menus, and the Patcher node's input pin parameter list.
+  - **Never renamed: the automation clip's own name**, but the clip keeps driving the parameter (after a rename and after reloading). The user: a clip's name is just a label the user can edit, and one clip can drive many links at once, each with its own mapping, so this is robust.
+  - So dynamic names are safe to build (1b.5d).
+- **A tweak for the next sub-slice (user):** the **bay latency fade** gets **separate lengths for its fade out and its fade back in**. A shorter fade out kills the click at the start more effectively; a longer fade in prevents a pulse on the return.
+  - Agent's note: round trip changes don't fade out and back in; they crossfade the old timing into the new (one length), so there's nothing to split there. A round trip change can also cost missing blocks at 2 or 3 blocks, which use the dropout fade.
+  - To propose: which length the timing jump uses when a new bay latency is adopted (today the bay latency fade); the settings keys (keep `bayLatencyFadeMs` for one of them, so old settings files carry over).
+
+### Slots: decided with the user (2026-10-08)
+- **Order:** the structure first, then states, swap, controls and names, bays as slots, FL's menu (the plan's 1b.5 a to f).
+- **Slot states** (the same meaning for every kind of slot; the mechanics differ):
+  - **Mute** (hot bypass): the slot's contribution is silenced, but it keeps processing in the background for instant resumption. An FX slot passes the dry sound; a generator is silent.
+  - **Bypass** (warm bypass): its processing is bypassed, but it holds its place in latency calculations; effectively resets its tails.
+  - **Off** (cold bypass): removed from the processing grid entirely (the latency reported changes).
+  - **"End signal path when off"**: a right-click option on the Off control. Off then also kills the slot's output downstream, so it's no longer a kind of bypass.
+  - Slot state management will be reworked slightly later; this works for now.
+- **Default controls on every slot:** the three non-active state buttons, small and single-letter: **M**, **B**, **X** (host names "SLOT 1.1: MUTE", "SLOT 1.1: BYPASS", "SLOT 1.1: DISABLED"; default controls are uppercase). A **dry/wet mix**, a short slider until there are knobs: "SLOT 1.1: MIX".
+- **Host control names:** "SLOT b.n: parameter" for slots, "GEN n: parameter" for generators. Two settings: **"show plugin name"** ("SLOT 1.1: Serum 2 - cutoff frequency") and **"instead of SLOT b.n"** ("Serum 2 (2) - cutoff frequency").
+  - **Instance numbers** per plugin, by the order instances were added, with no gaps (later ones move down when one goes); moving a slot never changes them. A single instance has no number.
+  - **Unbound entries: "---".**
+- **Bindings never move once made** (option a): a new control takes the next free entry anywhere in the pool, and its name says where it belongs. Shifting entries to insert controls would break automation, controller links and Patcher wires, which follow the parameter's ID.
+  - **"Tidy host controls" is a definite later addition** (option b): it renumbers into slot order and warns that existing automation and links will then point at other controls.
+  - Fixed blocks per slot (option c) wouldn't work anyway: slot order and count aren't fixed.
+  - FL doesn't rename automation clips, but (user) keeps them pointing at their parameter; the names probe checks it.
+- **Drag:** a rudimentary drag that isn't clunky (pointer tracking with a drop line, not the browser's drag-and-drop, which may clash with FL's file dropping). If it can't be made un-awkward cheaply, buttons for now.
+- **Loading** a plugin freezes the UI while it loads (VST3s load on the message thread; Sylenth1 takes about 4 s): fine for now.

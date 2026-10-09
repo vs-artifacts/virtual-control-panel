@@ -2023,6 +2023,69 @@ TEST_CASE ("Real blocks: a new lowest tempo rechecks, so the round trip can shri
     CHECK (patcher.roundTrip == 125);
 }
 
+TEST_CASE ("Real blocks: one big block long ago doesn't starve a 2-block round trip, however it's reached", "[link][blocks]")
+{
+    enum class Path {
+        fromOne,
+        fromThree,
+        automaticFallback,
+        shrinkAtTwo,
+    };
+
+    for (const auto path : { Path::fromOne, Path::fromThree, Path::automaticFallback, Path::shrinkAtTwo })
+    {
+        for (const auto order : { Order::panelFirst, Order::receiverFirst, Order::random })
+        {
+            // With the panel first, Automatic keeps 1 block
+            if (path == Path::automaticFallback && order == Order::panelFirst)
+                continue;
+
+            INFO ("path " << static_cast<int> (path) << ", order " << static_cast<int> (order));
+            Patcher patcher;
+            patcher.realBlocks = true;
+            patcher.addAll (path == Path::fromOne ? 1 : path == Path::fromThree       ? 3
+                                                    : path == Path::automaticFallback ? BayLink::autoRoundTrip
+                                                                                      : 2);
+
+            // A full announced block, as FL may send around loading or starting; the panel's recheck then forgets it,
+            // as its later checks do
+            patcher.run (1, Order::panelFirst, rigBlock);
+            runFixedWithTimers (patcher, 10, Order::panelFirst, flTick);
+            REQUIRE (patcher.panel->getBlockUnit() == rigBlock);
+            patcher.panel->recheckBlockSize();
+
+            // At 2 blocks the shrink itself is the change; the other paths shrink first
+            if (path != Path::shrinkAtTwo)
+            {
+                runFixedWithTimers (patcher, 10, Order::panelFirst, flTick);
+                REQUIRE (patcher.panel->getBlockUnit() == unitFor (flTick));
+            }
+
+            if (path == Path::fromOne || path == Path::fromThree)
+                patcher.panel->setRoundTripBlocks (2);
+
+            // The change (or Automatic's fallback, or the shrink), then the window after it
+            runFixedWithTimers (patcher, 30, order, flTick);
+            REQUIRE (patcher.roundTrip == 2 * unitFor (flTick));
+
+            patcher.panel->resetCounters();
+            const auto receiverMisses = patcher.relayMisses (patcher.receiver.get());
+
+            for (int round = 0; round < 20; ++round)
+            {
+                patcher.runVarying (10, order, flTick);
+                patcher.maintain();
+            }
+
+            const auto status = patcher.panel->getStatus();
+            INFO (status.events.joinIntoString ("\n"));
+            CHECK (status.missing == 0);
+            CHECK (patcher.relayMisses (patcher.receiver.get()) == receiverMisses);
+            CHECK (patcher.roundTrip == 2 * unitFor (flTick));
+        }
+    }
+}
+
 TEST_CASE ("Retry 1 block: Automatic tries 1 block again; a fixed round trip ignores it", "[link][blocks]")
 {
     const auto settle = [] (Patcher& patcher, Order order) {

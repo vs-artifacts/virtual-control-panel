@@ -25,6 +25,8 @@ PluginProcessor::PluginProcessor()
     for (int i = 0; i < BayLink::numControls; ++i)
         hostControls.bind (static_cast<int> (exposed.size()) + i, bayLink.getControl (i));
 
+    applyNamesProbe();
+
     auto recheck = std::make_unique<TriggerParameter> ("baysRecheckBlockSize", "Bays: recheck block size");
     recheckBlockSize = recheck.get();
     addParameter (recheck.release());
@@ -146,6 +148,23 @@ void PluginProcessor::applyLinkSettings()
     bayLink.updateBayLatency();
     bayLink.updateEventLog();
     reportLatency();
+}
+
+void PluginProcessor::toggleNamesProbe()
+{
+    namesProbeShowsPlugin = !namesProbeShowsPlugin;
+    applyNamesProbe();
+}
+
+void PluginProcessor::applyNamesProbe()
+{
+    const auto& exposed = engine.getExposedParameters();
+
+    if (exposed.empty())
+        return;
+
+    const auto plugin = namesProbeShowsPlugin ? engine.getPlugins()[exposed[0].slot]->getName() + " - " : juce::String();
+    hostControls.setName (0, "SLOT 1.1: " + plugin + exposed[0].parameter->getName (HostControls::maxNameLength));
 }
 
 void PluginProcessor::reportLatency()

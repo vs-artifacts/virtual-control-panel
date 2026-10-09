@@ -35,10 +35,11 @@ struct ParameterHost final : juce::AudioProcessor
 struct HostLog final : juce::AudioProcessorListener
 {
     void audioProcessorParameterChanged (juce::AudioProcessor*, int index, float value) override { changes.emplace_back (index, value); }
-    void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override {}
+    void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails& details) override { infoChanges += details.parameterInfoChanged ? 1 : 0; }
     void audioProcessorParameterChangeGestureBegin (juce::AudioProcessor*, int index) override { gestures.emplace_back (index, true); }
     void audioProcessorParameterChangeGestureEnd (juce::AudioProcessor*, int index) override { gestures.emplace_back (index, false); }
 
     std::vector<std::pair<int, float>> changes;
     std::vector<std::pair<int, bool>> gestures;
+    int infoChanges = 0; // parameter names (and other details) changed
 };

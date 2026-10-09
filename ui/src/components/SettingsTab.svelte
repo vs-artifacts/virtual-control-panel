@@ -10,12 +10,16 @@
         quietLevelRange,
         quietMsRange,
         releaseRange,
+        resetSettings,
         resetSize,
         settleRange,
         type FadeKey,
         type Settings,
     } from "../lib/editor.svelte";
     import { link } from "../lib/link.svelte";
+    import { openSettingMenu, typedNumber } from "../lib/settingMenu";
+
+    let confirmingResetAll = $state(false);
 
     const placements: { value: Settings["editorPlacement"]; text: string }[] = [
         { value: "off", text: "Off" },
@@ -50,7 +54,7 @@
         },
     ];
 
-    const roundTrips: { value: Settings["roundTripBlocks"]; text: string }[] = [
+    const roundTrips: { value: Settings["bayRoundTrip"]; text: string }[] = [
         {
             value: 0,
             text: "Automatic (1 block if the receiver runs after the panel, otherwise 2; checked when relays link)",
@@ -167,7 +171,42 @@
 
 <p class="title">{editor.title}</p>
 
-<label class="option">
+<div class="line" id="reset-all">
+    {#if confirmingResetAll}
+        <span>Reset every setting to its default?</span>
+        <button
+            type="button"
+            id="confirm-reset-all"
+            onclick={() => {
+                confirmingResetAll = false;
+                resetSettings("all");
+            }}>Reset all</button
+        >
+        <button type="button" onclick={() => (confirmingResetAll = false)}
+            >Cancel</button
+        >
+    {:else}
+        <button
+            type="button"
+            id="reset-all-settings"
+            onclick={() => (confirmingResetAll = true)}
+            >Reset all settings to defaults</button
+        >
+    {/if}
+</div>
+<p class="hint">
+    Right-click any setting to make its value your default, or to reset it.
+</p>
+
+<label
+    class="option"
+    oncontextmenu={(event) =>
+        openSettingMenu(
+            event,
+            "keepWebViewWarm",
+            editor.settings.keepWebViewWarm,
+        )}
+>
     <input
         type="checkbox"
         checked={editor.settings.keepWebViewWarm}
@@ -177,7 +216,15 @@
     Keep web UI warm (reopens instantly, uses more memory)
 </label>
 
-<label class="option">
+<label
+    class="option"
+    oncontextmenu={(event) =>
+        openSettingMenu(
+            event,
+            "flOutputCorrection",
+            editor.settings.flOutputCorrection,
+        )}
+>
     <input
         type="checkbox"
         checked={editor.settings.flOutputCorrection}
@@ -187,7 +234,15 @@
     Correct FL Studio's gain on our control outputs (x1.283291, FL only)
 </label>
 
-<label class="option">
+<label
+    class="option"
+    oncontextmenu={(event) =>
+        openSettingMenu(
+            event,
+            "resizeBlocksLanguageSwitch",
+            editor.settings.resizeBlocksLanguageSwitch,
+        )}
+>
     <input
         type="checkbox"
         checked={editor.settings.resizeBlocksLanguageSwitch}
@@ -205,7 +260,11 @@
     <fieldset>
         <legend>Center a separate window when it first opens on</legend>
         {#each placements as option (option.value)}
-            <label class="option">
+            <label
+                class="option"
+                oncontextmenu={(event) =>
+                    openSettingMenu(event, "editorPlacement", option.value)}
+            >
                 <input
                     type="radio"
                     name="editorPlacement"
@@ -223,7 +282,11 @@
             >Center a window attached inside FL Studio when it first opens</legend
         >
         {#each attachedPlacements as option (option.value)}
-            <label class="option">
+            <label
+                class="option"
+                oncontextmenu={(event) =>
+                    openSettingMenu(event, "attachedPlacement", option.value)}
+            >
                 <input
                     type="radio"
                     name="attachedPlacement"
@@ -239,7 +302,11 @@
     <fieldset>
         <legend>Resizing</legend>
         {#each renderings as option (option.value)}
-            <label class="option">
+            <label
+                class="option"
+                oncontextmenu={(event) =>
+                    openSettingMenu(event, "resizeRendering", option.value)}
+            >
                 <input
                     type="radio"
                     name="resizeRendering"
@@ -250,7 +317,15 @@
                 {option.text}
             </label>
         {/each}
-        <label class="option">
+        <label
+            class="option"
+            oncontextmenu={(event) =>
+                openSettingMenu(
+                    event,
+                    "resizeFlipAlt",
+                    editor.settings.resizeFlipAlt,
+                )}
+        >
             <input
                 type="checkbox"
                 checked={editor.settings.resizeFlipAlt}
@@ -280,7 +355,18 @@
 
 <fieldset>
     <legend>Double-click on a control</legend>
-    <label class="option">
+    <label
+        class="option"
+        oncontextmenu={(event) =>
+            openSettingMenu(
+                event,
+                "doubleClickMs",
+                typedNumber(
+                    event.currentTarget.querySelector("input"),
+                    "doubleClickMs",
+                ),
+            )}
+    >
         <input
             id="double-click-ms"
             class="milliseconds"
@@ -293,7 +379,15 @@
         />
         ms at most between the clicks ({doubleClickRange.min} to {doubleClickRange.max})
     </label>
-    <label class="option">
+    <label
+        class="option"
+        oncontextmenu={(event) =>
+            openSettingMenu(
+                event,
+                "doubleClickSets",
+                editor.settings.doubleClickSets,
+            )}
+    >
         <input
             type="checkbox"
             checked={editor.settings.doubleClickSets}
@@ -310,14 +404,17 @@
         <legend>Bay round trip (the host is told it as latency)</legend>
         {#each roundTrips as option (option.value)}
             <div class="line">
-                <label class="option">
+                <label
+                    class="option"
+                    oncontextmenu={(event) =>
+                        openSettingMenu(event, "bayRoundTrip", option.value)}
+                >
                     <input
                         type="radio"
-                        name="roundTripBlocks"
-                        checked={editor.settings.roundTripBlocks ===
-                            option.value}
+                        name="bayRoundTrip"
+                        checked={editor.settings.bayRoundTrip === option.value}
                         onchange={() =>
-                            changeSetting("roundTripBlocks", option.value)}
+                            changeSetting("bayRoundTrip", option.value)}
                     />
                     {option.text}
                 </label>
@@ -325,7 +422,7 @@
                     <button
                         type="button"
                         id="retry-one-block"
-                        disabled={editor.settings.roundTripBlocks !== 0}
+                        disabled={editor.settings.bayRoundTrip !== 0}
                         onclick={sendRetryOneBlock}>Retry 1 block</button
                     >
                 {/if}
@@ -349,7 +446,11 @@
 
     <fieldset>
         <legend>Bay round trip counted in</legend>
-        <label class="option">
+        <label
+            class="option"
+            oncontextmenu={(event) =>
+                openSettingMenu(event, "bayRealBlocks", true)}
+        >
             <input
                 type="radio"
                 name="bayRealBlocks"
@@ -359,7 +460,11 @@
             Real blocks (FL: one sequencer tick each, far below the buffer length;
             grown ahead of need, 25% to spare)
         </label>
-        <label class="option">
+        <label
+            class="option"
+            oncontextmenu={(event) =>
+                openSettingMenu(event, "bayRealBlocks", false)}
+        >
             <input
                 type="radio"
                 name="bayRealBlocks"
@@ -368,7 +473,18 @@
             />
             Announced blocks (the host's buffer length)
         </label>
-        <label class="option">
+        <label
+            class="option"
+            oncontextmenu={(event) =>
+                openSettingMenu(
+                    event,
+                    "bayLowestTempo",
+                    typedNumber(
+                        event.currentTarget.querySelector("input"),
+                        "bayLowestTempo",
+                    ),
+                )}
+        >
             Lowest tempo
             <input
                 id="lowest-tempo"
@@ -404,7 +520,11 @@
             >Real blocks: shrink the round trip while the transport is stopped</legend
         >
         {#each stoppedShrinks as option (option.value)}
-            <label class="option">
+            <label
+                class="option"
+                oncontextmenu={(event) =>
+                    openSettingMenu(event, "bayStoppedShrink", option.value)}
+            >
                 <input
                     type="radio"
                     name="bayStoppedShrink"
@@ -427,6 +547,12 @@
                 value={editor.settings.bayQuietLevelDb}
                 onchange={(event) =>
                     changeWhole(event, "bayQuietLevelDb", quietLevelRange)}
+                oncontextmenu={(event) =>
+                    openSettingMenu(
+                        event,
+                        "bayQuietLevelDb",
+                        typedNumber(event.currentTarget, "bayQuietLevelDb"),
+                    )}
             />
             dBFS for
             <input
@@ -439,6 +565,12 @@
                 value={editor.settings.bayQuietMs}
                 onchange={(event) =>
                     changeWhole(event, "bayQuietMs", quietMsRange)}
+                oncontextmenu={(event) =>
+                    openSettingMenu(
+                        event,
+                        "bayQuietMs",
+                        typedNumber(event.currentTarget, "bayQuietMs"),
+                    )}
             />
             ms
         </label>
@@ -452,7 +584,18 @@
     <fieldset id="bay-fades">
         <legend>Bay fades (ms, 0 is off)</legend>
         {#each fadeSettings as fade (fade.key)}
-            <label class="option">
+            <label
+                class="option"
+                oncontextmenu={(event) =>
+                    openSettingMenu(
+                        event,
+                        fade.key,
+                        typedNumber(
+                            event.currentTarget.querySelector("input"),
+                            fade.key,
+                        ),
+                    )}
+            >
                 <input
                     class="milliseconds"
                     type="number"
@@ -472,7 +615,18 @@
 
     <fieldset>
         <legend>Bay latency settle time</legend>
-        <label class="option">
+        <label
+            class="option"
+            oncontextmenu={(event) =>
+                openSettingMenu(
+                    event,
+                    "bayLatencySettleMs",
+                    typedNumber(
+                        event.currentTarget.querySelector("input"),
+                        "bayLatencySettleMs",
+                    ),
+                )}
+        >
             <input
                 id="latency-settle"
                 class="milliseconds"
@@ -493,7 +647,18 @@
 
     <fieldset>
         <legend>Bay tail cut release</legend>
-        <label class="option">
+        <label
+            class="option"
+            oncontextmenu={(event) =>
+                openSettingMenu(
+                    event,
+                    "bayTailCutReleaseMs",
+                    typedNumber(
+                        event.currentTarget.querySelector("input"),
+                        "bayTailCutReleaseMs",
+                    ),
+                )}
+        >
             <input
                 id="tail-cut-release"
                 class="milliseconds"

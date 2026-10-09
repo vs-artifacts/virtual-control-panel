@@ -103,7 +103,7 @@ On macOS for universal binary: `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
 
 ## Project Structure
 
-- `source/` - Plugin shell code (PluginProcessor, PluginEditor: the web view filling the window, the page's handlers, and resizing from the page's corner grips, `HostedEditorWindows`: hosted plugins' own editors in separate windows, `EditorScale`: design size, limits and sharp steps, `WebUi`: the editor's locked-down web view and its native bridge, `WebViewKeepAlive`, `KeyForwarder`: typing keys from the page to the host (with FL's Delphi key path), `PluginSettings`: plugin-wide preferences file, `HostControls`: the fixed pool of parameters the host sees, bound to exposed parameters, `HostMenus`: the right-click menu for a parameter, with the host's options as a submenu, `EditorPlacement`: centres the editor's window on first open, `RelayHubFinder`: finds the link hub in a relay already loaded in the host's process; Windows only, macOS stub)
+- `source/` - Plugin shell code (PluginProcessor, PluginEditor: the web view filling the window, the page's handlers, and resizing from the page's corner grips, `HostedEditorWindows`: hosted plugins' own editors in separate windows, `EditorScale`: design size, limits and sharp steps, `WebUi`: the editor's locked-down web view and its native bridge, `WebViewKeepAlive`, `KeyForwarder`: typing keys from the page to the host (with FL's Delphi key path), `PluginSettings`: plugin-wide preferences file (with the user's own defaults), `SettingsDefaults.json`: every plugin-wide setting's factory default and limits (the C++ and the page both build from it), `HostControls`: the fixed pool of parameters the host sees, bound to exposed parameters (renamable; the host is told), `HostMenus`: the right-click menu for a parameter, with the host's options as a submenu, `EditorPlacement`: centres the editor's window on first open, `RelayHubFinder`: finds the link hub in a relay already loaded in the host's process; Windows only, macOS stub)
 - `source/engine/` - Shell-independent engine code: `Engine` (the routing graph that runs everything, plus which hosted parameters are exposed and a fading mute stage after each generator), `HostedPlugin` (one plugin slot in it) and `BayLink` (the panel's side of an external module bay: send, return, slot states (Active, Mute, Bypass, Off) with the tail cut value, silent dropouts with a reversed fade, waiting for the bay's sound, the bay plugin's latency from the transmitter's reports with its settle rule, the bay's control values as `BayControl` parameters, the automatic round trip, the event log, diagnostics, lag measurement, control timing probe)
 - `source/bridge/` - Shell-independent web UI plumbing: `UiFiles` (the embedded page files, looked up by exact path), `ControlSession` (one page's view of the exposed parameters: catalog, updates, validated sets and gestures)
 - `source/link/` - The link hub, self-contained: `LinkApi.h` (the plain C interface, the only thing panel and relays share), `LinkHub` (the hub; compiled into the relay and Tests only, as CMake's `LinkHub` library, never into the panel), `BayNames.h` (channel names both sides use)
@@ -113,7 +113,7 @@ On macOS for universal binary: `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
 - `docs/` - Project specs and decisions (see Project Docs above)
 - `ui/` - Svelte 5 + Vite + TypeScript web UI (WebGL2 shaders later). Built by CMake and embedded as the `UiBundle` target
 - `cmake/` - Pamplejuce CMake modules (Tests.cmake, Benchmarks.cmake, Assets.cmake, etc.); a git submodule, never edit
-- `cmake-local/` - Our own CMake modules (WebView2 SDK, web UI build)
+- `cmake-local/` - Our own CMake modules (WebView2 SDK, web UI build, settings defaults header)
 - `modules/` - Git submodules: clap-juce-extensions, melatonin_inspector
 - `JUCE/` - JUCE framework (git submodule, JUCE 9.0.1+ on master). Never edit files in `JUCE/` or `modules/`; they are marked read-only in VS Code.
 - `assets/` - Binary resources (auto-included via juce_add_binary_data)
@@ -131,6 +131,7 @@ On macOS for universal binary: `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
 Our own modules live in `cmake-local/`:
 - `WebView2Sdk.cmake` - Windows: downloads and checksum-verifies the WebView2 SDK that JUCE links statically
 - `Ui.cmake` - Builds `ui/` with npm and embeds the result as `UiBundle` (its file list must match what Vite produces)
+- `SettingsDefaults.cmake` - Turns `source/SettingsDefaults.json` into `SettingsDefaults.h` at configure time (template `SettingsDefaults.h.in`; its placeholders sit inside `clang-format off`, or format-on-save breaks them)
 
 Target setup happens via explicit function calls in `CMakeLists.txt`, not at include time:
 - `pamplejuce_add_assets()` - Includes all files in assets/ as binary data (from `Assets.cmake`)

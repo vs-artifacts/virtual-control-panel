@@ -3,15 +3,31 @@
 #include "EditorPlacement.h"
 #include "EditorScale.h"
 #include "engine/BayLink.h"
+#include <SettingsDefaults.h>
 #include <juce_data_structures/juce_data_structures.h>
 
 // Plugin-wide preferences, shared by every instance and project, kept in the user's settings folder.
 // Share one copy per process through juce::SharedResourcePointer<PluginSettings>.
+// Each setting's default is the user's own (set from its right-click menu) where there is one, else the factory's
+// (SettingsDefaults.h, generated from source/SettingsDefaults.json). The file is untrusted: every value is checked.
 class PluginSettings
 {
 public:
     PluginSettings();
     explicit PluginSettings (const juce::File& file);
+
+    // By the settings' keys (as in SettingsDefaults.h). False if there's no such setting or the value doesn't fit it;
+    // a default equal to the factory's is forgotten.
+    bool setUserDefault (const juce::String& key, const juce::var& value);
+
+    // Every valid user default, by key
+    juce::var getUserDefaults() const;
+
+    // Back to its default; false if there's no such setting
+    bool reset (const juce::String& key);
+
+    // Every setting in SettingsDefaults.h back to its default (the remembered editor size and the forwarded keys stay)
+    void resetAll();
 
     // Keep a hidden web view running so the editor reopens instantly, at the cost of memory
     bool getKeepWebViewWarm() const;
@@ -88,7 +104,8 @@ public:
     void setTailCutReleaseMs (int);
 
     // The longest gap between the two clicks of a double-click on the page's controls
-    static constexpr int minDoubleClickMs = 1, maxDoubleClickMs = 2000, defaultDoubleClickMs = 500;
+    static constexpr int minDoubleClickMs = SettingsDefaults::doubleClickMs.min, maxDoubleClickMs = SettingsDefaults::doubleClickMs.max,
+                         defaultDoubleClickMs = SettingsDefaults::doubleClickMs.value;
     int getDoubleClickMs() const;
     void setDoubleClickMs (int);
 

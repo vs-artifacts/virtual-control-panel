@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../link/LinkApi.h"
+#include <SettingsDefaults.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 
 // A value the panel sends to a bay's receiver relay, which plays it as a steady level on its control output of the
@@ -233,11 +234,28 @@ public:
 
     void setFadeMs (Fade fade, int milliseconds) noexcept { fadeMs[index (fade)].store (juce::jlimit (0, maxFadeMsFor (fade), milliseconds)); }
     int getFadeMs (Fade fade) const noexcept { return fadeMs[index (fade)].load(); }
-    static constexpr int maxFadeMsFor (Fade fade) noexcept { return fade == Fade::roundTrip ? 100 : maxFadeMs; }
-    static constexpr int defaultFadeMs (Fade fade) noexcept
+    static constexpr int maxFadeMsFor (Fade fade) noexcept { return fadeSetting (fade).max; }
+    static constexpr int defaultFadeMs (Fade fade) noexcept { return fadeSetting (fade).value; }
+
+    static constexpr const SettingsDefaults::Whole& fadeSetting (Fade fade) noexcept
     {
-        constexpr std::array<int, fades.size()> defaults { 6, 20, 12, 12, 25, 30 }; // the user's tuning (2026-10-08)
-        return defaults[index (fade)];
+        switch (fade)
+        {
+            case Fade::roundTrip:
+                return SettingsDefaults::bayJumpCrossfadeMs; // the name it had when it was the only delay change crossfade
+            case Fade::bayLatency:
+                return SettingsDefaults::bayLatencyFadeMs;
+            case Fade::mute:
+                return SettingsDefaults::bayMuteFadeMs;
+            case Fade::bypass:
+                return SettingsDefaults::bayBypassFadeMs;
+            case Fade::off:
+                return SettingsDefaults::bayOffFadeMs;
+            case Fade::dropout:
+                break;
+        }
+
+        return SettingsDefaults::bayDropoutFadeMs;
     }
     bool updateBayLatency(); // takes a new bay latency once it has held for the settle time; true if it did. A timer calls it.
     int getBayLatency() const noexcept { return bayLatency.load(); }
@@ -267,8 +285,9 @@ public:
 
     static constexpr int autoRoundTrip = 0;
     static constexpr int minRoundTripBlocks = 1;
-    static constexpr int maxRoundTripBlocks = 3;
-    static constexpr int defaultRoundTripBlocks = autoRoundTrip;
+    static constexpr int maxRoundTripBlocks = SettingsDefaults::bayRoundTrip.max;
+    static constexpr int defaultRoundTripBlocks = SettingsDefaults::bayRoundTrip.value;
+    static_assert (SettingsDefaults::bayRoundTrip.min == autoRoundTrip);
 
     // Real blocks: blocks are watched this long (after a prepare or Reset counters) before the unit is chosen. The unit is
     // the largest block seen times unitHeadroom, at most the announced block; a block above unitGrowAt of it grows it
@@ -277,22 +296,23 @@ public:
     static constexpr double unitHeadroom = 1.25;
     static constexpr double unitGrowAt = 0.9;
     static constexpr int ticksPerBeat = 96; // FL's sequencer, for the lowest tempo's tick
-    static constexpr double maxLowestTempo = 999.0;
+    static constexpr double maxLowestTempo = SettingsDefaults::bayLowestTempo.max;
 
-    static constexpr int minQuietLevelDb = -120, maxQuietLevelDb = 0, defaultQuietLevelDb = -80;
-    static constexpr int maxQuietMs = 5000, defaultQuietMs = 500;
+    static constexpr int minQuietLevelDb = SettingsDefaults::bayQuietLevelDb.min, maxQuietLevelDb = SettingsDefaults::bayQuietLevelDb.max,
+                         defaultQuietLevelDb = SettingsDefaults::bayQuietLevelDb.value;
+    static constexpr int maxQuietMs = SettingsDefaults::bayQuietMs.max, defaultQuietMs = SettingsDefaults::bayQuietMs.value;
 
     // The longest fade of any kind
-    static constexpr int maxFadeMs = 500;
+    static constexpr int maxFadeMs = std::max ({ SettingsDefaults::bayJumpCrossfadeMs.max, SettingsDefaults::bayLatencyFadeMs.max, SettingsDefaults::bayMuteFadeMs.max, SettingsDefaults::bayBypassFadeMs.max, SettingsDefaults::bayOffFadeMs.max, SettingsDefaults::bayDropoutFadeMs.max });
 
     // How long a new bay latency must hold before it's used
-    static constexpr int maxSettleMs = 1000;
-    static constexpr int defaultSettleMs = 50;
+    static constexpr int maxSettleMs = SettingsDefaults::bayLatencySettleMs.max;
+    static constexpr int defaultSettleMs = SettingsDefaults::bayLatencySettleMs.value;
 
     // After a slot leaves Bypass or Off, the bay's send stays silent this much longer before it fades in: a plugin
     // cleared through a Peak Controller comes back some ms late
-    static constexpr int maxTailCutReleaseMs = 1000;
-    static constexpr int defaultTailCutReleaseMs = 0;
+    static constexpr int maxTailCutReleaseMs = SettingsDefaults::bayTailCutReleaseMs.max;
+    static constexpr int defaultTailCutReleaseMs = SettingsDefaults::bayTailCutReleaseMs.value;
 
     // Lines the event log keeps
     static constexpr int maxEvents = 30;
