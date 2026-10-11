@@ -8,7 +8,8 @@ set(UI_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/ui")
 set(UI_BUNDLE_FILES
     "${UI_BUILD_DIR}/index.html"
     "${UI_BUILD_DIR}/assets/index.js"
-    "${UI_BUILD_DIR}/assets/index.css")
+    "${UI_BUILD_DIR}/assets/index.css"
+    "${UI_BUILD_DIR}/assets/m5x7.ttf")
 
 file(GLOB_RECURSE UI_SOURCES CONFIGURE_DEPENDS "${UI_SOURCE_DIR}/src/*")
 list(APPEND UI_SOURCES
@@ -19,6 +20,7 @@ list(APPEND UI_SOURCES
     "${UI_SOURCE_DIR}/tsconfig.app.json"
     "${UI_SOURCE_DIR}/tsconfig.node.json"
     "${UI_SOURCE_DIR}/vite.config.ts"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/m5x7.ttf"
     "${SETTINGS_DEFAULTS_JSON}")
 
 # Once per build folder, and again when the dependencies change. `npm install` rather than `npm ci`:

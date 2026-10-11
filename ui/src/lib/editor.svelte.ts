@@ -1,19 +1,19 @@
 import factoryDefaults from '../../../source/SettingsDefaults.json'
-import { fetchEditorState, onHostDiagnostics, onProcessing, sendDiagnostics, sendMutePlugin, sendNamesProbe, sendOpenPlugin, sendResetSettings, sendResetSize, sendScroll, sendSetting, sendSettingDefault, sendTab } from './bridge'
+import { fetchEditorState, onHostDiagnostics, onProcessing, sendAddBus, sendAddSlot, sendCollapse, sendDiagnostics, sendGeneratorBus, sendMoveSlot, sendMutePlugin, sendNamesProbe, sendOpenPlugin, sendRemoveBus, sendRemoveSlot, sendResetSettings, sendResetSize, sendScroll, sendSetting, sendSettingDefault, sendTab } from './bridge'
 import { link, listenForLink, readLink } from './link.svelte'
 import { asRecord } from './read'
 
-export const tabNames = ['Panel', 'Plugins', 'Settings'] as const
+export const tabNames = ['Panel', 'Settings'] as const
 
-// The page's scrolling areas, as the plugin saves them: each tab in two columns, each tab beside Diagnostics (one
-// column), and Diagnostics
-export type TabLayout = 'columns' | 'single'
-export const scrollAreas = [...tabNames.flatMap((_, tab) => [`tab${tab}.columns`, `tab${tab}.single`]), 'diagnostics']
+// The page's scrolling areas, as the plugin saves them: the Panel tab (down, and its generator and bus rows sideways), the
+// Settings tab, and Diagnostics
+export const scrollAreas = ['panel', 'panel.generators', 'panel.buses', 'settings', 'diagnostics'] as const
+export const sidewaysScrollAreas: readonly string[] = ['panel.generators', 'panel.buses']
 const maxScroll = 1000000
 
-export function tabScrollArea(tab: number, layout: TabLayout): string {
-    return `tab${tab}.${layout}`
-}
+// The Panel tab's sections, each collapsible to its bar
+export const sections = ['header', 'generators', 'buses'] as const
+export type Section = (typeof sections)[number]
 
 export const renderings = ['smooth', 'sharp'] as const
 const roundTrips = [0, 1, 2, 3] as const
@@ -37,14 +37,18 @@ export interface Settings {
     bayStoppedShrink: (typeof stoppedShrinkRules)[number]
     bayQuietLevelDb: number
     bayQuietMs: number
-    bayJumpCrossfadeMs: number
-    bayLatencyFadeMs: number
+    bayRoundTripFadeMs: number
+    bayLatencyFadeOutMs: number
+    bayLatencyFadeInMs: number
     bayMuteFadeMs: number
     bayBypassFadeMs: number
     bayOffFadeMs: number
-    bayDropoutFadeMs: number
+    bayDropoutFadeOutMs: number
+    bayDropoutFadeInMs: number
     bayLatencySettleMs: number
     bayTailCutReleaseMs: number
+    slotChangeFadeOutMs: number
+    slotChangeFadeInMs: number
     doubleClickMs: number
     // Placeholder: double-click will open a value entry instead of resetting
     doubleClickSets: boolean
@@ -82,15 +86,23 @@ export const quietMsRange = rangeOf('bayQuietMs')
 
 // The bay's fades, one per cause (whole milliseconds, 0 is off), by their settings keys
 export const fadeSettings = [
-    { key: 'bayJumpCrossfadeMs', max: rangeOf('bayJumpCrossfadeMs').max, label: 'Round trip change', covers: 'the timing jump when the round trip changes (tempo, Automatic, Settings)' },
-    { key: 'bayLatencyFadeMs', max: rangeOf('bayLatencyFadeMs').max, label: 'Bay latency change', covers: "the fade out and back in around the bay's sound held back for a latency change (e.g. linear phase), and the timing jump" },
+    { key: 'bayRoundTripFadeMs', max: rangeOf('bayRoundTripFadeMs').max, label: 'Round trip change', covers: 'the timing jump when the round trip changes (tempo, Automatic, Settings)' },
+    { key: 'bayLatencyFadeOutMs', max: rangeOf('bayLatencyFadeOutMs').max, label: 'Bay latency change: fade out', covers: "into the bay's sound held back for a latency change (e.g. linear phase)" },
+    { key: 'bayLatencyFadeInMs', max: rangeOf('bayLatencyFadeInMs').max, label: 'Bay latency change: fade in', covers: "the bay's sound coming back after a latency change, and the timing jump to the new latency" },
     { key: 'bayMuteFadeMs', max: rangeOf('bayMuteFadeMs').max, label: 'Mute', covers: "between the dry sound and the bay's, entering and leaving Mute" },
     { key: 'bayBypassFadeMs', max: rangeOf('bayBypassFadeMs').max, label: 'Bypass', covers: "between the dry sound and the bay's, and the bay's send, entering and leaving Bypass" },
     { key: 'bayOffFadeMs', max: rangeOf('bayOffFadeMs').max, label: 'Off', covers: "the timing jump, the bay's send and the fade back in, entering and leaving Off" },
-    { key: 'bayDropoutFadeMs', max: rangeOf('bayDropoutFadeMs').max, label: 'Dropouts', covers: "the fade out and back in around a missing return, and into the bay's first sound" },
+    { key: 'bayDropoutFadeOutMs', max: rangeOf('bayDropoutFadeOutMs').max, label: 'Dropouts: fade out', covers: 'into a missing return' },
+    { key: 'bayDropoutFadeInMs', max: rangeOf('bayDropoutFadeInMs').max, label: 'Dropouts: fade in', covers: "the return coming back after a dropout, and into the bay's first sound" },
 ] as const
 
-export type FadeKey = (typeof fadeSettings)[number]['key']
+// The dip around a change of the panel's structure (whole milliseconds, 0 is off)
+export const slotChangeFadeSettings = [
+    { key: 'slotChangeFadeOutMs', max: rangeOf('slotChangeFadeOutMs').max, label: 'Fade out', covers: 'the panel\'s sound, before a slot, bus or generator route is added, removed or moved' },
+    { key: 'slotChangeFadeInMs', max: rangeOf('slotChangeFadeInMs').max, label: 'Fade in', covers: 'the panel\'s sound, once the change is made' },
+] as const
+
+export type FadeKey = (typeof fadeSettings)[number]['key'] | (typeof slotChangeFadeSettings)[number]['key']
 
 // How long a new bay latency must hold before it's used: whole milliseconds
 export const settleRange = rangeOf('bayLatencySettleMs')
@@ -129,14 +141,40 @@ export function defaultOf<Name extends SettingKey>(key: Name): Settings[Name] {
     return (editor.userDefaults[key] ?? factoryDefault(key)) as Settings[Name]
 }
 
-export interface HostedPlugin {
-    slot: number
+// A generator or a bus's slot. Plugin: its plugin list key (empty for an empty slot).
+export interface SlotInfo {
+    id: number
     label: string
+    plugin: string
     name: string
     status: string
     canOpen: boolean
     canMute: boolean
     muted: boolean
+}
+
+export interface GeneratorInfo extends SlotInfo {
+    buses: number[]
+}
+
+// parent: a sub-bus's parent bus (0 for none)
+export interface BusInfo {
+    id: number
+    label: string
+    parent: number
+    slots: SlotInfo[]
+}
+
+export interface PluginChoice {
+    key: string
+    name: string
+}
+
+export interface StructureInfo {
+    generators: GeneratorInfo[]
+    buses: BusInfo[]
+    master: BusInfo
+    menu: { generators: PluginChoice[]; fx: PluginChoice[] }
 }
 
 // ready: the plugin has said which tab was showing, so the page doesn't flash another one first
@@ -148,7 +186,8 @@ export const editor = $state({
     settings: Object.fromEntries(settingKeys.map((key) => [key, definitions[key].default])) as unknown as Settings,
     // The user's own defaults, where set
     userDefaults: {} as Partial<Settings>,
-    plugins: [] as HostedPlugin[],
+    structure: null as StructureInfo | null,
+    collapsed: Object.fromEntries(sections.map((section) => [section, false])) as Record<Section, boolean>,
     // Unknown (null) until the plugin says
     processing: null as boolean | null,
     // Test-build diagnostics: the last forwarded keys (newest first) and the windows around the editor
@@ -174,16 +213,81 @@ function readScroll(raw: unknown): void {
     }
 }
 
-function readPlugins(raw: unknown): HostedPlugin[] {
+function readText(raw: unknown): string | null {
+    return typeof raw === 'string' ? raw.slice(0, 200) : null
+}
+
+function readId(raw: unknown): number | null {
+    return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 && raw <= 1000000 ? raw : null
+}
+
+const maxListed = 256
+
+function readSlot(raw: unknown): SlotInfo | null {
+    const fields = asRecord(raw) ?? {}
+    const id = readId(fields.id)
+    const label = readText(fields.label)
+    const plugin = readText(fields.plugin)
+    const name = readText(fields.name)
+    const status = readText(fields.status)
+
+    if (id === null || label === null || plugin === null || name === null || status === null) return null
+
+    return { id, label, plugin, name, status, canOpen: fields.canOpen === true, canMute: fields.canMute === true, muted: fields.muted === true }
+}
+
+function readBus(raw: unknown): BusInfo | null {
+    const fields = asRecord(raw) ?? {}
+    const id = readId(fields.id)
+    const label = readText(fields.label)
+    const parent = readId(fields.parent)
+
+    if (id === null || label === null || parent === null || !Array.isArray(fields.slots)) return null
+
+    return { id, label, parent, slots: fields.slots.slice(0, maxListed).map(readSlot).filter((slot) => slot !== null) }
+}
+
+function readChoices(raw: unknown): PluginChoice[] {
     if (!Array.isArray(raw)) return []
 
-    return raw.flatMap((entry) => {
-        const { slot, label, name, status, canOpen, canMute, muted } = asRecord(entry) ?? {}
-
-        if (typeof slot !== 'number' || !Number.isInteger(slot) || typeof label !== 'string' || typeof name !== 'string' || typeof status !== 'string') return []
-
-        return [{ slot, label, name, status, canOpen: canOpen === true, canMute: canMute === true, muted: muted === true }]
+    return raw.slice(0, maxListed).flatMap((entry) => {
+        const fields = asRecord(entry) ?? {}
+        const key = readText(fields.key)
+        const name = readText(fields.name)
+        return key !== null && name !== null ? [{ key, name }] : []
     })
+}
+
+// The plugin's description of the generator stage, the buses and the master (see describeStructure in the plugin)
+export function readStructure(raw: unknown): StructureInfo | null {
+    const fields = asRecord(raw)
+    const master = readBus(fields?.master)
+
+    if (fields === null || master === null || !Array.isArray(fields.generators) || !Array.isArray(fields.buses)) return null
+
+    const generators = fields.generators.slice(0, maxListed).flatMap((entry) => {
+        const slot = readSlot(entry)
+        const buses = asRecord(entry)?.buses
+
+        if (slot === null || !Array.isArray(buses)) return []
+
+        return [{ ...slot, buses: buses.slice(0, maxListed).map(readId).filter((bus) => bus !== null) }]
+    })
+
+    const menu = asRecord(fields.menu) ?? {}
+
+    return {
+        generators,
+        buses: fields.buses.slice(0, maxListed).map(readBus).filter((bus) => bus !== null),
+        master,
+        menu: { generators: readChoices(menu.generators), fx: readChoices(menu.fx) },
+    }
+}
+
+function readCollapsed(raw: unknown): void {
+    const names = Array.isArray(raw) ? raw : []
+
+    for (const section of sections) editor.collapsed[section] = names.includes(section)
 }
 
 // Only what fits each setting is taken
@@ -237,10 +341,11 @@ export async function loadEditorState(): Promise<void> {
         if (typeof state.processing === 'boolean') editor.processing = state.processing
 
         readScroll(state.scroll)
+        readCollapsed(state.collapsed)
         readSettings(state.settings, editor.settings)
         readUserDefaults(state.userDefaults)
         readProbeName(state.probeName)
-        editor.plugins = readPlugins(state.plugins)
+        editor.structure = readStructure(state.structure)
         link.status = readLink(state.link)
     } catch {
         // The Panel tab still works; the other tabs just have nothing from the plugin
@@ -314,14 +419,68 @@ export function openPlugin(slot: number): void {
     if (connected) sendOpenPlugin(slot)
 }
 
+function findSlot(id: number): SlotInfo | undefined {
+    const structure = editor.structure
+
+    if (structure === null) return undefined
+
+    return [...structure.generators, ...structure.buses.flatMap((bus) => bus.slots), ...structure.master.slots].find((slot) => slot.id === id)
+}
+
 export function mutePlugin(slot: number, muted: boolean): void {
-    const plugin = editor.plugins.find((entry) => entry.slot === slot)
+    const plugin = findSlot(slot)
 
     if (plugin === undefined || !plugin.canMute) return
 
     plugin.muted = muted
 
     if (connected) sendMutePlugin(slot, muted)
+}
+
+// Structure changes: the plugin answers each with the new structure (see onStructure)
+
+// bus 0: the generator stage
+export function addSlot(bus: number, index: number, plugin: string): void {
+    if (connected) sendAddSlot(bus, index, plugin)
+}
+
+export function removeSlot(slot: number): void {
+    if (connected) sendRemoveSlot(slot)
+}
+
+// index: where it lands, counted without the slot itself; a generator ignores the bus
+export function moveSlot(slot: number, bus: number, index: number): void {
+    if (connected) sendMoveSlot(slot, bus, index)
+}
+
+// An empty slot gets a plugin: the plugin's slot goes in its place
+export function fillSlot(bus: number, slot: number, plugin: string): void {
+    const owner = editor.structure?.buses.find((entry) => entry.id === bus) ?? (editor.structure?.master.id === bus ? editor.structure.master : undefined)
+    const index = owner?.slots.findIndex((entry) => entry.id === slot) ?? -1
+
+    if (index < 0 || !connected) return
+
+    sendAddSlot(bus, index, plugin)
+    sendRemoveSlot(slot)
+}
+
+// parent 0: a top-level bus
+export function addBus(parent: number): void {
+    if (connected) sendAddBus(parent)
+}
+
+export function removeBus(bus: number): void {
+    if (connected) sendRemoveBus(bus)
+}
+
+export function setGeneratorBus(slot: number, bus: number, feeds: boolean): void {
+    if (connected) sendGeneratorBus(slot, bus, feeds)
+}
+
+export function setCollapsed(section: Section, collapsed: boolean): void {
+    editor.collapsed[section] = collapsed
+
+    if (connected) sendCollapse(section, collapsed)
 }
 
 export function showDiagnostics(open: boolean): void {

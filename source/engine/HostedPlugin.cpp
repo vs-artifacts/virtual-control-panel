@@ -19,20 +19,22 @@ namespace
     }
 }
 
-HostedPlugin::HostedPlugin (const juce::File& pluginFile, Role roleIn, juce::AudioPluginFormatManager& formatManager, juce::AudioProcessorGraph& graph)
+HostedPlugin::HostedPlugin (const juce::File& pluginFile, Role roleIn, juce::AudioPluginFormatManager& formatManager)
     : file (pluginFile), role (roleIn)
 {
-    auto loaded = load (formatManager);
+    instance = load (formatManager);
 
-    if (loaded == nullptr)
+    if (instance == nullptr)
         return;
-
-    instance = loaded.get();
-    nodeID = graph.addNode (std::move (loaded))->nodeID;
 
     for (auto* param : instance->getParameters())
         if (param->isAutomatable())
             controls.push_back (param);
+}
+
+HostedPlugin::HostedPlugin (const juce::String& name, Role roleIn, const juce::String& loadErrorIn)
+    : role (roleIn), loadError (loadErrorIn), unloadableName (name)
+{
 }
 
 std::unique_ptr<juce::AudioPluginInstance> HostedPlugin::load (juce::AudioPluginFormatManager& formatManager)
@@ -53,7 +55,7 @@ std::unique_ptr<juce::AudioPluginInstance> HostedPlugin::load (juce::AudioPlugin
         return nullptr;
     }
 
-    // Placeholder rate and block size; the graph prepares it with the real ones
+    // Placeholder rate and block size; the slot's box prepares it with the real ones
     auto loaded = formatManager.createPluginInstance (**type, 44100.0, 512, loadError);
 
     if (loaded != nullptr && !configureStereoLayout (*loaded))
@@ -67,7 +69,10 @@ std::unique_ptr<juce::AudioPluginInstance> HostedPlugin::load (juce::AudioPlugin
 
 juce::String HostedPlugin::getName() const
 {
-    return instance != nullptr ? instance->getName() : file.getFileNameWithoutExtension();
+    if (instance != nullptr)
+        return instance->getName();
+
+    return file == juce::File() ? unloadableName : file.getFileNameWithoutExtension();
 }
 
 juce::AudioProcessorParameter* HostedPlugin::findControl (const juce::String& parameterID) const

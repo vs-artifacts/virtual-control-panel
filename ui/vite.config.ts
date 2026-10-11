@@ -6,6 +6,7 @@ const contentSecurityPolicy = [
     "default-src 'none'",
     "script-src 'self'",
     "style-src 'self'",
+    "font-src 'self'",
     "base-uri 'none'",
     "form-action 'none'",
 ].join('; ')
@@ -28,9 +29,10 @@ function contentSecurityPolicyInBuild(): Plugin {
 export default defineConfig({
     plugins: [svelte(), contentSecurityPolicyInBuild()],
     base: './',
-    // The dev server may also serve the settings' defaults, which live with the plugin's source (nothing else outside ui/)
+    // The dev server may also serve the settings' defaults and the slot font, which live with the plugin's source (nothing
+    // else outside ui/)
     server: {
-        fs: { allow: [searchForWorkspaceRoot(process.cwd()), '../source/SettingsDefaults.json'] },
+        fs: { allow: [searchForWorkspaceRoot(process.cwd()), '../source/SettingsDefaults.json', '../assets/fonts/m5x7.ttf'] },
     },
     build: {
         modulePreload: { polyfill: false },

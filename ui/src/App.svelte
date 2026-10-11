@@ -3,32 +3,40 @@
   import ContextMenu from "./components/ContextMenu.svelte";
   import HostDiagnostics from "./components/HostDiagnostics.svelte";
   import LinkStatus from "./components/LinkStatus.svelte";
-  import PluginsTab from "./components/PluginsTab.svelte";
+  import PanelTab from "./components/PanelTab.svelte";
   import ResizeGrips from "./components/ResizeGrips.svelte";
   import SettingsTab from "./components/SettingsTab.svelte";
-  import Slider from "./components/Slider.svelte";
-  import { fetchCatalog, hello, isInsidePlugin } from "./lib/bridge";
+  import {
+    fetchCatalog,
+    hello,
+    isInsidePlugin,
+    onStructure,
+  } from "./lib/bridge";
   import { followDisplayScale, setRendering } from "./lib/display.svelte";
   import {
     editor,
     loadEditorState,
+    readStructure,
     showDiagnostics,
     showTab,
     tabNames,
-    tabScrollArea,
   } from "./lib/editor.svelte";
   import { columnFlow, scrollMemory } from "./lib/layout";
-  import { controls, listenForChanges, loadCatalog } from "./lib/params.svelte";
+  import { listenForChanges, loadCatalog } from "./lib/params.svelte";
 
   const insidePlugin = isInsidePlugin();
   let status = $state("Checking the bridge…");
 
-  // Beside Diagnostics a tab has half the width, so one column
-  const tabArea = $derived(
-    tabScrollArea(editor.tab, editor.diagnostics ? "single" : "columns"),
-  );
-
   $effect(() => setRendering(editor.settings.resizeRendering));
+
+  async function reloadCatalog() {
+    try {
+      if (!loadCatalog(await fetchCatalog()))
+        status = "Unexpected parameter list";
+    } catch {
+      status = "Parameter list did not arrive";
+    }
+  }
 
   onMount(async () => {
     if (!insidePlugin) {
@@ -49,12 +57,16 @@
 
     listenForChanges();
 
-    try {
-      if (!loadCatalog(await fetchCatalog()))
-        status = "Unexpected parameter list";
-    } catch {
-      status = "Parameter list did not arrive";
-    }
+    // A change of the structure also changes the parameter list (handles start again)
+    onStructure((raw) => {
+      const structure = readStructure(raw);
+
+      if (structure !== null) editor.structure = structure;
+
+      void reloadCatalog();
+    });
+
+    await reloadCatalog();
   });
 </script>
 
@@ -81,31 +93,23 @@
   </div>
 
   <div class="body">
-    <main use:scrollMemory={tabArea}>
-      <div class="flow" use:columnFlow={!editor.diagnostics}>
+    <div class="main">
+      <div class="tab">
         {#if editor.ready}
           {#if editor.tab === 1}
-            <PluginsTab />
-          {:else if editor.tab === 2}
-            <SettingsTab />
+            <div class="scroll" use:scrollMemory={"settings"}>
+              <div class="flow" use:columnFlow={true}>
+                <SettingsTab />
+              </div>
+            </div>
           {:else}
-            <h1>heartseeker panel</h1>
-            <p id="bridge-status">{status}</p>
-            {#if editor.processing !== null}
-              <p>
-                Audio: {editor.processing
-                  ? "running"
-                  : "not running (the host has stopped calling this plugin)"}
-              </p>
-            {/if}
-
-            {#each controls.params as param (param.h)}
-              <Slider {param} />
-            {/each}
+            <PanelTab {status} />
           {/if}
         {/if}
       </div>
-    </main>
+      <!-- Hints for whatever the pointer is over (later) -->
+      <div class="hint"></div>
+    </div>
 
     {#if editor.diagnostics}
       <aside class="diagnostics" use:scrollMemory={"diagnostics"}>
@@ -170,29 +174,43 @@
     min-height: 0;
   }
 
-  /* Each side scrolls on its own. No scroll anchoring: a restored position must stay exactly as it was saved, even
-     while late content changes heights above it. */
-  main,
-  .diagnostics {
+  /* The tab over the hint pane; Diagnostics, when open, beside them (the window is wider by its width) */
+  .main {
+    display: flex;
     flex: 1 1 0;
+    flex-direction: column;
     min-width: 0;
+  }
+
+  .tab {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .hint {
+    flex: none;
+    height: 40px;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+  }
+
+  /* Each area scrolls on its own. No scroll anchoring: a restored position must stay exactly as it was saved, even
+     while late content changes heights above it. */
+  .scroll,
+  .diagnostics {
+    box-sizing: border-box;
     overflow-x: hidden;
     overflow-y: auto;
     overflow-anchor: none;
     padding: 12px 16px;
   }
 
+  .scroll {
+    height: 100%;
+  }
+
   .diagnostics {
+    flex: none;
+    width: 400px;
     border-left: 1px solid rgba(255, 255, 255, 0.15);
-  }
-
-  h1 {
-    margin: 0 0 8px;
-    font-size: 20px;
-    font-weight: 500;
-  }
-
-  p {
-    margin: 0;
   }
 </style>

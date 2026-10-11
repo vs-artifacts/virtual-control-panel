@@ -33,7 +33,7 @@ export function fetchDisplay(timeoutMs = 2000): Promise<unknown> {
     return callNative('display', timeoutMs)
 }
 
-// { title, tab, diagnostics, scroll, settings, plugins }: what the tabs show, and how the editor was left
+// { title, tab, diagnostics, scroll, collapsed, settings, structure }: what the tabs show, and how the editor was left
 export function fetchEditorState(timeoutMs = 2000): Promise<unknown> {
     return callNative('editorState', timeoutMs)
 }
@@ -73,6 +73,42 @@ export function sendOpenPlugin(slot: number): void {
 // Silences a generator (it keeps running)
 export function sendMutePlugin(slot: number, muted: boolean): void {
     window.__JUCE__.backend.emitEvent('mutePlugin', { slot, muted })
+}
+
+// A new generator (bus 0) or slot, with a plugin from the plugin list (empty: an empty slot)
+export function sendAddSlot(bus: number, index: number, plugin: string): void {
+    window.__JUCE__.backend.emitEvent('addSlot', { bus, index, plugin })
+}
+
+export function sendRemoveSlot(slot: number): void {
+    window.__JUCE__.backend.emitEvent('removeSlot', { slot })
+}
+
+export function sendMoveSlot(slot: number, bus: number, index: number): void {
+    window.__JUCE__.backend.emitEvent('moveSlot', { slot, bus, index })
+}
+
+export function sendAddBus(parent: number): void {
+    window.__JUCE__.backend.emitEvent('addBus', { parent })
+}
+
+export function sendRemoveBus(bus: number): void {
+    window.__JUCE__.backend.emitEvent('removeBus', { bus })
+}
+
+// Whether a generator feeds a bus
+export function sendGeneratorBus(slot: number, bus: number, feeds: boolean): void {
+    window.__JUCE__.backend.emitEvent('generatorBus', { slot, bus, feeds })
+}
+
+// A Panel tab section collapsed to its bar, or opened again
+export function sendCollapse(section: string, collapsed: boolean): void {
+    window.__JUCE__.backend.emitEvent('collapse', { section, collapsed })
+}
+
+// The structure as it now is, after any change (the parameter list changes too: ask for the catalog again)
+export function onStructure(listener: (structure: unknown) => void): void {
+    window.__JUCE__.backend.addEventListener('structure', listener)
 }
 
 export function sendDiagnostics(open: boolean): void {

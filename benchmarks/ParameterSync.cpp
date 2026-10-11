@@ -55,7 +55,7 @@ TEST_CASE ("Parameter sync and morph cost (Serum 2)", "[sync]")
         SKIP ("Not installed: " << serum2Path);
 
     Engine engine;
-    engine.build ({ juce::File (serum2Path) }, {});
+    engine.build (Structure::simple ({ "serum2" }, {}));
     REQUIRE (engine.getPlugins()[0]->getInstance() != nullptr);
 
     const auto& controls = engine.getPlugins()[0]->getControls();

@@ -94,60 +94,88 @@
         "max": 5000,
         "unit": "ms"
     },
-    "bayJumpCrossfadeMs": {
+    "bayRoundTripFadeMs": {
         "type": "whole",
-        "default": 6,
+        "default": 3,
         "min": 0,
         "max": 100,
         "unit": "ms"
     },
-    "bayLatencyFadeMs": {
+    "bayLatencyFadeOutMs": {
         "type": "whole",
-        "default": 20,
+        "default": 17,
+        "min": 0,
+        "max": 500,
+        "unit": "ms"
+    },
+    "bayLatencyFadeInMs": {
+        "type": "whole",
+        "default": 100,
         "min": 0,
         "max": 500,
         "unit": "ms"
     },
     "bayMuteFadeMs": {
         "type": "whole",
-        "default": 12,
+        "default": 34,
         "min": 0,
         "max": 500,
         "unit": "ms"
     },
     "bayBypassFadeMs": {
         "type": "whole",
-        "default": 12,
+        "default": 34,
         "min": 0,
         "max": 500,
         "unit": "ms"
     },
     "bayOffFadeMs": {
         "type": "whole",
-        "default": 25,
+        "default": 34,
         "min": 0,
         "max": 500,
         "unit": "ms"
     },
-    "bayDropoutFadeMs": {
+    "bayDropoutFadeOutMs": {
         "type": "whole",
-        "default": 30,
+        "default": 17,
+        "min": 0,
+        "max": 500,
+        "unit": "ms"
+    },
+    "bayDropoutFadeInMs": {
+        "type": "whole",
+        "default": 100,
         "min": 0,
         "max": 500,
         "unit": "ms"
     },
     "bayLatencySettleMs": {
         "type": "whole",
-        "default": 50,
+        "default": 0,
         "min": 0,
         "max": 1000,
         "unit": "ms"
     },
     "bayTailCutReleaseMs": {
         "type": "whole",
-        "default": 0,
+        "default": 8,
         "min": 0,
         "max": 1000,
+        "unit": "ms"
+    },
+    "slotChangeFadeOutMs": {
+        "type": "whole",
+        "default": 17,
+        "min": 0,
+        "max": 500,
+        "unit": "ms"
+    },
+    "slotChangeFadeInMs": {
+        "type": "whole",
+        "default": 100,
+        "min": 0,
+        "max": 500,
         "unit": "ms"
     }
 }

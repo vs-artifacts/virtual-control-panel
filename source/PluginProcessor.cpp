@@ -12,20 +12,28 @@ PluginProcessor::PluginProcessor()
 #endif
       )
 {
-    engine.build ({ juce::File (serum2Path), juce::File (sylenth1Path) }, { juce::File (eqPath) });
-    engine.expose (2, eqLowGainID); // slot 2: the EQ, after the two generators
+    engine.onSlotRemoving = [this] (Engine::Id id, const std::vector<ExposedParameter>& released) {
+        for (const auto& entry : released)
+            hostControls.unbind (entry.hostControl);
 
-    // Exposed parameter i is bound to host control i, then the bay's controls follow
-    const auto& exposed = engine.getExposedParameters();
-    jassert (exposed.size() + BayLink::numControls <= HostControls::count);
+        if (onSlotRemoving)
+            onSlotRemoving (engine.findPlugin (id));
+    };
 
-    for (size_t i = 0; i < exposed.size(); ++i)
-        hostControls.bind (static_cast<int> (i), *exposed[i].parameter);
+    engine.onStructureChanged = [this] {
+        applyNamesProbe();
+
+        if (onStructureChanged)
+            onStructureChanged();
+    };
+
+    // A new instance: Serum 2 and Sylenth1 into BUS 1, which holds the EQ, whose Low is Param 1
+    engine.build (Structure::simple ({ "serum2", "sylenth1" }, { "khsEq" }));
+    engine.expose (engine.getStructure().buses.front().slots.front().id, eqLowGainID, 0);
+    bindExposedParameters();
 
     for (int i = 0; i < BayLink::numControls; ++i)
-        hostControls.bind (static_cast<int> (exposed.size()) + i, bayLink.getControl (i));
-
-    applyNamesProbe();
+        hostControls.bind (firstBayControl + i, bayLink.getControl (i));
 
     auto recheck = std::make_unique<TriggerParameter> ("baysRecheckBlockSize", "Bays: recheck block size");
     recheckBlockSize = recheck.get();
@@ -40,6 +48,7 @@ PluginProcessor::PluginProcessor()
     }
 
     applyLinkSettings();
+    applyEngineSettings();
     linkSettingsCheck.startTimerHz (10);
 }
 
@@ -150,6 +159,29 @@ void PluginProcessor::applyLinkSettings()
     reportLatency();
 }
 
+void PluginProcessor::applyEngineSettings()
+{
+    engine.setChangeFades (settings->getSlotChangeFadeOutMs(), settings->getSlotChangeFadeInMs());
+}
+
+void PluginProcessor::bindExposedParameters()
+{
+    // Saved bindings are untrusted: one on a bay control, or outside the pool, goes
+    std::vector<int> refused;
+
+    for (const auto& entry : engine.getExposedParameters())
+        if (entry.hostControl >= HostControls::count || (entry.hostControl >= firstBayControl && entry.hostControl < firstBayControl + BayLink::numControls))
+            refused.push_back (entry.hostControl);
+
+    for (const auto control : refused)
+        engine.unexpose (control);
+
+    for (const auto& entry : engine.getExposedParameters())
+        hostControls.bind (entry.hostControl, *entry.parameter);
+
+    applyNamesProbe();
+}
+
 void PluginProcessor::toggleNamesProbe()
 {
     namesProbeShowsPlugin = !namesProbeShowsPlugin;
@@ -159,12 +191,17 @@ void PluginProcessor::toggleNamesProbe()
 void PluginProcessor::applyNamesProbe()
 {
     const auto& exposed = engine.getExposedParameters();
+    const auto first = std::find_if (exposed.begin(), exposed.end(), [] (const ExposedParameter& entry) { return entry.hostControl == 0; });
 
-    if (exposed.empty())
+    if (first == exposed.end())
+    {
+        hostControls.setName (0, "Param 1");
         return;
+    }
 
-    const auto plugin = namesProbeShowsPlugin ? engine.getPlugins()[exposed[0].slot]->getName() + " - " : juce::String();
-    hostControls.setName (0, "SLOT 1.1: " + plugin + exposed[0].parameter->getName (HostControls::maxNameLength));
+    auto* plugin = engine.findPlugin (first->slot);
+    const auto pluginName = namesProbeShowsPlugin && plugin != nullptr ? plugin->getName() + " - " : juce::String();
+    hostControls.setName (0, engine.getSlotLabel (first->slot) + ": " + pluginName + first->parameter->getName (HostControls::maxNameLength));
 }
 
 void PluginProcessor::reportLatency()
@@ -245,6 +282,15 @@ std::optional<size_t> PluginProcessor::findEditorScrollArea (const juce::String&
     return std::nullopt;
 }
 
+std::optional<size_t> PluginProcessor::findEditorSection (const juce::String& name)
+{
+    for (size_t section = 0; section < editorSections.size(); ++section)
+        if (name == editorSections[section])
+            return section;
+
+    return std::nullopt;
+}
+
 //==============================================================================
 bool PluginProcessor::hasEditor() const
 {
@@ -260,10 +306,19 @@ juce::AudioProcessorEditor* PluginProcessor::createEditor()
 void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::XmlElement state ("HeartseekerPanelState");
+    state.setAttribute ("version", stateVersion);
     state.setAttribute ("editorPlaced", editorPlaced);
     state.setAttribute ("editorTab", editorTab);
     state.setAttribute ("diagnosticsOpen", diagnosticsOpen);
     state.setAttribute ("baySlotState", BayLink::toName (bayLink.getSlotState()));
+
+    juce::StringArray collapsedNames;
+
+    for (size_t section = 0; section < editorSections.size(); ++section)
+        if (collapsed[section])
+            collapsedNames.add (editorSections[section]);
+
+    state.setAttribute ("collapsed", collapsedNames.joinIntoString (" "));
 
     if (editorScale.has_value())
         state.setAttribute ("editorScale", *editorScale);
@@ -294,31 +349,29 @@ void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
 
 void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    // nullptr if the data isn't valid saved XML (e.g. a corrupt project file)
-    if (auto state = getXmlFromBinary (data, sizeInBytes))
+    // nullptr if the data isn't valid saved XML (e.g. a corrupt project file); another version opens as a new instance
+    auto state = getXmlFromBinary (data, sizeInBytes);
+
+    if (state == nullptr || state->getIntAttribute ("version") != stateVersion)
+        return;
+
     {
         editorPlaced = state->getBoolAttribute ("editorPlaced");
         editorTab = juce::jlimit (0, numEditorTabs - 1, state->getIntAttribute ("editorTab"));
         diagnosticsOpen = state->getBoolAttribute ("diagnosticsOpen");
         editorScroll.fill (0);
+        collapsed.fill (false);
+
+        for (const auto& name : juce::StringArray::fromTokens (state->getStringAttribute ("collapsed"), " ", {}))
+            if (const auto section = findEditorSection (name))
+                collapsed[*section] = true;
 
         if (auto* scroll = state->getChildByName (editorScrollTag))
             for (auto* entry : scroll->getChildWithTagNameIterator ("Area"))
                 if (const auto area = findEditorScrollArea (entry->getStringAttribute ("name")))
                     setEditorScroll (*area, entry->getIntAttribute ("top"));
 
-        // Earlier projects have a three-way bypass, before that an on/off switch, before that the output switch: any of
-        // them on opens as Mute
-        using Slot = BayLink::SlotState;
-
-        if (state->hasAttribute ("baySlotState"))
-            bayLink.setSlotState (BayLink::slotStateFromName (state->getStringAttribute ("baySlotState")).value_or (Slot::active));
-        else if (state->hasAttribute ("bayBypassMode"))
-            bayLink.setSlotState (juce::StringArray { "synced", "dropLatency" }.contains (state->getStringAttribute ("bayBypassMode")) ? Slot::mute : Slot::active);
-        else if (state->hasAttribute ("bayBypass"))
-            bayLink.setSlotState (state->getBoolAttribute ("bayBypass") ? Slot::mute : Slot::active);
-        else
-            bayLink.setSlotState (state->getStringAttribute ("bayOutput") == "direct" ? Slot::mute : Slot::active);
+        bayLink.setSlotState (BayLink::slotStateFromName (state->getStringAttribute ("baySlotState")).value_or (BayLink::SlotState::active));
 
         if (state->hasAttribute ("editorScale"))
             editorScale = EditorScale::constrain (state->getDoubleAttribute ("editorScale"));
@@ -332,8 +385,13 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
                 if (const auto name = "control" + juce::String (i + 1); controls->hasAttribute (name))
                     bayLink.getControl (i).setValue (static_cast<float> (controls->getDoubleAttribute (name)));
 
-        if (auto* engineState = state->getChildByName (Engine::stateTag))
-            engine.restoreStateFromXml (*engineState);
+        if (auto* engineState = state->getChildByName (Engine::stateTag); engineState != nullptr && engine.restoreStateFromXml (*engineState))
+        {
+            bindExposedParameters();
+
+            if (onStructureChanged)
+                onStructureChanged();
+        }
 
         // The host reads our controls' values after this, so they must already match the restored plugins
         hostControls.syncWithoutNotifying();
@@ -343,32 +401,33 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 std::vector<ControlSession::Parameter> PluginProcessor::createSessionParameters()
 {
     std::vector<ControlSession::Parameter> parameters;
-    const auto& exposed = engine.getExposedParameters();
 
-    for (size_t i = 0; i < exposed.size(); ++i)
+    for (const auto& [slot, parameterID, parameter, hostControl] : engine.getExposedParameters())
     {
-        const auto& [slot, parameter] = exposed[i];
-        auto& hostControl = hostControls[static_cast<int> (i)];
+        auto& control = hostControls[hostControl];
+        auto* plugin = engine.findPlugin (slot);
 
         parameters.push_back ({ engine.getSlotLabel (slot),
-            engine.getPlugins()[slot]->getName(),
+            plugin != nullptr ? plugin->getName() : juce::String(),
             parameter->getName (ControlSession::maxTextLength),
-            hostControl.getName (ControlSession::maxTextLength),
+            control.getName (ControlSession::maxTextLength),
             parameter,
-            &hostControl });
+            &control,
+            slot });
     }
 
     for (int i = 0; i < BayLink::numControls; ++i)
     {
         auto& control = bayLink.getControl (i);
-        auto& hostControl = hostControls[static_cast<int> (exposed.size()) + i];
+        auto& hostControl = hostControls[firstBayControl + i];
 
         parameters.push_back ({ "Bay 1",
             "FL plugin, through relays",
             control.getName (ControlSession::maxTextLength),
             hostControl.getName (ControlSession::maxTextLength),
             &control,
-            &hostControl });
+            &hostControl,
+            Structure::none });
     }
 
     return parameters;

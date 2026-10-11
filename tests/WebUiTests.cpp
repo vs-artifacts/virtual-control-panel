@@ -14,6 +14,22 @@ namespace
     constexpr auto bridgeStatus = "document.getElementById('bridge-status')?.textContent ?? ''";
     constexpr auto connected = "Bridge connected: test reply";
 
+    // An editor state with one generator (ID 3) feeding BUS 1 (ID 2), which holds one slot (ID 5)
+    constexpr auto oneSlotState = R"({ "title": "test", "tab": 0, "settings": {},
+        "structure": {
+            "generators": [ { "id": 3, "label": "GEN 1", "plugin": "synth", "name": "Synth", "status": "", "canOpen": true, "canMute": true, "muted": false, "buses": [ 2 ] } ],
+            "buses": [ { "id": 2, "label": "BUS 1", "parent": 0, "slots": [
+                { "id": 5, "label": "1.1", "plugin": "eq", "name": "Test plugin", "status": "", "canOpen": true, "canMute": false, "muted": false } ] } ],
+            "master": { "id": 1, "label": "BUS X", "parent": 0, "slots": [] },
+            "menu": { "generators": [ { "key": "synth", "name": "Synth" } ], "fx": [ { "key": "eq", "name": "Test plugin" } ] } } })";
+
+    WebUi::Handlers oneSlotHandlers()
+    {
+        WebUi::Handlers handlers;
+        handlers.describeEditor = [] { return juce::JSON::parse (oneSlotState); };
+        return handlers;
+    }
+
     // The web view only exists while it's on the desktop; far off screen keeps it out of the way
     struct OffscreenWebUi
     {
@@ -102,6 +118,13 @@ TEST_CASE ("The embedded UI files", "[webui]")
         }
 
         CHECK (found == 2);
+    }
+
+    SECTION ("the slots' font")
+    {
+        const auto font = findUiFile ("/assets/m5x7.ttf");
+        REQUIRE (font.has_value());
+        CHECK (juce::String (font->mimeType) == "font/ttf");
     }
 
     SECTION ("anything else is not found, including attempts to reach other files")
@@ -207,9 +230,9 @@ TEST_CASE ("The page's slider controls a parameter both ways", "[webui][webview]
 
     {
         KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
-        ControlSession session ({ { "FX 1", "Test plugin", "Gain", "Param 1", &gain, &gain } });
-        OffscreenWebUi page (keys, session);
-        REQUIRE (page.waitFor ("document.querySelectorAll('input[type=range]').length", "1") == "1");
+        ControlSession session ({ { "SLOT 1.1", "Test plugin", "Gain", "Param 1", &gain, &gain, 5 } });
+        OffscreenWebUi page (keys, session, oneSlotHandlers());
+        REQUIRE (page.waitFor ("document.querySelectorAll('.slot input[type=range]').length", "1") == "1");
         CHECK (page.evaluate ("document.querySelector('.value-text').textContent") == gain.getCurrentValueAsText());
 
         // A drag on the page: press, move, release (anywhere)
@@ -259,7 +282,7 @@ TEST_CASE ("The page matches the plugin's scale, whatever the web view's own", "
     SECTION ("sharp: the page is laid out again at the zoomed size")
     {
         WebUi::Handlers handlers;
-        handlers.describeEditor = [] { return juce::JSON::parse (R"({ "title": "test", "tab": 0, "settings": { "resizeRendering": "sharp" }, "plugins": [] })"); };
+        handlers.describeEditor = [] { return juce::JSON::parse (R"({ "title": "test", "tab": 0, "settings": { "resizeRendering": "sharp" } })"); };
         OffscreenWebUi page (keys, noParameters, std::move (handlers));
         REQUIRE (page.waitFor (bridgeStatus, connected) == connected);
 
@@ -279,7 +302,7 @@ TEST_CASE ("Right-clicking a slider shows the host's options for its parameter",
     juce::var askedFor;
     juce::var chosen;
 
-    WebUi::Handlers handlers;
+    WebUi::Handlers handlers = oneSlotHandlers();
     handlers.openParameterMenu = [&askedFor] (const juce::var& handle) {
         askedFor = handle;
         return juce::JSON::parse (R"({ "items": [{ "text": "Host menu", "enabled": true, "items": [{ "header": "Param 1" }, { "id": 0, "text": "Create automation clip", "enabled": true, "checked": false }] }] })");
@@ -287,7 +310,7 @@ TEST_CASE ("Right-clicking a slider shows the host's options for its parameter",
     handlers.events["menuChoice"] = [&chosen] (const juce::var& choice) { chosen = choice; };
 
     KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
-    ControlSession session ({ { "FX 1", "Test plugin", "Gain", "Param 1", &gain, &gain } });
+    ControlSession session ({ { "SLOT 1.1", "Test plugin", "Gain", "Param 1", &gain, &gain, 5 } });
     OffscreenWebUi page (keys, session, std::move (handlers));
     REQUIRE (page.waitFor ("document.querySelectorAll('input[type=range]').length", "1") == "1");
 
@@ -338,7 +361,7 @@ TEST_CASE ("Diagnostics shows the bay link beside the tabs and sends the slot st
     juce::var toggled;
     WebUi::Handlers handlers;
     handlers.describeEditor = [] {
-        return juce::JSON::parse (R"({ "title": "test", "tab": 0, "diagnostics": false, "settings": {}, "plugins": [], "processing": true,
+        return juce::JSON::parse (R"({ "title": "test", "tab": 0, "diagnostics": false, "settings": {}, "processing": true,
             "link": { "hubProblem": "", "name": "Panel 1", "linkProblem": "", "receiver": "playing", "transmitter": "returning",
                 "roundTripSetting": 0, "autoState": "oneBlock",
                 "roundTrip": 512, "roundTripBlocks": 1, "maxBlock": 512, "sampleRate": 48000, "latency": 12800,
@@ -399,8 +422,8 @@ TEST_CASE ("The page reopens scrolled where it was left, and reports new positio
     juce::Array<juce::var> reports;
     WebUi::Handlers handlers;
     handlers.describeEditor = [] {
-        return juce::JSON::parse (R"({ "title": "test", "tab": 2, "diagnostics": true, "settings": {}, "plugins": [],
-            "scroll": { "tab2.single": 60, "tab2.columns": 9999999, "diagnostics": 0, "elsewhere": 5 } })");
+        return juce::JSON::parse (R"({ "title": "test", "tab": 1, "diagnostics": false, "settings": {},
+            "scroll": { "settings": 60, "panel": 9999999, "diagnostics": 0, "elsewhere": 5 } })");
     };
     handlers.events["scroll"] = [&reports] (const juce::var& message) { reports.add (message); };
 
@@ -408,40 +431,69 @@ TEST_CASE ("The page reopens scrolled where it was left, and reports new positio
     ControlSession noParameters ({});
     OffscreenWebUi page (keys, noParameters, std::move (handlers));
 
-    // The Settings tab, beside Diagnostics in this small window, is long enough to scroll
-    CHECK (page.waitFor ("String (Math.round (document.querySelector('main').scrollTop))", "60") == "60");
+    // The Settings tab, in this small window, is long enough to scroll
+    CHECK (page.waitFor ("String (Math.round (document.querySelector('.scroll').scrollTop))", "60") == "60");
 
-    page.evaluate ("document.querySelector('main').scrollTop = 25");
+    page.evaluate ("document.querySelector('.scroll').scrollTop = 25");
     page.pumpUntil ([&reports] { return !reports.isEmpty(); });
     REQUIRE (reports.size() == 1);
-    CHECK (reports[0]["area"] == "tab2.single");
+    INFO (juce::JSON::toString (reports[0], true));
+    CHECK (reports[0]["area"] == "settings");
     CHECK (reports[0]["top"] == juce::var (25));
 }
 
-TEST_CASE ("The Plugins tab mutes generators only", "[webui][webview]")
+TEST_CASE ("The Panel tab's slots: mute for generators only, and structure changes go to the plugin", "[webui][webview]")
 {
     if (!WebUi::isSupported())
         SKIP ("No supported web view on this system");
 
-    juce::var muted;
-    WebUi::Handlers handlers;
-    handlers.describeEditor = [] {
-        return juce::JSON::parse (R"({ "title": "test", "tab": 1, "settings": {}, "plugins": [
-            { "slot": 0, "label": "Generator 1", "name": "Synth", "status": "", "canOpen": true, "canMute": true, "muted": false },
-            { "slot": 1, "label": "FX 1", "name": "EQ", "status": "", "canOpen": true, "canMute": false, "muted": false } ] })");
-    };
-    handlers.events["mutePlugin"] = [&muted] (const juce::var& message) { muted = message; };
+    std::map<juce::String, juce::var> sent;
+    WebUi::Handlers handlers = oneSlotHandlers();
+
+    for (const auto* name : { "mutePlugin", "removeSlot", "addBus", "generatorBus", "collapse", "addSlot" })
+        handlers.events[name] = [&sent, name] (const juce::var& message) { sent[name] = message; };
 
     KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
     ControlSession noParameters ({});
     OffscreenWebUi page (keys, noParameters, std::move (handlers));
-    REQUIRE (page.waitFor ("String (document.querySelectorAll('.row').length)", "2") == "2");
-    CHECK (page.evaluate ("String (document.querySelectorAll('.mute input').length)") == "1");
+    REQUIRE (page.waitFor ("String (document.querySelectorAll('.slot').length)", "2") == "2");
+    CHECK (page.evaluate ("String (document.querySelectorAll('.slot input[type=checkbox]').length)") == "1");
+    CHECK (page.evaluate ("String (document.querySelectorAll('.stage').length)") == "4"); // 1.0, 1.X, X.0, X.X
 
-    page.evaluate ("document.querySelector('.mute input').click()");
-    page.pumpUntil ([&muted] { return !muted.isVoid(); });
-    CHECK (static_cast<int> (muted["slot"]) == 0);
+    const auto click = [&page, &sent] (const juce::String& element, const char* event) {
+        page.evaluate (element + ".click()");
+        page.pumpUntil ([&sent, event] { return sent.contains (event); });
+        return sent[event];
+    };
+
+    const auto muted = click ("document.querySelector('.slot input[type=checkbox]')", "mutePlugin");
+    CHECK (static_cast<int> (muted["slot"]) == 3);
     CHECK (muted["muted"] == juce::var (true));
+
+    const auto removed = click ("document.querySelectorAll('.slot .remove')[1]", "removeSlot");
+    CHECK (static_cast<int> (removed["slot"]) == 5);
+
+    const auto fed = click ("document.querySelector('.chip')", "generatorBus");
+    CHECK (static_cast<int> (fed["slot"]) == 3);
+    CHECK (static_cast<int> (fed["bus"]) == 2);
+    CHECK (fed["feeds"] == juce::var (false));
+
+    const auto bus = click ("Array.from (document.querySelectorAll('button')).find (b => b.textContent.trim() === '+ bus')", "addBus");
+    CHECK (static_cast<int> (bus["parent"]) == 0);
+
+    // A new slot from the menu: at the end of its bus
+    page.evaluate ("document.querySelector('.bus .add').dispatchEvent (new MouseEvent ('click', { bubbles: true, clientX: 40, clientY: 60 }))");
+    const auto items = "Array.from (document.querySelectorAll('.context-menu button')).map (b => b.textContent.trim()).join ('|')";
+    CHECK (page.waitFor (items, "Empty|Test plugin") == "Empty|Test plugin");
+    const auto added = click ("document.querySelectorAll('.context-menu button')[1]", "addSlot");
+    CHECK (static_cast<int> (added["bus"]) == 2);
+    CHECK (static_cast<int> (added["index"]) == 1);
+    CHECK (added["plugin"] == juce::var ("eq"));
+
+    const auto collapsed = click ("document.querySelectorAll('.bar')[1]", "collapse");
+    CHECK (collapsed["section"] == juce::var ("generators"));
+    CHECK (collapsed["collapsed"] == juce::var (true));
+    CHECK (page.waitFor ("String (document.querySelectorAll('.slot').length)", "1") == "1");
 }
 
 TEST_CASE ("Right-clicking a setting makes its value the default or resets it; Reset all asks first", "[webui][webview]")
@@ -452,8 +504,8 @@ TEST_CASE ("Right-clicking a setting makes its value the default or resets it; R
     juce::Array<juce::var> defaults, resets;
     WebUi::Handlers handlers;
     handlers.describeEditor = [] {
-        return juce::JSON::parse (R"({ "title": "test", "tab": 2, "settings": { "bayQuietMs": 700 },
-            "userDefaults": { "bayQuietMs": 900, "bayQuietLevelDb": 5 }, "plugins": [] })");
+        return juce::JSON::parse (R"({ "title": "test", "tab": 1, "settings": { "bayQuietMs": 700 },
+            "userDefaults": { "bayQuietMs": 900, "bayQuietLevelDb": 5 } })");
     };
     handlers.events["settingDefault"] = [&defaults] (const juce::var& message) { defaults.add (message); };
     handlers.events["resetSettings"] = [&resets] (const juce::var& message) { resets.add (message); };

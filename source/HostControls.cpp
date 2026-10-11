@@ -29,10 +29,23 @@ public:
         target = &newTarget;
     }
 
+    // Returns once no other thread can still be using the old target
+    void unbind()
+    {
+        target = nullptr;
+
+        while (inUse.load() > 0)
+            std::this_thread::yield();
+    }
+
+    bool isBound() const { return target.load() != nullptr; }
+
     float getValue() const override { return value; }
 
     void setValue (float newValue) override
     {
+        const Using guard (inUse);
+
         // Target first: a report running meanwhile on the message thread then sees the new value, not the old one
         if (auto* t = target.load(); t != nullptr && !juce::exactlyEqual (t->getValue(), newValue))
             t->setValue (newValue);
@@ -42,6 +55,7 @@ public:
 
     float getDefaultValue() const override
     {
+        const Using guard (inUse);
         auto* t = target.load();
         return t != nullptr ? t->getDefaultValue() : 0.0f;
     }
@@ -77,7 +91,16 @@ public:
     }
 
 private:
+    // Counts the host's threads using the target, so unbinding can wait for them (a counter: realtime-safe)
+    struct Using
+    {
+        explicit Using (std::atomic<int>& countIn) : count (countIn) { count.fetch_add (1); }
+        ~Using() { count.fetch_sub (1); }
+        std::atomic<int>& count;
+    };
+
     std::atomic<juce::AudioProcessorParameter*> target { nullptr };
+    mutable std::atomic<int> inUse { 0 };
     std::atomic<float> value { 0.0f };
     juce::CriticalSection nameLock;
     juce::String currentName;
@@ -99,6 +122,16 @@ HostControls::HostControls (juce::AudioProcessor& processorIn)
 void HostControls::bind (int index, juce::AudioProcessorParameter& target)
 {
     controls[static_cast<size_t> (index)]->bind (target);
+}
+
+void HostControls::unbind (int index)
+{
+    controls[static_cast<size_t> (index)]->unbind();
+}
+
+bool HostControls::isBound (int index) const
+{
+    return controls[static_cast<size_t> (index)]->isBound();
 }
 
 juce::AudioProcessorParameter& HostControls::operator[] (int index) const

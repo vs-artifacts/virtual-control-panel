@@ -2,7 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
-// One slot in the engine's graph: loads a plugin into it and describes it. The graph owns and runs the plugin.
+// One slot's plugin: loads it and describes it. The slot's box in the engine's graph runs it.
 class HostedPlugin
 {
 public:
@@ -12,10 +12,12 @@ public:
     };
 
     // Message thread only. On failure the slot stays empty and getLoadError() says why.
-    HostedPlugin (const juce::File& pluginFile, Role role, juce::AudioPluginFormatManager&, juce::AudioProcessorGraph&);
+    HostedPlugin (const juce::File& pluginFile, Role role, juce::AudioPluginFormatManager&);
 
-    juce::AudioPluginInstance* getInstance() const noexcept { return instance; }
-    juce::AudioProcessorGraph::NodeID getNodeID() const noexcept { return nodeID; }
+    // A slot whose plugin can't load at all (e.g. not in the plugin list)
+    HostedPlugin (const juce::String& name, Role role, const juce::String& loadError);
+
+    juce::AudioPluginInstance* getInstance() const noexcept { return instance.get(); }
     Role getRole() const noexcept { return role; }
     const juce::String& getLoadError() const noexcept { return loadError; }
 
@@ -38,10 +40,10 @@ private:
 
     juce::File file;
     Role role;
-    juce::AudioPluginInstance* instance = nullptr;
-    juce::AudioProcessorGraph::NodeID nodeID;
+    std::unique_ptr<juce::AudioPluginInstance> instance;
     std::vector<juce::AudioProcessorParameter*> controls;
     juce::String loadError;
+    juce::String unloadableName;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HostedPlugin)
 };

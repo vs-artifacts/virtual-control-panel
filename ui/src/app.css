@@ -1,7 +1,12 @@
+@font-face {
+  font-family: 'm5x7';
+  src: url('../../assets/fonts/m5x7.ttf') format('truetype');
+}
+
 :root {
   font: 15px/1.4 system-ui, 'Segoe UI', Roboto, sans-serif;
   color: #fff;
-  background: #1b1f3b;
+  background: #0f1012;
   color-scheme: dark;
 }
 

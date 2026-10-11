@@ -16,6 +16,9 @@ public:
     // Brings the window to the front if it's already open; false if the plugin has no editor
     bool open (const HostedPlugin&);
 
+    // Before the plugin goes
+    void close (const HostedPlugin*);
+
 private:
     juce::Component& owner;
     std::map<const HostedPlugin*, std::unique_ptr<HostedEditorWindow>> windows;

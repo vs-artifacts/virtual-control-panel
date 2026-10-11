@@ -36,6 +36,15 @@ ControlSession::~ControlSession()
     endAllGestures();
 }
 
+void ControlSession::replaceParameters (std::vector<Parameter> newParameters)
+{
+    endAllGestures();
+    parameters = std::move (newParameters);
+    lastSent.assign (parameters.size(), 0.0f);
+    inGesture.assign (parameters.size(), false);
+    started = false;
+}
+
 juce::var ControlSession::catalog()
 {
     // A page that reloads mid-drag never sends the end of its gesture
@@ -52,6 +61,7 @@ juce::var ControlSession::catalog()
         auto entry = describeValue (handle, *parameter.source, lastSent[handle]);
         auto* object = entry.getDynamicObject();
         object->setProperty ("slot", parameter.slot);
+        object->setProperty ("s", parameter.slotId);
         object->setProperty ("plugin", parameter.plugin);
         object->setProperty ("name", parameter.name);
         object->setProperty ("host", parameter.hostName);

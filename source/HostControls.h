@@ -16,8 +16,11 @@ public:
     // Adds the pool to the processor, which owns the parameters. Call from the processor's constructor.
     explicit HostControls (juce::AudioProcessor&);
 
-    // Message thread only, before audio starts: rebinding while running needs a realtime-safe handover
+    // Message thread only. The host may be using the control on another thread meanwhile: unbinding returns once it
+    // can no longer reach the old target.
     void bind (int index, juce::AudioProcessorParameter& target);
+    void unbind (int index);
+    bool isBound (int index) const;
 
     juce::AudioProcessorParameter& operator[] (int index) const;
 

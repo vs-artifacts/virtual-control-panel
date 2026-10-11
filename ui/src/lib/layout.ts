@@ -1,4 +1,4 @@
-import { saveScroll, scrollPositions } from './editor.svelte'
+import { saveScroll, scrollPositions, sidewaysScrollAreas } from './editor.svelte'
 
 // Calls back at most once per frame while the content or the area around it changes
 function watchChanges(node: HTMLElement, area: HTMLElement, changed: () => void): () => void {
@@ -32,11 +32,15 @@ export function columnFlow(node: HTMLElement, enabled: boolean) {
     const area = node.parentElement ?? node
 
     const fit = () => {
+        // Measuring without 'balanced' briefly makes the area shorter, which would pull its scroll position up
+        const top = area.scrollTop
         node.classList.toggle('columns', enabled)
         node.classList.remove('balanced')
 
         // Past two columns' worth, multi-column layout adds columns off to the side
         if (enabled && node.scrollWidth > node.clientWidth + 1) node.classList.add('balanced')
+
+        area.scrollTop = top
     }
 
     fit()
@@ -51,21 +55,24 @@ export function columnFlow(node: HTMLElement, enabled: boolean) {
     }
 }
 
-// Keeps a scrolling area's position for each view it shows (by area name, see scrollAreas), sends it to the plugin
-// once scrolling stops, and puts it back when that view returns: also once late content (e.g. the parameter list)
-// makes the area tall enough, unless the user has scrolled since
+// Keeps a scrolling area's position for each view it shows (by area name, see scrollAreas; sideways for the areas in
+// sidewaysScrollAreas), sends it to the plugin once scrolling stops, and puts it back when that view returns: also once
+// late content (e.g. the parameter list) makes the area big enough, unless the user has scrolled since
 export function scrollMemory(node: HTMLElement, name: string) {
     const content = node.firstElementChild instanceof HTMLElement ? node.firstElementChild : node
     let pending: number | null = null
     let saveTimer = 0
     const unsaved = new Set<string>()
 
+    const position = () => (sidewaysScrollAreas.includes(name) ? node.scrollLeft : node.scrollTop)
+
     const restore = () => {
         if (pending === null) return
 
-        node.scrollTop = pending
+        if (sidewaysScrollAreas.includes(name)) node.scrollLeft = pending
+        else node.scrollTop = pending
 
-        if (Math.abs(node.scrollTop - pending) <= 1) pending = null
+        if (Math.abs(position() - pending) <= 1) pending = null
     }
 
     const show = (next: string) => {
@@ -84,9 +91,9 @@ export function scrollMemory(node: HTMLElement, name: string) {
 
     const scrolled = () => {
         // Still waiting to put a saved position back: this is the area being too short for it yet
-        if (pending !== null || Math.abs(node.scrollTop - (scrollPositions.get(name) ?? 0)) < 1) return
+        if (pending !== null || Math.abs(position() - (scrollPositions.get(name) ?? 0)) < 1) return
 
-        scrollPositions.set(name, node.scrollTop)
+        scrollPositions.set(name, position())
         unsaved.add(name)
         clearTimeout(saveTimer)
         saveTimer = window.setTimeout(save, 250)

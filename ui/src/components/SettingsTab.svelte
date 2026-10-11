@@ -13,6 +13,7 @@
         resetSettings,
         resetSize,
         settleRange,
+        slotChangeFadeSettings,
         type FadeKey,
         type Settings,
     } from "../lib/editor.svelte";
@@ -584,6 +585,38 @@
     <fieldset id="bay-fades">
         <legend>Bay fades (ms, 0 is off)</legend>
         {#each fadeSettings as fade (fade.key)}
+            <label
+                class="option"
+                oncontextmenu={(event) =>
+                    openSettingMenu(
+                        event,
+                        fade.key,
+                        typedNumber(
+                            event.currentTarget.querySelector("input"),
+                            fade.key,
+                        ),
+                    )}
+            >
+                <input
+                    class="milliseconds"
+                    type="number"
+                    min="0"
+                    max={fade.max}
+                    step="1"
+                    value={editor.settings[fade.key]}
+                    onchange={(event) =>
+                        changeWhole(event, fade.key, { min: 0, max: fade.max })}
+                />
+                <span
+                    ><strong>{fade.label}</strong> (up to {fade.max}): {fade.covers}</span
+                >
+            </label>
+        {/each}
+    </fieldset>
+
+    <fieldset id="slot-change-fades">
+        <legend>Slot changes (ms, 0 is off)</legend>
+        {#each slotChangeFadeSettings as fade (fade.key)}
             <label
                 class="option"
                 oncontextmenu={(event) =>

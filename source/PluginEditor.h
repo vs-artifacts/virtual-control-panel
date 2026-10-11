@@ -76,6 +76,9 @@ private:
     void handleTab (const juce::var&);
     void handleOpenPlugin (const juce::var&);
     void handleMutePlugin (const juce::var&);
+    void handleAddSlot (const juce::var&);
+    void reportStructure();
+    double designAreaWidth (juce::Point<double> layoutArea) const;
     void handleDiagnostics (const juce::var&);
     void handleScroll (const juce::var&);
     void handleBayBypass (const juce::var&);

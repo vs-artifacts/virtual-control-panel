@@ -6,8 +6,12 @@
 // share of the design size on each axis (Shift+drag sets those apart; the page shows more or less at the same scale)
 namespace EditorScale
 {
-    constexpr int designWidth = 1120;
-    constexpr int designHeight = 600;
+    // Portrait: FL's window adds 10 px of border, making it 800 × 1,280
+    constexpr int designWidth = 790;
+    constexpr int designHeight = 1270;
+
+    // Diagnostics adds this much width (design pixels) to the right of the layout area
+    constexpr int diagnosticsWidth = 400;
     constexpr double minimum = 0.5;
     constexpr double maximum = 5.0;
     constexpr double minimumLayout = 0.5;

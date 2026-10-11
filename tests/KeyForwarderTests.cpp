@@ -293,7 +293,7 @@ TEST_CASE ("Settings: the user's own defaults, resetting, and the defaults file"
         CHECK (juce::exactlyEqual (settings.getLowestTempo(), 92.5));
         CHECK (settings.setUserDefault ("bayStoppedShrink", "always"));
         CHECK (settings.getStoppedShrink() == BayLink::StoppedShrink::always);
-        CHECK (settings.setUserDefault ("bayJumpCrossfadeMs", 40));
+        CHECK (settings.setUserDefault ("bayRoundTripFadeMs", 40));
         CHECK (settings.getFadeMs (BayLink::Fade::roundTrip) == 40);
 
         CHECK_FALSE (settings.setUserDefault ("noSuchSetting", 1));

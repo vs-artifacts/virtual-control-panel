@@ -153,7 +153,7 @@ void BayLink::prepare (double newSampleRate, int maxBlockSize)
     countingRealBlocks = realBlocks.load();
     quietSamples.store (0);
     stoppedChecked = false;
-    mixFade = levelFade = Fade::dropout;
+    mixFade = levelFade = Fade::dropoutIn;
     shownFade.store (mixFade);
 
     roundTrip.store (roundTripBlocks.load() * blockUnit.load());
@@ -826,8 +826,8 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
     const auto playable = returned && !notTheBay && !settling;
 
     // A return held back for the bay latency (settling, the transmitter holding, stamped by the receiver) fades with its
-    // own length; a missing one with the dropout fade
-    const auto holdFade = settling || transmitterHolding || (returned && stampedByReceiver) ? Fade::bayLatency : Fade::dropout;
+    // own lengths; a missing one with the dropout's
+    const auto holdFade = settling || transmitterHolding || (returned && stampedByReceiver) ? Fade::bayLatencyOut : Fade::dropoutOut;
 
     // The bay's sound is back once it plays positions sent after its latest faded or silent stretch
     if (state == SlotState::active && playable && (!hadSilence || returnStart >= silentEnd))
@@ -857,7 +857,7 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
             auto jumpMs = getFadeMs (Fade::off);
 
             if (dropped == lastDropped)
-                jumpMs = std::max (latencyInUse != outputLatency ? getFadeMs (Fade::bayLatency) : 0,
+                jumpMs = std::max (latencyInUse != outputLatency ? getFadeMs (Fade::bayLatencyIn) : 0,
                     roundTripSamples != outputRoundTrip || latencyInUse == outputLatency ? getFadeMs (Fade::roundTrip) : 0);
 
             const auto fadeSamples = jumpMs * sampleRate / 1000.0;
@@ -1107,13 +1107,14 @@ void BayLink::mix (float* left, float* right, int numSamples, bool playable, boo
 void BayLink::playDropout (float* left, float* right, int numSamples, Fade holdFade)
 {
     // It starts with what last played, reversed, under a falling ramp: it carries on from the last sample played without
-    // a jump, and needs no lookahead. Its length, and the fade back in, are those of what held the return back.
+    // a jump, and needs no lookahead. Its length is the fade out of what held the return back; the level comes back
+    // over that cause's fade in.
     const auto ringSize = static_cast<int> (playedLeft.size());
 
     if (!inDropout)
     {
         inDropout = true;
-        levelFade = holdFade;
+        levelFade = fadeInAfter (holdFade);
         const auto fade = juce::roundToInt (getFadeMs (holdFade) * sampleRate / 1000.0);
         ghostLength = std::min ({ fade, playedFilled, ringSize / 2 });
         ghostDone = 0;
@@ -1174,7 +1175,7 @@ BayLink::Fade BayLink::fadeFor (SlotState state) noexcept
             break;
     }
 
-    return Fade::dropout;
+    return Fade::dropoutIn;
 }
 
 void BayLink::sendValues (const hs_link_api& linkHub, int32_t send, juce::int64 linkStart, bool tailCut)

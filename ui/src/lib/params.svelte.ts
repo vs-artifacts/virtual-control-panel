@@ -3,6 +3,8 @@ import { onParams, sendGesture, sendSet, type ValueChange } from './bridge'
 export interface Param {
     h: number
     slot: string
+    // The slot's ID (0: none, e.g. the bay)
+    s: number
     plugin: string
     name: string
     host: string
@@ -29,12 +31,12 @@ function isNormalised(value: unknown): value is number {
 function parseEntry(raw: unknown): Param | null {
     if (!isRecord(raw)) return null
 
-    const { h, slot, plugin, name, host, v, t, d } = raw
+    const { h, slot, s, plugin, name, host, v, t, d } = raw
 
     if (typeof h !== 'number' || !Number.isInteger(h) || !isNormalised(v) || !isNormalised(d) || typeof t !== 'string') return null
     if (typeof slot !== 'string' || typeof plugin !== 'string' || typeof name !== 'string' || typeof host !== 'string') return null
 
-    return { h, slot, plugin, name, host, value: v, text: t, defaultValue: d }
+    return { h, slot, s: typeof s === 'number' && Number.isInteger(s) && s >= 0 ? s : 0, plugin, name, host, value: v, text: t, defaultValue: d }
 }
 
 export function loadCatalog(raw: unknown): boolean {

@@ -16,11 +16,6 @@
     #include "ipps.h"
 #endif
 
-// Stand-ins until plugin scanning and routing configuration exist
-inline constexpr auto serum2Path = R"(C:\Program Files\Common Files\VST3\Serum2.vst3)";
-inline constexpr auto sylenth1Path = R"(C:\Program Files\Common Files\VST3\Sylenth1.vst3)";
-inline constexpr auto eqPath = R"(C:\Program Files\Common Files\VST3\Kilohearts\kHs 3-Band EQ.vst3)";
-
 // The EQ's low band gain (named "Low"), the one parameter exposed until the user can choose
 inline constexpr auto eqLowGainID = "0";
 
@@ -76,12 +71,23 @@ public:
     // Every exposed parameter, for a page to control through its host control
     std::vector<ControlSession::Parameter> createSessionParameters();
 
+    // The bay's controls are always host controls 2 to 17 (indexes from 1)
+    static constexpr int firstBayControl = 1;
+
+    // For the editor (message thread): a slot's plugin is about to go (close its window, drop its parameters), and the
+    // structure changed
+    std::function<void (HostedPlugin*)> onSlotRemoving;
+    std::function<void()> onStructureChanged;
+
+    // Takes the plugin-wide settings for structure changes (the dip's fades)
+    void applyEngineSettings();
+
     // Whether this instance's editor has had its first-open placement; saved with the instance
     bool isEditorPlaced() const noexcept { return editorPlaced; }
     void setEditorPlaced() noexcept { editorPlaced = true; }
 
     // The editor's last tab and size (see EditorScale), saved with the instance; no size until it has had one
-    static constexpr int numEditorTabs = 3;
+    static constexpr int numEditorTabs = 2;
     int getEditorTab() const noexcept { return editorTab; }
     void setEditorTab (int tab) noexcept { editorTab = tab; }
     std::optional<double> getEditorScale() const noexcept { return editorScale; }
@@ -89,25 +95,29 @@ public:
     std::optional<juce::Point<double>> getEditorLayout() const noexcept { return editorLayout; }
     void setEditorLayout (juce::Point<double> layout) noexcept { editorLayout = layout; }
 
-    // Whether the editor shows the Diagnostics panel beside the tabs; saved with the instance
+    // Whether the editor shows the Diagnostics panel (it widens the window); saved with the instance
     bool isDiagnosticsOpen() const noexcept { return diagnosticsOpen; }
     void setDiagnosticsOpen (bool open) noexcept { diagnosticsOpen = open; }
 
-    // Where each of the editor's scrolling areas was left, in page pixels, by the page's names: every tab with two
-    // columns, every tab beside Diagnostics (one column), and Diagnostics. Saved with the instance.
-    static constexpr std::array<const char*, 2 * numEditorTabs + 1> editorScrollAreas {
-        "tab0.columns",
-        "tab0.single",
-        "tab1.columns",
-        "tab1.single",
-        "tab2.columns",
-        "tab2.single",
+    // Where each of the editor's scrolling areas was left, in page pixels, by the page's names: the Panel tab (down, and
+    // its generator and bus rows sideways), the Settings tab, and Diagnostics. Saved with the instance.
+    static constexpr std::array<const char*, 5> editorScrollAreas {
+        "panel",
+        "panel.generators",
+        "panel.buses",
+        "settings",
         "diagnostics"
     };
     static constexpr int maxEditorScroll = 1000000;
     static std::optional<size_t> findEditorScrollArea (const juce::String& name);
     int getEditorScroll (size_t area) const noexcept { return editorScroll[area]; }
     void setEditorScroll (size_t area, int top) noexcept { editorScroll[area] = juce::jlimit (0, maxEditorScroll, top); }
+
+    // The Panel tab's sections that can collapse to their bar; which are collapsed is saved with the instance
+    static constexpr std::array<const char*, 3> editorSections { "header", "generators", "buses" };
+    static std::optional<size_t> findEditorSection (const juce::String& name);
+    bool isSectionCollapsed (size_t section) const noexcept { return collapsed[section]; }
+    void setSectionCollapsed (size_t section, bool isCollapsed) noexcept { collapsed[section] = isCollapsed; }
 
     // Whether the host has run our audio in the last half second; false while it doesn't (e.g. FL's smart disable)
     bool isBeingProcessed() const noexcept;
@@ -119,9 +129,13 @@ public:
 private:
     void reportLatency();
     void applyNamesProbe();
+    void bindExposedParameters();
 
     static constexpr auto bayControlsTag = "BayControls";
     static constexpr auto editorScrollTag = "EditorScroll";
+
+    // Saved states of another version open as a new instance
+    static constexpr int stateVersion = 1;
 
     Engine engine;
     HostControls hostControls { *this };
@@ -134,6 +148,7 @@ private:
     bool diagnosticsOpen = false;
     bool namesProbeShowsPlugin = true;
     std::array<int, editorScrollAreas.size()> editorScroll {};
+    std::array<bool, editorSections.size()> collapsed {};
 
     std::atomic<juce::uint32> lastBlockTime { 0 }; // Time::getMillisecondCounter()
 
@@ -147,7 +162,10 @@ private:
     BayLink bayLink { [this] { return relayHubFinder.find(); } };
 
     // Other instances' editors may change the plugin-wide settings at any time; declared last, so it stops first
-    juce::TimedCallback linkSettingsCheck { [this] { applyLinkSettings(); } };
+    juce::TimedCallback linkSettingsCheck { [this] {
+        applyLinkSettings();
+        applyEngineSettings();
+    } };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginProcessor)
 };

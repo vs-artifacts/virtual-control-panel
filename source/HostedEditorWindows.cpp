@@ -54,3 +54,8 @@ bool HostedEditorWindows::open (const HostedPlugin& plugin)
     windows[&plugin] = std::move (window);
     return true;
 }
+
+void HostedEditorWindows::close (const HostedPlugin* plugin)
+{
+    windows.erase (plugin);
+}

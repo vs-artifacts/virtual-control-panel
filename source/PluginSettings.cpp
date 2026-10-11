@@ -387,6 +387,26 @@ void PluginSettings::setTailCutReleaseMs (int milliseconds)
     write (file, Defaults::bayTailCutReleaseMs, Defaults::bayTailCutReleaseMs.limit (milliseconds));
 }
 
+int PluginSettings::getSlotChangeFadeOutMs() const
+{
+    return read (file, Defaults::slotChangeFadeOutMs);
+}
+
+void PluginSettings::setSlotChangeFadeOutMs (int milliseconds)
+{
+    write (file, Defaults::slotChangeFadeOutMs, Defaults::slotChangeFadeOutMs.limit (milliseconds));
+}
+
+int PluginSettings::getSlotChangeFadeInMs() const
+{
+    return read (file, Defaults::slotChangeFadeInMs);
+}
+
+void PluginSettings::setSlotChangeFadeInMs (int milliseconds)
+{
+    write (file, Defaults::slotChangeFadeInMs, Defaults::slotChangeFadeInMs.limit (milliseconds));
+}
+
 int PluginSettings::getDoubleClickMs() const
 {
     return read (file, Defaults::doubleClickMs);

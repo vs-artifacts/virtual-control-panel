@@ -24,28 +24,98 @@ namespace
         return std::nullopt;
     }
 
-    juce::var describePlugin (const Engine& engine, size_t slot)
+    juce::var describeSlot (const Engine& engine, Structure::Id id, const juce::String& pluginKey)
     {
-        const auto& plugin = *engine.getPlugins()[slot];
         auto* entry = new juce::DynamicObject();
-        entry->setProperty ("slot", static_cast<int> (slot));
-        entry->setProperty ("label", engine.getSlotLabel (slot));
-        entry->setProperty ("name", plugin.getName());
-        entry->setProperty ("canMute", engine.canMute (slot));
-        entry->setProperty ("muted", engine.isMuted (slot));
+        entry->setProperty ("id", id);
+        entry->setProperty ("label", engine.getStructure().labelOf (id));
+        entry->setProperty ("plugin", pluginKey);
+        entry->setProperty ("canMute", engine.canMute (id));
+        entry->setProperty ("muted", engine.isMuted (id));
 
-        if (auto* instance = plugin.getInstance())
+        const auto* plugin = engine.findPlugin (id);
+        entry->setProperty ("name", plugin != nullptr ? plugin->getName() : juce::String ("Empty"));
+
+        if (auto* instance = plugin != nullptr ? plugin->getInstance() : nullptr)
         {
-            entry->setProperty ("status", juce::String (static_cast<int> (plugin.getControls().size())) + " of " + juce::String (instance->getParameters().size()) + " parameters");
+            entry->setProperty ("status", juce::String (static_cast<int> (plugin->getControls().size())) + " of " + juce::String (instance->getParameters().size()) + " parameters");
             entry->setProperty ("canOpen", instance->hasEditor());
         }
         else
         {
-            entry->setProperty ("status", "Failed to load: " + plugin.getLoadError());
+            entry->setProperty ("status", plugin != nullptr ? "Failed to load: " + plugin->getLoadError() : juce::String());
             entry->setProperty ("canOpen", false);
         }
 
         return entry;
+    }
+
+    juce::var describeBus (const Engine& engine, const Structure::Bus& bus)
+    {
+        juce::Array<juce::var> slots;
+
+        for (const auto& slot : bus.slots)
+            slots.add (describeSlot (engine, slot.id, slot.plugin));
+
+        auto* entry = new juce::DynamicObject();
+        entry->setProperty ("id", bus.id);
+        entry->setProperty ("label", engine.getStructure().labelOf (bus.id));
+        entry->setProperty ("parent", bus.parent);
+        entry->setProperty ("slots", slots);
+        return entry;
+    }
+
+    // The generator stage, the buses (sub-buses after their parents) and the master, and the menu for new slots
+    juce::var describeStructure (const Engine& engine)
+    {
+        const auto& structure = engine.getStructure();
+        juce::Array<juce::var> generators, buses, generatorMenu, fxMenu;
+
+        for (const auto& generator : structure.generators)
+        {
+            auto entry = describeSlot (engine, generator.id, generator.plugin);
+            juce::Array<juce::var> fed;
+
+            for (const auto bus : generator.buses)
+                fed.add (bus);
+
+            entry.getDynamicObject()->setProperty ("buses", fed);
+            generators.add (entry);
+        }
+
+        for (const auto& bus : structure.buses)
+            buses.add (describeBus (engine, bus));
+
+        for (const auto& choice : engine.getCatalog().entries)
+        {
+            if (!choice.offered)
+                continue;
+
+            auto* item = new juce::DynamicObject();
+            item->setProperty ("key", choice.key);
+            item->setProperty ("name", choice.name);
+            (choice.generator ? generatorMenu : fxMenu).add (item);
+        }
+
+        auto* menu = new juce::DynamicObject();
+        menu->setProperty ("generators", generatorMenu);
+        menu->setProperty ("fx", fxMenu);
+
+        auto* description = new juce::DynamicObject();
+        description->setProperty ("generators", generators);
+        description->setProperty ("buses", buses);
+        description->setProperty ("master", describeBus (engine, structure.master));
+        description->setProperty ("menu", menu);
+        return description;
+    }
+
+    // A whole number from the page within limits, or nothing
+    std::optional<int> wholeNumber (const juce::var& value, int low, int high)
+    {
+        if (!value.isInt() || static_cast<int> (value) < low || static_cast<int> (value) > high)
+            return std::nullopt;
+
+        return static_cast<int> (value);
     }
 }
 
@@ -94,10 +164,21 @@ PluginEditor::PluginEditor (PluginProcessor& p)
 
     applySize();
 
+    p.onSlotRemoving = [this] (HostedPlugin* plugin) {
+        hostedEditors.close (plugin);
+        session.replaceParameters (pluginProcessor.createSessionParameters());
+    };
+
+    p.onStructureChanged = [this] { reportStructure(); };
+
     processingCheck.startTimerHz (4);
 }
 
-PluginEditor::~PluginEditor() = default;
+PluginEditor::~PluginEditor()
+{
+    pluginProcessor.onSlotRemoving = nullptr;
+    pluginProcessor.onStructureChanged = nullptr;
+}
 
 WebUi::Handlers PluginEditor::createPageHandlers()
 {
@@ -119,6 +200,42 @@ WebUi::Handlers PluginEditor::createPageHandlers()
         { "tab", [this] (const juce::var& message) { handleTab (message); } },
         { "openPlugin", [this] (const juce::var& message) { handleOpenPlugin (message); } },
         { "mutePlugin", [this] (const juce::var& message) { handleMutePlugin (message); } },
+        { "addSlot", [this] (const juce::var& message) { handleAddSlot (message); } },
+        { "removeSlot", [this] (const juce::var& message) {
+             if (const auto slot = wholeNumber (message["slot"], 1, Structure::maxId))
+                 pluginProcessor.getEngine().removeSlot (*slot);
+         } },
+        { "moveSlot", [this] (const juce::var& message) {
+             const auto slot = wholeNumber (message["slot"], 1, Structure::maxId);
+             const auto bus = wholeNumber (message["bus"], 0, Structure::maxId);
+             const auto index = wholeNumber (message["index"], 0, Structure::maxSlotsPerBus);
+
+             if (slot && bus && index)
+                 pluginProcessor.getEngine().moveSlot (*slot, *bus, *index);
+         } },
+        { "addBus", [this] (const juce::var& message) {
+             if (const auto parent = wholeNumber (message["parent"], 0, Structure::maxId))
+                 pluginProcessor.getEngine().addBus (*parent);
+         } },
+        { "removeBus", [this] (const juce::var& message) {
+             if (const auto bus = wholeNumber (message["bus"], 1, Structure::maxId))
+                 pluginProcessor.getEngine().removeBus (*bus);
+         } },
+        { "generatorBus", [this] (const juce::var& message) {
+             const auto slot = wholeNumber (message["slot"], 1, Structure::maxId);
+             const auto bus = wholeNumber (message["bus"], 1, Structure::maxId);
+
+             if (slot && bus && message["feeds"].isBool())
+                 pluginProcessor.getEngine().setGeneratorBus (*slot, *bus, static_cast<bool> (message["feeds"]));
+         } },
+        { "collapse", [this] (const juce::var& message) {
+             const auto& name = message["section"];
+             const auto& collapsed = message["collapsed"];
+
+             if (name.isString() && collapsed.isBool())
+                 if (const auto section = PluginProcessor::findEditorSection (name.toString()))
+                     pluginProcessor.setSectionCollapsed (*section, static_cast<bool> (collapsed));
+         } },
         { "diagnostics", [this] (const juce::var& message) { handleDiagnostics (message); } },
         { "scroll", [this] (const juce::var& message) { handleScroll (message); } },
         { "bayBypass", [this] (const juce::var& message) { handleBayBypass (message); } },
@@ -159,29 +276,32 @@ juce::var PluginEditor::describeEditor() const
 
     current->setProperty ("bayLatencySettleMs", settings->getLatencySettleMs());
     current->setProperty ("bayTailCutReleaseMs", settings->getTailCutReleaseMs());
+    current->setProperty ("slotChangeFadeOutMs", settings->getSlotChangeFadeOutMs());
+    current->setProperty ("slotChangeFadeInMs", settings->getSlotChangeFadeInMs());
     current->setProperty ("doubleClickMs", settings->getDoubleClickMs());
     current->setProperty ("doubleClickSets", settings->getDoubleClickSets());
-
-    const auto& engine = pluginProcessor.getEngine();
-    juce::Array<juce::var> plugins;
-
-    for (size_t slot = 0; slot < engine.getPlugins().size(); ++slot)
-        plugins.add (describePlugin (engine, slot));
 
     auto* scroll = new juce::DynamicObject();
 
     for (size_t area = 0; area < PluginProcessor::editorScrollAreas.size(); ++area)
         scroll->setProperty (PluginProcessor::editorScrollAreas[area], pluginProcessor.getEditorScroll (area));
 
+    juce::Array<juce::var> collapsed;
+
+    for (size_t section = 0; section < PluginProcessor::editorSections.size(); ++section)
+        if (pluginProcessor.isSectionCollapsed (section))
+            collapsed.add (PluginProcessor::editorSections[section]);
+
     auto* state = new juce::DynamicObject();
     state->setProperty ("title", pluginProcessor.getName() + " v" VERSION " (" CMAKE_BUILD_TYPE ")");
     state->setProperty ("tab", pluginProcessor.getEditorTab());
     state->setProperty ("diagnostics", pluginProcessor.isDiagnosticsOpen());
     state->setProperty ("scroll", scroll);
+    state->setProperty ("collapsed", collapsed);
     state->setProperty ("settings", current);
     state->setProperty ("userDefaults", settings->getUserDefaults());
     state->setProperty ("probeName", pluginProcessor.getHostControls()[0].getName (HostControls::maxNameLength));
-    state->setProperty ("plugins", plugins);
+    state->setProperty ("structure", describeStructure (pluginProcessor.getEngine()));
     state->setProperty ("processing", pluginProcessor.isBeingProcessed());
     state->setProperty ("link", describeLink());
     return state;
@@ -398,6 +518,20 @@ void PluginEditor::handleSetting (const juce::var& message)
             pluginProcessor.applyLinkSettings();
         }
     }
+    else if ((name == "slotChangeFadeOutMs" || name == "slotChangeFadeInMs") && value.isInt())
+    {
+        const auto& limits = name == "slotChangeFadeOutMs" ? SettingsDefaults::slotChangeFadeOutMs : SettingsDefaults::slotChangeFadeInMs;
+
+        if (const auto milliseconds = static_cast<int> (value); milliseconds >= limits.min && milliseconds <= limits.max)
+        {
+            if (name == "slotChangeFadeOutMs")
+                settings->setSlotChangeFadeOutMs (milliseconds);
+            else
+                settings->setSlotChangeFadeInMs (milliseconds);
+
+            pluginProcessor.applyEngineSettings();
+        }
+    }
     else if (name == "doubleClickMs" && value.isInt())
     {
         const auto milliseconds = static_cast<int> (value);
@@ -427,6 +561,7 @@ void PluginEditor::handleResetSettings (const juce::var& message)
 
     applyKeepWebViewWarm();
     pluginProcessor.applyLinkSettings();
+    pluginProcessor.applyEngineSettings();
 }
 
 void PluginEditor::applyKeepWebViewWarm()
@@ -447,21 +582,46 @@ void PluginEditor::handleTab (const juce::var& message)
 
 void PluginEditor::handleOpenPlugin (const juce::var& message)
 {
-    const auto& slot = message["slot"];
-    const auto& plugins = pluginProcessor.getEngine().getPlugins();
-
-    if (slot.isInt() && juce::isPositiveAndBelow (static_cast<int> (slot), static_cast<int> (plugins.size())))
-        hostedEditors.open (*plugins[static_cast<size_t> (static_cast<int> (slot))]);
+    if (const auto slot = wholeNumber (message["slot"], 1, Structure::maxId))
+        if (auto* plugin = pluginProcessor.getEngine().findPlugin (*slot))
+            hostedEditors.open (*plugin);
 }
 
 void PluginEditor::handleMutePlugin (const juce::var& message)
 {
-    const auto& slot = message["slot"];
+    const auto slot = wholeNumber (message["slot"], 1, Structure::maxId);
     const auto& muted = message["muted"];
 
     // The engine refuses slots that aren't generators
-    if (slot.isInt() && static_cast<int> (slot) >= 0 && muted.isBool())
-        pluginProcessor.getEngine().setMuted (static_cast<size_t> (static_cast<int> (slot)), static_cast<bool> (muted));
+    if (slot.has_value() && muted.isBool())
+        pluginProcessor.getEngine().setMuted (*slot, static_cast<bool> (muted));
+}
+
+void PluginEditor::handleAddSlot (const juce::var& message)
+{
+    // bus 0: the generator stage
+    const auto bus = wholeNumber (message["bus"], 0, Structure::maxId);
+    const auto index = wholeNumber (message["index"], 0, Structure::maxSlotsPerBus);
+    const auto& plugin = message["plugin"];
+
+    if (!bus.has_value() || !index.has_value() || !plugin.isString() || plugin.toString().length() > Structure::maxPluginKeyLength)
+        return;
+
+    auto& engine = pluginProcessor.getEngine();
+
+    if (*bus == Structure::none)
+        engine.addGenerator (plugin.toString(), *index);
+    else
+        engine.addSlot (*bus, *index, plugin.toString());
+}
+
+void PluginEditor::reportStructure()
+{
+    // The page asks for the catalog again when it hears of the change
+    session.replaceParameters (pluginProcessor.createSessionParameters());
+
+    if (webUi != nullptr)
+        webUi->emitEventIfBrowserIsVisible ("structure", describeStructure (pluginProcessor.getEngine()));
 }
 
 void PluginEditor::handleDiagnostics (const juce::var& message)
@@ -469,7 +629,10 @@ void PluginEditor::handleDiagnostics (const juce::var& message)
     const auto& open = message["open"];
 
     if (open.isBool())
+    {
         pluginProcessor.setDiagnosticsOpen (static_cast<bool> (open));
+        applySize();
+    }
 }
 
 void PluginEditor::handleScroll (const juce::var& message)
@@ -670,7 +833,7 @@ void PluginEditor::continueResize()
     }
     else
     {
-        const auto widthScale = drag->startScale + speed * dx / (designWidth * drag->startLayout.x);
+        const auto widthScale = drag->startScale + speed * dx / designAreaWidth (drag->startLayout);
         const auto heightScale = drag->startScale + speed * dy / (designHeight * drag->startLayout.y);
         auto newScale = (widthScale + heightScale) / 2.0;
 
@@ -716,9 +879,15 @@ void PluginEditor::setLayout (juce::Point<double> newLayout)
     applySize();
 }
 
+double PluginEditor::designAreaWidth (juce::Point<double> layoutArea) const
+{
+    return EditorScale::designWidth * layoutArea.x + (pluginProcessor.isDiagnosticsOpen() ? EditorScale::diagnosticsWidth : 0);
+}
+
 void PluginEditor::applySize()
 {
-    const auto width = juce::roundToInt (EditorScale::designWidth * layout.x * scale);
+    // Diagnostics widens the window to the right
+    const auto width = juce::roundToInt (designAreaWidth (layout) * scale);
     const auto height = juce::roundToInt (EditorScale::designHeight * layout.y * scale);
 
     // The same size with another scale still has to reach the page and be saved

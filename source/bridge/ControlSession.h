@@ -19,12 +19,19 @@ public:
 
         // Where changes go: in the plugin, the host's control bound to it, so the host sees (and can record) them
         juce::AudioProcessorParameter* writeTo;
+
+        // The slot it belongs to (its permanent ID); 0 for none
+        int slotId = 0;
     };
 
     explicit ControlSession (std::vector<Parameter>);
     ~ControlSession();
 
-    // Starts or restarts the session: [{ h, slot, plugin, name, host, v, t, d }, ...], d the default value
+    // A new list (e.g. after a slot is removed): every handle ends, and nothing is sent or taken until the page asks for
+    // the catalog again
+    void replaceParameters (std::vector<Parameter>);
+
+    // Starts or restarts the session: [{ h, slot, s, plugin, name, host, v, t, d }, ...], s the slot's ID, d the default value
     juce::var catalog();
 
     // A "set" message from the page: [{ h, v }, ...] with v from 0 to 1. Anything malformed is ignored.

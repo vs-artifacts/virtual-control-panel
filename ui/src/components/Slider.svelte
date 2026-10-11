@@ -10,7 +10,9 @@
         type Param,
     } from "../lib/params.svelte";
 
-    let { param }: { param: Param } = $props();
+    // compact: inside a slot (its name and value; the host's name as a tooltip)
+    let { param, compact = false }: { param: Param; compact?: boolean } =
+        $props();
 
     let dragging = false;
 
@@ -82,9 +84,18 @@
     onDestroy(stopDragging);
 </script>
 
-<label class="slider" oncontextmenu={showMenu}>
+<label
+    class="slider"
+    class:compact
+    oncontextmenu={showMenu}
+    title={compact && param.host ? `Host: ${param.host}` : undefined}
+>
     <span class="name">{param.name}</span>
-    <span class="owner">{param.slot}: {param.plugin}</span>
+    {#if compact}
+        <span class="value-text">{param.text}</span>
+    {:else}
+        <span class="owner">{param.slot}: {param.plugin}</span>
+    {/if}
     <input
         type="range"
         min="0"
@@ -95,9 +106,11 @@
         oninput={(event) => changed(event.currentTarget.valueAsNumber)}
         onclick={clicked}
     />
-    <span class="value-text">{param.text}</span>
-    {#if param.host}
-        <span class="host">Host: {param.host}</span>
+    {#if !compact}
+        <span class="value-text">{param.text}</span>
+        {#if param.host}
+            <span class="host">Host: {param.host}</span>
+        {/if}
     {/if}
 </label>
 
@@ -128,5 +141,27 @@
 
     .value-text {
         font-variant-numeric: tabular-nums;
+    }
+
+    .slider.compact {
+        gap: 0 8px;
+        margin-top: 6px;
+        max-width: none;
+    }
+
+    .compact .name {
+        overflow: hidden;
+        font-weight: normal;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .compact .value-text {
+        justify-self: end;
+        white-space: nowrap;
+    }
+
+    .compact input {
+        margin: 2px 0 0;
     }
 </style>

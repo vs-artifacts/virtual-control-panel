@@ -103,6 +103,12 @@ public:
     int getTailCutReleaseMs() const;
     void setTailCutReleaseMs (int);
 
+    // The dip around a change of the panel's structure: its fade out and fade in
+    int getSlotChangeFadeOutMs() const;
+    void setSlotChangeFadeOutMs (int);
+    int getSlotChangeFadeInMs() const;
+    void setSlotChangeFadeInMs (int);
+
     // The longest gap between the two clicks of a double-click on the page's controls
     static constexpr int minDoubleClickMs = SettingsDefaults::doubleClickMs.min, maxDoubleClickMs = SettingsDefaults::doubleClickMs.max,
                          defaultDoubleClickMs = SettingsDefaults::doubleClickMs.value;

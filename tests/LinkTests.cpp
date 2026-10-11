@@ -1266,6 +1266,7 @@ TEST_CASE ("A new bay latency settles before it's used, and stale readings never
 {
     Patcher patcher;
     patcher.addAll (2);
+    patcher.panel->setSettleMs (50);
     auto latency = std::make_shared<int> (576);
     patcher.bay = latentBay (latency);
     patcher.markerDelay = 576;
@@ -2320,6 +2321,23 @@ TEST_CASE ("Each fade has its own length: Mute, Bypass, a held-back bay latency 
         return static_cast<int> (end - start);
     };
 
+    // From `from`, the first sample that isn't silent (where a fade in starts), and the first after it that is exactly the
+    // sent audio at the delay in use (where it has ended: the bay passes its audio through)
+    const auto fadeInLength = [] (const Patcher& patcher, juce::int64 from) {
+        const auto delay = patcher.roundTrip + patcher.latency;
+        auto start = from;
+
+        while (start < patcher.played && juce::exactlyEqual (patcher.outLeft[static_cast<size_t> (start)], 0.0f))
+            ++start;
+
+        auto end = start;
+
+        while (end < patcher.played && !juce::exactlyEqual (patcher.outLeft[static_cast<size_t> (end)], sentSample (end - delay, 0)))
+            ++end;
+
+        return static_cast<int> (end - start);
+    };
+
     constexpr auto samplesPerMs = static_cast<int> (rigRate) / 1000;
 
     SECTION ("Mute and Bypass crossfade over their own lengths")
@@ -2352,8 +2370,8 @@ TEST_CASE ("Each fade has its own length: Mute, Bypass, a held-back bay latency 
         Patcher patcher;
         patcher.addAll (2);
         patcher.panel->setDropouts (Dropouts::silence);
-        patcher.panel->setFadeMs (Fade::dropout, 30);
-        patcher.panel->setFadeMs (Fade::bayLatency, 10);
+        patcher.panel->setFadeMs (Fade::dropoutOut, 30);
+        patcher.panel->setFadeMs (Fade::bayLatencyOut, 10);
         patcher.run (warmUpBlocks, Order::panelFirst);
 
         const auto removed = patcher.played;
@@ -2361,6 +2379,25 @@ TEST_CASE ("Each fade has its own length: Mute, Bypass, a held-back bay latency 
         patcher.maintain();
         patcher.run (10, Order::panelFirst);
         CHECK (std::abs (fadeOutLength (patcher, removed) - 30 * samplesPerMs) <= 1);
+    }
+
+    SECTION ("the return comes back over the dropout fade in, not its fade out")
+    {
+        Patcher patcher;
+        patcher.addAll (2);
+        patcher.panel->setDropouts (Dropouts::silence);
+        patcher.panel->setFadeMs (Fade::dropoutOut, 10);
+        patcher.panel->setFadeMs (Fade::dropoutIn, 40);
+        patcher.run (warmUpBlocks, Order::panelFirst);
+
+        patcher.transmitter.reset();
+        patcher.maintain();
+        patcher.run (10, Order::panelFirst);
+
+        const auto back = patcher.played;
+        patcher.addTransmitter();
+        patcher.run (20, Order::panelFirst);
+        CHECK (std::abs (fadeInLength (patcher, back) - 40 * samplesPerMs) <= 2);
     }
 
     SECTION ("a return held back while a new bay latency settles fades out over the bay latency fade")
@@ -2374,8 +2411,8 @@ TEST_CASE ("Each fade has its own length: Mute, Bypass, a held-back bay latency 
         REQUIRE (patcher.panel->getBayLatency() == 576);
 
         patcher.panel->setDropouts (Dropouts::silence);
-        patcher.panel->setFadeMs (Fade::dropout, 30);
-        patcher.panel->setFadeMs (Fade::bayLatency, 10);
+        patcher.panel->setFadeMs (Fade::dropoutOut, 30);
+        patcher.panel->setFadeMs (Fade::bayLatencyOut, 10);
         patcher.panel->setSettleMs (1000);
         const auto changed = patcher.played;
         *latency = 192;
@@ -2468,9 +2505,8 @@ TEST_CASE ("The panel tells the host its delay as latency, and keeps its slot st
         CHECK (processor.getLatencySamples() == engineLatency + rigBlock);
         CHECK (processor.getBayLink().getStatus().autoState == BayLink::AutoState::checking);
 
-        // The bay's controls follow the exposed parameters in the host's pool
-        const auto firstBayControl = static_cast<int> (processor.getEngine().getExposedParameters().size());
-        auto& hostControl = *processor.getParameters()[firstBayControl + 2];
+        // The bay's controls are always host controls 2 to 17
+        auto& hostControl = *processor.getParameters()[PluginProcessor::firstBayControl + 2];
         hostControl.setValue (0.625f);
         CHECK (juce::exactlyEqual (processor.getBayLink().getControl (2).getValue(), 0.625f));
         CHECK (processor.getBayLink().getControl (2).getText (0.625f, 20) == "62.50%");
@@ -2488,26 +2524,24 @@ TEST_CASE ("The panel tells the host its delay as latency, and keeps its slot st
         CHECK (juce::exactlyEqual (processor.getBayLink().getControl (15).getValue(), 0.1f));
         CHECK (juce::exactlyEqual (hostControl.getValue(), 0.625f));
 
-        // Earlier projects: a three-way bypass, an on/off switch, and before that an output switch ("direct"); on is Mute
-        const auto loadOld = [&processor] (const char* attribute, const char* value) {
-            juce::XmlElement old ("HeartseekerPanelState");
-            old.setAttribute (attribute, value);
-            juce::MemoryBlock oldBytes;
-            juce::AudioProcessor::copyXmlToBinary (old, oldBytes);
-            processor.setStateInformation (oldBytes.getData(), static_cast<int> (oldBytes.getSize()));
+        // A state without this version (an older project) opens as a new instance would: nothing is taken from it
+        const auto load = [&processor] (int version, const char* value) {
+            juce::XmlElement state ("HeartseekerPanelState");
+            state.setAttribute ("baySlotState", value);
+
+            if (version > 0)
+                state.setAttribute ("version", version);
+
+            juce::MemoryBlock bytes;
+            juce::AudioProcessor::copyXmlToBinary (state, bytes);
+            processor.setStateInformation (bytes.getData(), static_cast<int> (bytes.getSize()));
             return processor.getBayLink().getSlotState();
         };
 
-        CHECK (loadOld ("bayBypassMode", "synced") == Slot::mute);
-        CHECK (loadOld ("bayBypassMode", "dropLatency") == Slot::mute);
-        CHECK (loadOld ("bayBypassMode", "off") == Slot::active);
-        CHECK (loadOld ("bayBypassMode", "sideways") == Slot::active);
-        CHECK (loadOld ("bayBypass", "1") == Slot::mute);
-        CHECK (loadOld ("bayBypass", "0") == Slot::active);
-        CHECK (loadOld ("bayOutput", "direct") == Slot::mute);
-        CHECK (loadOld ("bayOutput", "return") == Slot::active);
-        CHECK (loadOld ("baySlotState", "bypass") == Slot::bypass);
-        CHECK (loadOld ("baySlotState", "sideways") == Slot::active);
+        CHECK (load (1, "bypass") == Slot::bypass);
+        CHECK (load (0, "mute") == Slot::bypass);
+        CHECK (load (2, "mute") == Slot::bypass);
+        CHECK (load (1, "sideways") == Slot::active);
 
         processor.releaseResources();
     }

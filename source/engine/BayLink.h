@@ -117,14 +117,16 @@ public:
     // What a fade is for; each has its own length, chosen when the fade starts
     enum class Fade {
         roundTrip, // the output's timing jumping with a round trip change (tempo, Automatic, Settings)
-        bayLatency, // around a return held back for the bay latency (settling, the transmitter holding), and its jump
+        bayLatencyOut, // into a return held back for the bay latency (settling, the transmitter holding)
+        bayLatencyIn, // out of it, and the timing jump to a new bay latency
         mute, // dry and the bay's sound, entering and leaving Mute
         bypass, // dry and the bay's sound, and the bay's send, entering and leaving Bypass
         off, // the timing jump, the bay's send and the fade-in, entering and leaving Off
-        dropout, // around a missing return, and into the bay's first sound
+        dropoutOut, // into a missing return
+        dropoutIn, // out of it, and into the bay's first sound
     };
 
-    static constexpr std::array<Fade, 6> fades { Fade::roundTrip, Fade::bayLatency, Fade::mute, Fade::bypass, Fade::off, Fade::dropout };
+    static constexpr std::array<Fade, 8> fades { Fade::roundTrip, Fade::bayLatencyOut, Fade::bayLatencyIn, Fade::mute, Fade::bypass, Fade::off, Fade::dropoutOut, Fade::dropoutIn };
 
     // How long a step on control 1 takes to show in the return: the panel sends a steady tone instead of its sound,
     // holds control 1 at 0, then steps it to 1 and watches the return's level (control 1 must drive a level knob)
@@ -242,20 +244,24 @@ public:
         switch (fade)
         {
             case Fade::roundTrip:
-                return SettingsDefaults::bayJumpCrossfadeMs; // the name it had when it was the only delay change crossfade
-            case Fade::bayLatency:
-                return SettingsDefaults::bayLatencyFadeMs;
+                return SettingsDefaults::bayRoundTripFadeMs;
+            case Fade::bayLatencyOut:
+                return SettingsDefaults::bayLatencyFadeOutMs;
+            case Fade::bayLatencyIn:
+                return SettingsDefaults::bayLatencyFadeInMs;
             case Fade::mute:
                 return SettingsDefaults::bayMuteFadeMs;
             case Fade::bypass:
                 return SettingsDefaults::bayBypassFadeMs;
             case Fade::off:
                 return SettingsDefaults::bayOffFadeMs;
-            case Fade::dropout:
+            case Fade::dropoutOut:
+                return SettingsDefaults::bayDropoutFadeOutMs;
+            case Fade::dropoutIn:
                 break;
         }
 
-        return SettingsDefaults::bayDropoutFadeMs;
+        return SettingsDefaults::bayDropoutFadeInMs;
     }
     bool updateBayLatency(); // takes a new bay latency once it has held for the settle time; true if it did. A timer calls it.
     int getBayLatency() const noexcept { return bayLatency.load(); }
@@ -303,7 +309,7 @@ public:
     static constexpr int maxQuietMs = SettingsDefaults::bayQuietMs.max, defaultQuietMs = SettingsDefaults::bayQuietMs.value;
 
     // The longest fade of any kind
-    static constexpr int maxFadeMs = std::max ({ SettingsDefaults::bayJumpCrossfadeMs.max, SettingsDefaults::bayLatencyFadeMs.max, SettingsDefaults::bayMuteFadeMs.max, SettingsDefaults::bayBypassFadeMs.max, SettingsDefaults::bayOffFadeMs.max, SettingsDefaults::bayDropoutFadeMs.max });
+    static constexpr int maxFadeMs = std::max ({ SettingsDefaults::bayRoundTripFadeMs.max, SettingsDefaults::bayLatencyFadeOutMs.max, SettingsDefaults::bayLatencyFadeInMs.max, SettingsDefaults::bayMuteFadeMs.max, SettingsDefaults::bayBypassFadeMs.max, SettingsDefaults::bayOffFadeMs.max, SettingsDefaults::bayDropoutFadeOutMs.max, SettingsDefaults::bayDropoutFadeInMs.max });
 
     // How long a new bay latency must hold before it's used
     static constexpr int maxSettleMs = SettingsDefaults::bayLatencySettleMs.max;
@@ -417,6 +423,7 @@ private:
     float stepFor (Fade) const noexcept; // per sample
     static constexpr size_t index (Fade fade) noexcept { return static_cast<size_t> (fade); }
     static Fade fadeFor (SlotState) noexcept;
+    static Fade fadeInAfter (Fade fadeOut) noexcept { return fadeOut == Fade::bayLatencyOut ? Fade::bayLatencyIn : Fade::dropoutIn; }
 
     static constexpr int unset = std::numeric_limits<int>::min();
     static void lower (std::atomic<int>&, int) noexcept;
@@ -508,9 +515,9 @@ private:
 
     // Audio thread: which fade each ramp uses, chosen when it starts
     Fade sendFade = Fade::bypass; // the bay's send: the state silencing it, or the one that last did
-    Fade mixFade = Fade::dropout; // dry and the bay's sound: likewise, or (before the bay's first sound) dropout
-    Fade levelFade = Fade::dropout; // the fade-in after a silent stretch: what held the return back
-    std::atomic<Fade> shownFade { Fade::dropout }; // mixFade, for the status
+    Fade mixFade = Fade::dropoutIn; // dry and the bay's sound: likewise, or (before the bay's first sound) the dropout fade in
+    Fade levelFade = Fade::dropoutIn; // the fade-in after a silent stretch: the fade in of what held the return back
+    std::atomic<Fade> shownFade { Fade::dropoutIn }; // mixFade, for the status
 
     // Audio thread: the bay's send fades out for Bypass and Off, and in after them (once the release has passed)
     float sendGain = 1.0f;
