@@ -40,6 +40,9 @@ public:
     void setLayout (juce::Point<double>);
     juce::Point<double> getLayout() const { return layout; }
 
+    // Swaps the layout area's width and height at the same scale; around the window's centre with the centre modifier
+    void swapSize();
+
     //==============================================================================
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -84,17 +87,10 @@ private:
     void handleBayBypass (const juce::var&);
     void reportProcessing();
     void reportLink();
-    void logKey (const juce::String&);
-    void reportHostDiagnostics();
 
     PluginProcessor& pluginProcessor;
     juce::SharedResourcePointer<PluginSettings> settings;
     juce::SharedResourcePointer<WebViewKeepAlive> webViewKeepAlive;
-
-    // Newest first (diagnostic); before the key forwarder, which still releases keys as it goes
-    juce::StringArray keyLog;
-    static constexpr int maxKeyLogLines = 12;
-    juce::String sentHostDiagnostics;
 
     KeyForwarder keyForwarder;
     ControlSession session;
@@ -113,7 +109,6 @@ private:
     juce::TimedCallback processingCheck { [this] {
         reportProcessing();
         reportLink();
-        reportHostDiagnostics();
     } };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginEditor)

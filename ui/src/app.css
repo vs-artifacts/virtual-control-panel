@@ -1,17 +1,197 @@
 @font-face {
-  font-family: 'm5x7';
-  src: url('../../assets/fonts/m5x7.ttf') format('truetype');
+  font-family: 'Rubik';
+  src: url('../fonts/Rubik/Rubik-VariableFont_wght.ttf') format('truetype');
+  font-weight: 300 900;
 }
 
+@font-face {
+  font-family: 'Barlow';
+  src: url('../fonts/Barlow/Barlow-Regular.ttf') format('truetype');
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: 'Barlow';
+  src: url('../fonts/Barlow/Barlow-SemiBold.ttf') format('truetype');
+  font-weight: 600;
+}
+
+@font-face {
+  font-family: 'm5x7';
+  src: url('../fonts/m5x7.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Tiny5';
+  src: url('../fonts/Tiny5/Tiny5-Regular.ttf') format('truetype');
+}
+
+/* Style tokens */
 :root {
-  font: 15px/1.4 system-ui, 'Segoe UI', Roboto, sans-serif;
+  --background: #0f1012;
+  --accent: #ff6000;
+  --accent-soft: rgba(255, 96, 0, 0.2);
+  --drag: #ff0055;
+  --warning: #ffb36b;
+  --mid-gray: #555555;
+  --control-background: #1a1d21;
+
+  /* p2: slot text; p3: small slot text. Pixel fonts at whole screen pixels per font pixel (pixelText.svelte.ts sets the
+     stepped sizes), without anti-aliasing (see App.svelte's filter) */
+  --p2-font: 'm5x7', monospace;
+  --p2-size: var(--p2-stepped, 16px);
+  --p3-font: 'Tiny5', monospace;
+  --p3-size: var(--p3-stepped, 8px);
+  --pixel-filter: url(#pixel-text);
+
+  font: 15px/1.4 'Barlow', system-ui, sans-serif;
   color: #fff;
-  background: #0f1012;
+  background: var(--background);
   color-scheme: dark;
+  accent-color: var(--accent);
+}
+
+:root.pixel-antialias {
+  --pixel-filter: none;
+}
+
+/* Rendering fallback: Barlow for all text */
+:root.font-fallback {
+  --p2-font: 'Barlow', system-ui, sans-serif;
+  --p2-size: 10px;
+  --p3-font: 'Barlow', system-ui, sans-serif;
+  --p3-size: 8px;
+  --pixel-filter: none;
 }
 
 body {
   margin: 0;
+}
+
+:focus-visible {
+  outline-color: var(--accent);
+}
+
+/* Controls: zero specificity, so a component's own styles win */
+:where(button) {
+  padding: 1px 8px;
+  border: 1px solid var(--mid-gray);
+  border-radius: 3px;
+  background: var(--control-background);
+  color: inherit;
+  font: inherit;
+}
+
+:where(button:not(:disabled)):hover {
+  border-color: #808080;
+}
+
+:where(button:disabled) {
+  opacity: 0.45;
+}
+
+:where(input[type='number'], input[type='text']) {
+  padding: 0 4px;
+  border: 1px solid var(--mid-gray);
+  border-radius: 3px;
+  background: var(--control-background);
+  color: inherit;
+  font: inherit;
+}
+
+:where(input[type='checkbox'], input[type='radio']) {
+  display: inline-grid;
+  place-content: center;
+  box-sizing: border-box;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  border: 1px solid var(--mid-gray);
+  border-radius: 2px;
+  background: var(--control-background);
+  appearance: none;
+}
+
+:where(input[type='radio']) {
+  border-radius: 50%;
+}
+
+:where(input[type='checkbox'], input[type='radio']):not(:disabled):hover {
+  border-color: #808080;
+}
+
+:where(input[type='checkbox'], input[type='radio']):disabled {
+  opacity: 0.45;
+}
+
+:where(input[type='checkbox']):checked::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  background: var(--accent);
+  clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%);
+}
+
+:where(input[type='radio']):checked::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+h1,
+.h1 {
+  margin: 0;
+  font-family: 'Rubik', system-ui, sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+h2,
+.h2 {
+  margin: 0;
+  font-family: 'Rubik', system-ui, sans-serif;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+h3,
+.h3 {
+  margin: 0;
+  font-family: 'Barlow', system-ui, sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* Emphasis only on a line with plain text */
+strong,
+em {
+  font-weight: 600;
+  font-style: normal;
+}
+
+.p2 {
+  font-family: var(--p2-font);
+  font-size: var(--p2-size);
+  line-height: 1;
+}
+
+.p3 {
+  font-family: var(--p3-font);
+  font-size: var(--p3-size);
+  line-height: 1;
+}
+
+/* On text-only elements: the filter turns every partly covered pixel fully on or off, so boxes and translucent colours
+   inside would vanish (use opacity instead) */
+.crisp {
+  filter: var(--pixel-filter);
+}
+
+/* Snapping moves it with translate, which inline boxes ignore */
+:where(span.crisp) {
+  display: inline-block;
 }
 
 /* Two columns (see columnFlow): the left one fills to the area's height first; balanced when that isn't enough */

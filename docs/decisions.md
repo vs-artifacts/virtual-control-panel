@@ -105,11 +105,14 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
 - **A hosted plugin changing its own latency** (e.g. linear phase in a slot) isn't followed yet: its box takes the latency when prepared. Needed before latent plugins go into slots.
 - **Removing a slot asks nothing first** (× removes it with its plugin's settings). A confirmation or undo: the user's call.
 - **Sub-bus layout and routing:** expect regular revision (layouts to try: buses scrolling right, "leaf" tabs, wrapped rows with strict or top-aligned rows).
-- **Dynamic names (1b.5d):** safe to build ("Names probe"). Remove the probe with 1b.5d.
+- **Dynamic names (1b.5d):** safe to build ("Names probe"). The probe itself is archived ("Archived diagnostics").
 - **"Tidy host controls"** (renumber the pool into slot order, with a warning): a definite later addition.
 - **Double-click "sets a value":** a popup with a text entry (the setting exists as a placeholder).
 - **Choosing and naming bay controls** in the UI.
-- **Asset size:** Pamplejuce embeds everything in `assets/` into the plugin's binary data, so the fonts in `assets/fonts/` (used only by the page, which embeds its own copy) bloat the plugin. Exclude them when binary size matters.
+
+**Page (1b.5b part A):**
+- **Pixel fonts are still being tuned** (user, 2026-10-14: in parallel with part B): the 75% threshold, stepping and snapping await the user's FL check; Tiny5 (p3) is unchecked in practice. Fallback if thresholding stays fragile: drawing pixel text ourselves. State of play: `docs/current.md`.
+- **Part A's full FL checklist** (`fl-checks.md`, both part A sections) hasn't been run yet.
 
 **Bays (1b.4, 1b.5e):**
 - **The Diagnostics line "return silent while the sent audio isn't"**: kept for the alpha slot interface.
@@ -685,3 +688,55 @@ User, pre-alpha: "the interface looks great, and it works smoothly". The step-by
 - **Fixed on the way:** the Settings tab's two-column layout briefly measured itself shorter, which pulled its scroll position to the top on any change (now kept).
 - **Not done (noted):** a hosted plugin changing its own latency isn't followed yet (the box takes it at prepare); removing a slot asks nothing first.
 - **Tests (92 test cases, Debug and Release):** the structure and its saved data, the engine's wiring, the dip, missing or unlisted plugins, Param 1 following its slot, the fade in after a dropout, and the page's slot controls.
+
+### 1b.5b: decided with the user (2026-10-11)
+Three parts, each with its own FL check: **A** the UI additions, **B** slot states, **C** following a hosted plugin's own latency changes (needed before or with 1b.5c).
+
+**A: UI**
+- **Hint pane** (60 px, scrolls; about 2.5 lines): shows the hint of whatever the pointer is over. Every former `title` tooltip moves there (the resize grips' too: their tooltips never showed). **Alt+wheel scrolls it** while the pointer stays on the hinted element (a hint only shows during mouseover), at most a line per step; the Alt release after it is swallowed so it can't open the host's menu bar.
+- **Settings:** an option's explanation (the text that was in parentheses) is its row's hint; units, ranges and scope tags ("FL only", "Windows only") stay in the label. Where a semicolon split a label, a line break. A setting's own explanation (the paragraphs under it) is its heading's hint. Warnings that depend on the state stay on the page.
+- **Option rows:** the control lines up with the first line of its text; only the control itself reacts to clicks. Hints and the right-click menu still cover the whole row.
+- **Resets:** **Reset all** (every setting to its default: the user's own where set) and **Factory reset** (every setting to the factory default; the user's own defaults are kept). Both ask first. Right-click Reset all: **Clear user defaults** (the current values stay). Right-click Factory reset: **Hard reset to factory defaults** (clears every setting and every user default).
+- **Controls hiding an option behind a right-click** (the resets, not the settings' ordinary menus) show the `help` cursor; a custom cursor with a menu mark may come later.
+- **Swap width and height** (beside Reset size): swaps the main area's width and height at the same scale; Diagnostics' 400 px stays out of it. A plain click keeps the top-left corner; with the centre modifier (whatever the corner grips use for "around the centre", so the flip setting counts, and nothing hard-codes Alt) it swaps around the centre.
+- **Diagnostics:** explanations go into hints; each line shows its values, short numbers and units included. The primary value (a number, or a word that is the line's value) is white; all other text #555555. Order, in groups with dividers: Reset counters, Link, Relays, Transport | Round trip (with Automatic), Headroom, Block sizes, Output delay, Bay latency | Missing blocks, Receiver missed, Held back | Slot (until slots get their own controls), Return vs sent, Lag, Controls, Control timing | Events.
+- **Archived:** the names probe, the key log and the window list leave Diagnostics and the code ("Archived diagnostics", below).
+- **Buses:** the sideways scrollbar sits at the bottom of the whole bus area, BUS X included.
+- **Fonts:** h1 Rubik Bold (the stage bars, Diagnostics' "Bay link", the header's title: the plugin has no other title); h2 Rubik (setting headings, "Events"); h3 Barlow (bus titles, for now); p Barlow Regular; emphasis Barlow SemiBold, only on a line with plain text; **p2** m5x7 at 16 px (slot text); **p3** Tiny5 at 8 px (small slot text: the slot header's state buttons, MIX, the slot number).
+- **Pixel fonts:** no anti-aliasing for p2 and p3 by default (an alpha threshold filter: exact at 100% and 200%, uneven pixel widths in between). Settings: **pixel text anti-aliasing** (off) and a **rendering fallback** (Barlow for all text, p2 at 10 px and p3 at 8 px; anti-aliasing then always on).
+- **Colours:** controls and their states #ff6000 (the browser's blue, our #8fa2ff), drag #ff0055; hover adjustments stay. The bay's toggles too. Warnings keep #ffb36b. Menus: the page background with a hairline accent border.
+- **Font files:** only the page's fonts are kept, in `ui/fonts/` with their licences (the page embeds its own copies; `assets/` is embedded into the plugin binary as well). The rest of the families moved to `C:\dev\auxiliary materials\fonts\`.
+
+**B: slot states**
+- **States ON, MUTE, BYPASS, OFF.** Uppercase is the convention for our own controls from now on (slot default controls, header controls, bus-level controls later). "Active" is renamed ON everywhere (the bay included), so it isn't confused with a control's selected state.
+- **Buttons:** text only, tiny: "M", "B", "OFF" (labels only; hints and code use the full names). The selected one is in the accent colour. No ON button: deselecting returns to ON. On empty slots they're shown but disabled.
+- **BYPASS keeps the slot's latency** (dry delayed by it). **MUTE**: the plugin keeps processing, its output is dry. **OFF**: out of the processing grid, its latency no longer counts.
+- **"End signal path when off"** (right-click on OFF, per slot): a kill switch. Everything downstream fed only through that point is dead: not processed and not connected, so it costs no CPU and no latency. A box with another live input carries on. Dead slots show greyed with a note; their own buttons stay usable.
+- **Fades:** MUTE and BYPASS share one set with the bays. OFF on a hosted slot is a dip using the Slot changes pair; the bay keeps its own OFF fade (option A).
+- **Test plugins:** kHs Compactor (489 samples of latency) and kHs Reverb (tails) join the slot menu.
+- **Host controls:** page only for now. Later (1b.5d) a slot's state could be one stepped host control (OFF at 0, BYPASS at 0.25 … ON at 1, more robust in hosts than whole numbers).
+
+### Archived diagnostics (2026-10-11)
+Removed from Diagnostics and the code in 1b.5b part A; recoverable from the git tag **`archive/host-diagnostics`** (commit `699ff02`, the last with them). To bring one back, take its pieces from that commit.
+- **Names probe:** a Diagnostics button that toggled the plugin's name in Param 1's host name (`PluginProcessor::toggleNamesProbe`, `applyNamesProbe`, the page's `namesProbe` message and `probeName` in the editor state). Param 1 keeps the full form, "SLOT 1.1: kHs 3-Band EQ - Low" (`PluginProcessor::nameParam1`), until 1b.5d's dynamic names. Findings: "Names probe".
+- **Keys forwarded to the host:** the last 12 forwarded keys, each with the mouse state, the capture windows and which window took it (`KeyForwarder::postToHostOf`'s log callback, `PluginEditor::logKey`). Used to find FL's key route ("Resizing chords, smooth rendering, keys and windows").
+- **Windows around the editor:** the window chain from the editor up, with class, kind, size and position (`EditorPlacement::describeWindows`). Its findings are recorded under "FL's window chain".
+- Both lists reached the page as the `hostDiagnostics` event (`PluginEditor::reportHostDiagnostics`, the page's `HostDiagnostics.svelte`).
+
+### 1b.5b part A as built (2026-10-11)
+- **Hints:** `ui/src/lib/hint.svelte.ts`: `use:hinted={text}` on any element; the innermost hinted element under the pointer wins; a Diagnostics line hints for its label and value together. Page menu items can carry hints too.
+- **Pixel text:** the `.p2` and `.p3` classes set the font; `.crisp` (on text-only elements, since translucent pixels vanish) applies an SVG alpha-threshold filter (`#pixel-text` in `App.svelte`). Settings `pixelTextAntialiasing` and `fontFallback` toggle classes on the page's root; style tokens (`--accent`, `--drag`, `--dim`, the p2/p3 fonts) are in `app.css`.
+- **Resets** (`PluginSettings`): `resetAll` (to defaults), `factoryResetAll` (factory values written, user defaults kept), `clearUserDefaults` (each current value written first, so it stays), `hardReset`. The page's message: `resetSettings {all: "defaults" | "factory" | "clearUserDefaults" | "hard"}` or `{name}`.
+- **Swap** (`PluginEditor::swapSize`, message `swapSize`): the layout shares become `(y × 1270 / 790, x × 790 / 1270)`, so swapping twice is exact unless a layout limit clamps it; the centre anchor comes from `wantsCenterAnchor` (the corner grips' rule). The page names the modifier in one place (`centreModifier`).
+- **Fonts** live in `ui/fonts/` (Rubik variable, Barlow Regular and SemiBold, m5x7, Tiny5); `assets/` keeps only the template image. A test checks every font the page's styles name is served.
+- **Hint pane** text starts at the top for each new hint. The editor's title (version and build type) is a plain line at the top of Settings; the Header stage has no title.
+
+### Part A: pixel text and polish after the first FL look (user, 2026-10-13)
+- **Why the pixel text looked bold:** Windows' text engine smears strokes sideways (vertical is exact). Measured on the user's screenshot: a stroke about 89% covered, a pixel beside one stroke 37%, a 1-pixel gap between two strokes 51 to 59%. The old threshold (50%) filled those gaps. **Now 75%** (`#pixel-text`, `tableValues="0 0 0 1"`); at 100% it matches the user's "ideal" (the same font in another app).
+- **Stepped pixel sizes** (`ui/src/lib/pixelText.svelte.ts`): each font pixel is a whole number of screen pixels (one below 150%, two from 150%, …); anti-aliased, steps of a share of a screen pixel. Settings (page only): `pixelStepAtPercent` (where the next size starts, 1 to 100, default 50), `pixelStepAntialiasedPercent` (5 to 100, default 25). Between steps pixel text is a little smaller or larger than the rest of the UI (user's choice, to keep it crisp).
+- **Snapping** (`pixelTextSnap`, on): every `.crisp` element is moved by a fraction of a pixel (CSS `translate`; spans become inline-block, since inline boxes ignore it) so its text starts on a whole screen pixel; again after text, layout, scrolling or size changes (one pass per frame). Without it, a stroke between two pixels falls below the threshold and vanishes.
+- **Page-only settings** go through one checked path in C++ (`PluginSettings::pageOnlyKeys`, `getPageOnly`, `setPageOnly`), stored like any other setting.
+- **Menus:** a setting offers "Reset to user default (…)" only when it has one; "Reset to factory default (…)" always. Right-clicking a group's heading resets every setting in it ("Reset to user defaults" when any has one, "Reset to factory defaults").
+- **Settings text:** option labels mid-gray (`--mid-gray`, #555555, a global token, also the hint pane's text); no forced line breaks in labels; ranges and other values (the control output gain, the double-click range) in the hints as "(min to max)"; no emphasis on option labels.
+- **Controls:** buttons, number fields, checkboxes and radios share one style (`app.css`, zero specificity so components can override): background #1a1d21 (`--control-background`), mid-gray border, Barlow; checked: an orange tick or dot. Slot buttons keep the slot font (p2) inside the new style.
+- **Diagnostics:** one label column for every group (a CSS subgrid), labels right-aligned; "receiver: …", "transmitter: …"; "(announced N)" on its own line.

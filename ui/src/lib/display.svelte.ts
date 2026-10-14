@@ -10,8 +10,8 @@ let scale = 1
 export type Rendering = 'smooth' | 'sharp'
 let rendering: Rendering = 'smooth'
 
-// The editor's size in pixels, and its size relative to the design size (for the Settings tab)
-export const view = $state({ width: 790, height: 1270, uiScale: 1 })
+// The editor's size in pixels, its size relative to the design size (for the Settings tab), and screen pixels per page pixel
+export const view = $state({ width: 790, height: 1270, uiScale: 1, devicePixels: 1 })
 
 // In smooth rendering the page is drawn once into an image (a layer), which the browser then stretches, so text moves
 // in proportion with everything else; drawn directly at each size, text snaps to whole pixels. The image keeps the
@@ -93,6 +93,7 @@ function update(display: unknown): void {
     scale = newScale
     applyZoom()
 
+    view.devicePixels = scale
     view.uiScale = readPositive(fields.uiScale, 100) ?? view.uiScale
     view.width = readPositive(fields.width, 100000) ?? view.width
     view.height = readPositive(fields.height, 100000) ?? view.height

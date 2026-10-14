@@ -387,17 +387,6 @@ TEST_CASE ("The EQ's low band gain is exposed to the host as Param 1", "[process
     CHECK (param1.getName (64) == "SLOT 1.1: kHs 3-Band EQ - Low");
     CHECK (processor.getParameters()[1]->getName (64) == "Param 2");
 
-    // The names probe: the host is told each time Param 1's name changes
-    {
-        HostLog log;
-        processor.addListener (&log);
-        processor.toggleNamesProbe();
-        CHECK (param1.getName (64) == "SLOT 1.1: Low");
-        processor.toggleNamesProbe();
-        CHECK (param1.getName (64) == "SLOT 1.1: kHs 3-Band EQ - Low");
-        processor.removeListener (&log);
-        CHECK (log.infoChanges == 2);
-    }
     CHECK (juce::exactlyEqual (param1.getValue(), eqLow.getValue()));
     CHECK (param1.getCurrentValueAsText() == eqLow.getCurrentValueAsText());
 

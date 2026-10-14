@@ -9,9 +9,13 @@ set(UI_BUNDLE_FILES
     "${UI_BUILD_DIR}/index.html"
     "${UI_BUILD_DIR}/assets/index.js"
     "${UI_BUILD_DIR}/assets/index.css"
-    "${UI_BUILD_DIR}/assets/m5x7.ttf")
+    "${UI_BUILD_DIR}/assets/m5x7.ttf"
+    "${UI_BUILD_DIR}/assets/Tiny5-Regular.ttf"
+    "${UI_BUILD_DIR}/assets/Barlow-Regular.ttf"
+    "${UI_BUILD_DIR}/assets/Barlow-SemiBold.ttf"
+    "${UI_BUILD_DIR}/assets/Rubik-VariableFont_wght.ttf")
 
-file(GLOB_RECURSE UI_SOURCES CONFIGURE_DEPENDS "${UI_SOURCE_DIR}/src/*")
+file(GLOB_RECURSE UI_SOURCES CONFIGURE_DEPENDS "${UI_SOURCE_DIR}/src/*" "${UI_SOURCE_DIR}/fonts/*.ttf")
 list(APPEND UI_SOURCES
     "${UI_SOURCE_DIR}/index.html"
     "${UI_SOURCE_DIR}/package.json"
@@ -20,7 +24,6 @@ list(APPEND UI_SOURCES
     "${UI_SOURCE_DIR}/tsconfig.app.json"
     "${UI_SOURCE_DIR}/tsconfig.node.json"
     "${UI_SOURCE_DIR}/vite.config.ts"
-    "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/m5x7.ttf"
     "${SETTINGS_DEFAULTS_JSON}")
 
 # Once per build folder, and again when the dependencies change. `npm install` rather than `npm ci`:

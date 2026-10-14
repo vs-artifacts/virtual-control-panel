@@ -120,11 +120,31 @@ TEST_CASE ("The embedded UI files", "[webui]")
         CHECK (found == 2);
     }
 
-    SECTION ("the slots' font")
+    SECTION ("every font the page's styles name")
     {
-        const auto font = findUiFile ("/assets/m5x7.ttf");
-        REQUIRE (font.has_value());
-        CHECK (juce::String (font->mimeType) == "font/ttf");
+        const auto css = findUiFile ("/assets/index.css");
+        REQUIRE (css.has_value());
+        const auto text = juce::String::fromUTF8 (static_cast<const char*> (css->data), css->size);
+        auto fonts = 0;
+
+        for (auto reference = text.indexOf ("url("); reference >= 0; reference = text.indexOf (reference + 1, "url("))
+        {
+            // Vite writes them as ./name.ttf beside index.css, quoted or not
+            const auto inside = text.substring (reference + 4, text.indexOf (reference, ")")).unquoted();
+
+            // A reference into the page itself (its SVG filter), not a file
+            if (inside.startsWith ("#"))
+                continue;
+
+            const auto path = "/assets/" + inside.fromLastOccurrenceOf ("/", false, false);
+            INFO (path);
+            const auto font = findUiFile (path);
+            REQUIRE (font.has_value());
+            CHECK (juce::String (font->mimeType) == "font/ttf");
+            ++fonts;
+        }
+
+        CHECK (fonts == 5);
     }
 
     SECTION ("anything else is not found, including attempts to reach other files")
@@ -389,19 +409,25 @@ TEST_CASE ("Diagnostics shows the bay link beside the tabs and sends the slot st
     // The Panel tab stays, beside it
     CHECK (page.waitFor ("document.getElementById('link-state')?.textContent ?? ''", "Linked as Panel 1") == "Linked as Panel 1");
     CHECK (page.evaluate (bridgeStatus) == connected);
-    CHECK (page.evaluate ("document.getElementById('link-relays').textContent") == "receiver playing; transmitter returning");
-    CHECK (page.evaluate ("document.getElementById('link-auto').textContent") == "automatic: 1 block works (still watching: a miss on either side falls back to 2)");
-    CHECK (page.evaluate ("document.getElementById('link-missing').textContent.replace (/\\s+/g, ' ').trim()") == "3 (late 2, gone 1; dropouts play silence)");
-    CHECK (page.evaluate ("document.getElementById('link-difference').textContent.trim()") == "now identical, largest identical");
-    CHECK (page.evaluate ("document.getElementById('link-lag').textContent") == "2 paths: +12288 samples (gain 0.98); 0 samples (gain 1.00)");
+    const auto flat = [&page] (const juce::String& id) {
+        return page.evaluate ("document.getElementById('" + id + "').textContent.replace (/\\s+/g, ' ').trim()");
+    };
+    CHECK (flat ("link-relays") == "receiver: playing transmitter: returning");
+    CHECK (flat ("link-auto") == "automatic: 1 block works");
+    CHECK (flat ("link-missing") == "3 (late 2, gone 1)");
+    CHECK (page.evaluate ("document.querySelector('#link-missing .v').textContent") == "3");
+    CHECK (flat ("link-difference") == "now identical, largest identical");
+    CHECK (flat ("link-lag") == "+12288 samples (gain 0.98) 0 samples (gain 1.00)");
     CHECK (page.evaluate ("document.getElementById('link-probe').textContent").startsWith ("+480 samples (10.0 ms, 0.94 blocks) after the step"));
-    CHECK (page.evaluate ("document.getElementById('link-bay-latency').textContent")
-           == "12288 samples (256.0 ms) in use; marker: reads 768; settling to 768 (held 20 of 50 ms); readings 768 to 12288 since reset");
-    CHECK (page.evaluate ("document.getElementById('link-delay').textContent.replace (/\\s+/g, ' ').trim()")
-           == "12800 samples (266.7 ms; round trip + bay latency); host told 12800");
+    CHECK (flat ("link-bay-latency") == "12288 samples (256.0 ms) in use marker: reads 768 settling to 768 (held 20 of 50 ms) readings 768 to 12288 since reset");
+    CHECK (flat ("link-delay") == "12800 samples (266.7 ms) host told 12800");
     CHECK (page.evaluate ("document.getElementById('link-slot-mute').getAttribute ('aria-pressed')") == "true");
     CHECK (page.evaluate ("document.getElementById('link-slot-off').getAttribute ('aria-pressed')") == "false");
     CHECK (page.evaluate ("document.querySelector('#link-events li').textContent") == "12:00:01.250 Slot state: mute");
+
+    // Explanations are in the hint pane, for the line the pointer is over
+    page.evaluate ("document.getElementById('link-missing').dispatchEvent (new PointerEvent ('pointerover', { bubbles: true }))");
+    CHECK (page.waitFor ("document.getElementById('hint').textContent.startsWith ('Return blocks that didn') ? 'yes' : 'no'", "yes") == "yes");
 
     // Each button selects its state; the selected one again goes back to Active
     page.evaluate ("document.getElementById('link-slot-off').click()");
@@ -496,7 +522,7 @@ TEST_CASE ("The Panel tab's slots: mute for generators only, and structure chang
     CHECK (page.waitFor ("String (document.querySelectorAll('.slot').length)", "1") == "1");
 }
 
-TEST_CASE ("Right-clicking a setting makes its value the default or resets it; Reset all asks first", "[webui][webview]")
+TEST_CASE ("Right-clicking a setting makes its value the default or resets it; the resets ask first", "[webui][webview]")
 {
     if (!WebUi::isSupported())
         SKIP ("No supported web view on this system");
@@ -526,7 +552,7 @@ TEST_CASE ("Right-clicking a setting makes its value the default or resets it; R
     // A typed value not committed yet: Set as default takes it; the user's own default and the factory's are offered
     page.evaluate ("document.getElementById('quiet-ms').value = '1234'");
     rightClick ("document.getElementById('quiet-ms')");
-    const auto quietMsItems = "Set as default|Reset to default (900 ms)|Reset to factory default (500 ms)";
+    const auto quietMsItems = "Set as default|Reset to user default (900 ms)|Reset to factory default (500 ms)";
     CHECK (page.waitFor (menuTexts, quietMsItems) == quietMsItems);
     choose (0);
     page.pumpUntil ([&defaults] { return !defaults.isEmpty(); });
@@ -537,12 +563,12 @@ TEST_CASE ("Right-clicking a setting makes its value the default or resets it; R
 
     // A user default that doesn't fit is ignored
     rightClick ("document.getElementById('quiet-level')");
-    const auto quietLevelItems = "Set as default|Reset to default (-80 dBFS)";
+    const auto quietLevelItems = "Set as default|Reset to factory default (-80 dBFS)";
     CHECK (page.waitFor (menuTexts, quietLevelItems) == quietLevelItems);
 
     // A radio option: its own value; reset by name
-    rightClick ("document.querySelectorAll('input[name=bayStoppedShrink]')[2].closest('label')");
-    const auto shrinkItems = "Set as default|Reset to default (Only when quiet)";
+    rightClick ("document.querySelectorAll('input[name=bayStoppedShrink]')[2].closest('.option')");
+    const auto shrinkItems = "Set as default|Reset to factory default (Only when quiet)";
     CHECK (page.waitFor (menuTexts, shrinkItems) == shrinkItems);
     choose (1);
     page.pumpUntil ([&resets] { return !resets.isEmpty(); });
@@ -555,5 +581,43 @@ TEST_CASE ("Right-clicking a setting makes its value the default or resets it; R
     CHECK (resets.size() == 1);
     page.evaluate ("document.getElementById('confirm-reset-all').click()");
     page.pumpUntil ([&resets] { return resets.size() >= 2; });
-    CHECK (resets[1]["all"] == juce::var (true));
+    CHECK (resets[1]["all"] == juce::var ("defaults"));
+
+    page.evaluate ("document.getElementById('factory-reset-settings').click()");
+    CHECK (page.waitFor ("String (document.getElementById('confirm-reset-all') !== null)", "true") == "true");
+    page.evaluate ("document.getElementById('confirm-reset-all').click()");
+    page.pumpUntil ([&resets] { return resets.size() >= 3; });
+    CHECK (resets[2]["all"] == juce::var ("factory"));
+
+    // The reset buttons' right-clicks hold one more option each, which asks first too
+    rightClick ("document.getElementById('reset-all-settings')");
+    CHECK (page.waitFor (menuTexts, "Clear user defaults") == "Clear user defaults");
+    choose (0);
+    CHECK (page.waitFor ("String (document.getElementById('confirm-reset-all') !== null)", "true") == "true");
+    page.evaluate ("document.getElementById('confirm-reset-all').click()");
+    page.pumpUntil ([&resets] { return resets.size() >= 4; });
+    CHECK (resets[3]["all"] == juce::var ("clearUserDefaults"));
+
+    rightClick ("document.getElementById('factory-reset-settings')");
+    CHECK (page.waitFor (menuTexts, "Hard reset to factory defaults") == "Hard reset to factory defaults");
+    choose (0);
+    CHECK (page.waitFor ("String (document.getElementById('confirm-reset-all') !== null)", "true") == "true");
+    page.evaluate ("document.getElementById('confirm-reset-all').click()");
+    page.pumpUntil ([&resets] { return resets.size() >= 5; });
+    CHECK (resets[4]["all"] == juce::var ("hard"));
+
+    // A group's heading resets every setting in it; to the user's own defaults only where the group has some
+    const auto legend = [] (const char* fieldset) { return juce::String ("document.querySelector('") + fieldset + " legend')"; };
+    rightClick (legend ("#bay-fades"));
+    CHECK (page.waitFor (menuTexts, "Reset to factory defaults") == "Reset to factory defaults");
+
+    rightClick ("document.getElementById('quiet-ms').closest('fieldset').querySelector('legend')");
+    const auto groupItems = "Reset to user defaults|Reset to factory defaults";
+    CHECK (page.waitFor (menuTexts, groupItems) == groupItems);
+    choose (0);
+    page.pumpUntil ([&resets] { return resets.size() >= 8; });
+    REQUIRE (resets.size() == 8);
+    CHECK (resets[5]["name"] == "bayStoppedShrink");
+    CHECK (resets[6]["name"] == "bayQuietLevelDb");
+    CHECK (resets[7]["name"] == "bayQuietMs");
 }

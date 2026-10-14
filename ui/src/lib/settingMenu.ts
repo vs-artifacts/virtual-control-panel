@@ -33,15 +33,38 @@ export function openSettingMenu<Name extends SettingKey>(event: MouseEvent, key:
     event.preventDefault()
     event.stopPropagation()
 
-    const items: PageMenuItem[] = [
-        { text: 'Set as default', enabled: value !== null, action: () => value !== null && setAsDefault(key, value) },
-        { text: `Reset to default (${describe(key, defaultOf(key))})`, enabled: true, action: () => resetSettings(key) },
-    ]
+    const factory = factoryDefault(key)
+    const items: PageMenuItem[] = [{ text: 'Set as default', enabled: value !== null, action: () => value !== null && setAsDefault(key, value) }]
 
     if (editor.userDefaults[key] !== undefined) {
-        const factory = factoryDefault(key)
+        items.push({ text: `Reset to user default (${describe(key, defaultOf(key))})`, enabled: true, action: () => resetSettings(key) })
         items.push({ text: `Reset to factory default (${describe(key, factory)})`, enabled: true, action: () => changeSetting(key, factory) })
+    } else {
+        items.push({ text: `Reset to factory default (${describe(key, factory)})`, enabled: true, action: () => resetSettings(key) })
     }
+
+    openPageMenu(items, event.clientX, event.clientY)
+}
+
+// A group's right-click menu (its heading): the same resets, for every setting in it
+export function openGroupMenu(event: MouseEvent, keys: readonly SettingKey[]): void {
+    event.preventDefault()
+    event.stopPropagation()
+
+    const items: PageMenuItem[] = []
+
+    if (keys.some((key) => editor.userDefaults[key] !== undefined))
+        items.push({ text: 'Reset to user defaults', enabled: true, hint: 'Your own default where you set one, else the factory default.', action: () => keys.forEach((key) => resetSettings(key)) })
+
+    items.push({
+        text: 'Reset to factory defaults',
+        enabled: true,
+        action: () =>
+            keys.forEach((key) => {
+                if (editor.userDefaults[key] === undefined) resetSettings(key)
+                else changeSetting(key, factoryDefault(key))
+            }),
+    })
 
     openPageMenu(items, event.clientX, event.clientY)
 }

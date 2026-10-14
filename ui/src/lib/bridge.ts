@@ -51,18 +51,26 @@ export function sendSettingDefault(name: string, value: string | boolean | numbe
     window.__JUCE__.backend.emitEvent('settingDefault', { name, value })
 }
 
-// Back to the default (the user's own or the factory's)
-export function sendResetSettings(which: { name: string } | { all: true }): void {
-    window.__JUCE__.backend.emitEvent('resetSettings', which)
+// Every setting at once: to its default (the user's own where set), to the factory's (the user's own kept), forgetting
+// the user's own defaults (the values stay), or everything to the factory's, user defaults included
+export const resetKinds = ['defaults', 'factory', 'clearUserDefaults', 'hard'] as const
+export type ResetKind = (typeof resetKinds)[number]
+
+export function isResetKind(value: string): value is ResetKind {
+    return (resetKinds as readonly string[]).includes(value)
 }
 
-// Names probe (test build): Param 1's name with or without the plugin's name
-export function sendNamesProbe(): void {
-    window.__JUCE__.backend.emitEvent('namesProbe', {})
+// One setting back to its default, or all of them (see ResetKind)
+export function sendResetSettings(which: { name: string } | { all: ResetKind }): void {
+    window.__JUCE__.backend.emitEvent('resetSettings', which)
 }
 
 export function sendResetSize(): void {
     window.__JUCE__.backend.emitEvent('resetSize', {})
+}
+
+export function sendSwapSize(): void {
+    window.__JUCE__.backend.emitEvent('swapSize', {})
 }
 
 // Opens a hosted plugin's own editor in a separate window
@@ -127,11 +135,6 @@ export function onDisplay(listener: (display: unknown) => void): void {
 // { running }: whether the host is running the plugin's audio (FL's smart disable stops it)
 export function onProcessing(listener: (message: unknown) => void): void {
     window.__JUCE__.backend.addEventListener('processing', listener)
-}
-
-// { keys, windows }: the last forwarded keys and the windows around the editor (test-build diagnostics)
-export function onHostDiagnostics(listener: (message: unknown) => void): void {
-    window.__JUCE__.backend.addEventListener('hostDiagnostics', listener)
 }
 
 // The bay link's status (see LinkStatus), about 4 times a second while the editor shows

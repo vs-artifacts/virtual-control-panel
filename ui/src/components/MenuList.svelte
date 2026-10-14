@@ -1,5 +1,6 @@
 <script lang="ts">
     import { viewportSize } from "../lib/display.svelte";
+    import { hinted } from "../lib/hint.svelte";
     import { chooseMenuItem, type MenuItem } from "../lib/menu.svelte";
     import MenuList from "./MenuList.svelte";
 
@@ -82,6 +83,7 @@
                 type="button"
                 role="menuitem"
                 disabled={!item.enabled}
+                use:hinted={item.hint ?? ""}
                 onpointerenter={closeSubmenu}
                 onclick={() => chooseMenuItem(item.id)}
             >
@@ -113,8 +115,8 @@
         overflow-y: auto;
         min-width: 180px;
         padding: 4px 0;
-        background: rgba(30, 34, 64, 0.96);
-        border: 1px solid rgba(255, 255, 255, 0.18);
+        background: var(--background);
+        border: 1px solid var(--accent);
         border-radius: 6px;
         box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
     }

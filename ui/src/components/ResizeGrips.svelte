@@ -1,5 +1,13 @@
 <script lang="ts">
     import { sendResize, type Corner } from "../lib/bridge";
+    import { centreModifier, editor } from "../lib/editor.svelte";
+    import { hinted } from "../lib/hint.svelte";
+
+    const gripHint = $derived(
+        editor.settings.resizeFlipAlt
+            ? `Drag: resizes around the window's center. ${centreModifier}+drag: keeps the opposite corner in place. Ctrl: 25% steps. Shift: width and height apart.`
+            : `Drag: keeps the opposite corner in place. ${centreModifier}+drag: resizes around the window's center. Ctrl: 25% steps. Shift: width and height apart.`,
+    );
 
     // The web view covers the whole editor, so the page provides its corner handles
     const corners: Corner[] = [
@@ -89,7 +97,7 @@
 </script>
 
 {#each corners as corner (corner)}
-    <div class="grip {corner}" use:grip={corner}>
+    <div class="grip {corner}" use:grip={corner} use:hinted={gripHint}>
         <svg viewBox="0 0 16 16" aria-hidden="true">
             <path d="M 3 7.5 L 8.5 13 M 3 2.5 L 13.5 13" />
         </svg>

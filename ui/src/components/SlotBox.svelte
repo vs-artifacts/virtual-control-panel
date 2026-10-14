@@ -10,6 +10,7 @@
         type SlotInfo,
     } from "../lib/editor.svelte";
     import { openPageMenu } from "../lib/menu.svelte";
+    import { hinted } from "../lib/hint.svelte";
     import { controls } from "../lib/params.svelte";
     import {
         beginSlotDrag,
@@ -45,42 +46,49 @@
     }
 </script>
 
-<div class="slot" class:dragging={slotDrag.active && slotDrag.slot === slot.id}>
+<div
+    class="slot p2"
+    class:dragging={slotDrag.active && slotDrag.slot === slot.id}
+>
     <div
         class="slot-header"
         role="button"
         tabindex="-1"
         aria-roledescription="drag handle"
-        title="Drag to move"
+        use:hinted={"Drag to move."}
         onpointerdown={(event) =>
             beginSlotDrag(event, slot.id, kind, `${slot.label} ${slot.name}`)}
     >
-        <span class="label">{slot.label}</span>
-        <span class="name">{slot.name}</span>
+        <span class="label crisp">{slot.label}</span>
+        <span class="name crisp">{slot.name}</span>
         <button
             type="button"
-            class="remove"
-            title="Remove this slot"
+            class="remove crisp"
+            use:hinted={"Removes this slot, with its plugin's settings."}
             onclick={() => removeSlot(slot.id)}>×</button
         >
     </div>
 
     <div class="slot-body">
         {#if slot.plugin === ""}
-            <button type="button" onclick={choosePlugin}>Choose plugin…</button>
+            <button type="button" onclick={choosePlugin}
+                ><span class="crisp">Choose plugin…</span></button
+            >
         {:else}
             {#if slot.status}
-                <div class="status">{slot.status}</div>
+                <div class="status crisp">{slot.status}</div>
             {/if}
             <div class="actions">
                 <button
                     type="button"
                     disabled={!slot.canOpen}
-                    onclick={() => openPlugin(slot.id)}>Open</button
+                    use:hinted={"Opens the plugin's own window."}
+                    onclick={() => openPlugin(slot.id)}
+                    ><span class="crisp">Open</span></button
                 >
                 {#if slot.canMute}
                     <label
-                        title="Silences this generator's output (30 ms fade); it keeps running, so the load stays the same"
+                        use:hinted={"Silences this generator's output (30 ms fade); it keeps running, so the load stays the same."}
                     >
                         <input
                             type="checkbox"
@@ -91,12 +99,15 @@
                                     event.currentTarget.checked,
                                 )}
                         />
-                        Mute
+                        <span class="crisp">Mute</span>
                     </label>
                 {/if}
             </div>
             {#if fedBuses !== null}
-                <div class="feeds" title="The buses this generator feeds">
+                <div
+                    class="feeds"
+                    use:hinted={"The buses this generator feeds."}
+                >
                     {#each editor.structure?.buses ?? [] as target (target.id)}
                         <button
                             type="button"
@@ -107,7 +118,8 @@
                                     slot.id,
                                     target.id,
                                     !fedBuses.includes(target.id),
-                                )}>{target.label}</button
+                                )}
+                            ><span class="crisp">{target.label}</span></button
                         >
                     {/each}
                 </div>
@@ -126,9 +138,6 @@
         border: 1px solid rgba(255, 255, 255, 0.14);
         border-radius: 4px;
         background: rgba(255, 255, 255, 0.05);
-        font-family: "m5x7", monospace;
-        font-size: 16px;
-        line-height: 1;
     }
 
     .slot.dragging {
@@ -194,6 +203,12 @@
         font: inherit;
     }
 
+    /* Pixel text can't be translucent (see .crisp): fade the whole button */
+    button:disabled {
+        color: inherit;
+        opacity: 0.45;
+    }
+
     .remove {
         padding: 0 6px;
         border: none;
@@ -216,8 +231,8 @@
     }
 
     .chip[aria-pressed="true"] {
-        border-color: #8fa2ff;
-        background: rgba(143, 162, 255, 0.2);
+        border-color: var(--accent);
+        background: var(--accent-soft);
         opacity: 1;
     }
 </style>

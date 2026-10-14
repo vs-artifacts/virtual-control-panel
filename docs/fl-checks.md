@@ -4,6 +4,30 @@ The user's checks in FL Studio: the latest slice's, and the earlier ones kept fo
 
 **Common setup:** close FL during the build, so the junctions in the system VST3 folder pick up the Debug builds (if FL was open, restart it). Fresh blank project, 48 kHz, ASIO4ALL, buffer 512. Bay tests run inside Patcher (smart disable off): panel, receiver relay, an FL plugin, transmitter relay, the marker wire (the receiver's Marker output, target 1, into the transmitter's Marker input), and for 1-block round trips a wire from the panel into the receiver. Diagnostics open.
 
+## 1b.5b part A, second build: pixel text and polish (built 2026-10-13)
+Run after the part A steps below (they still apply, except where this changes them).
+
+1. **Pixel text at 100%:** slot names, "6 of 2086 parameters", the bay's "Control 1": every stroke 1 pixel, the 1-pixel gaps inside letters (r, n, o, s) open, as in the "ideal" screenshot. Slot buttons ("Open", "Choose plugin…", bus chips) too.
+2. **Scaling (Ctrl+drag a corner, both Smooth and Sharp):** at 110%, 125% and 140% the pixel text stays exactly 1 pixel per font pixel (so it's a little smaller than the rest); from 150% it's 2 pixels per font pixel (a little bigger); every size stays crisp with even strokes. Smooth softens it while dragging and sharpens when you stop.
+3. **Settings > Slot text:** "% past each step" (default 50): 30 makes the step at 130%, 100 at 200%. "Snap pixel text" off: at in-between sizes some strokes blur or vanish (on again fixes it). "Anti-alias pixel text": soft edges, growing in steps of the "% of a pixel" field (default 25; try 10 and 50). Rendering fallback: Barlow; the other four grey out.
+4. **Context menus:** a setting with no default of your own offers "Set as default" and "Reset to factory default (…)"; with one, "Reset to user default (…)" and "Reset to factory default (…)". Right-click a heading (e.g. Bay fades): "Reset to factory defaults" for the whole group, plus "Reset to user defaults" when any setting in it has one.
+5. **Settings text:** option labels grey, values typed into fields white; the "While a window corner is dragged…" label wraps naturally (no forced break); fade labels plain ("Mute", no bold, no "(up to …)"); ranges, the control output gain and the double-click range are in the hints, written "(min to max)"; "Milliseconds; 0 is off." is the Bay fades and Slot changes headings' hint. The hint pane text is grey.
+6. **Controls:** buttons, number fields, checkboxes and radios: dark (#1a1d21) with a grey border, Barlow; checked boxes and radios show an orange tick or dot; hover lightens the border. Slot buttons keep the slot font.
+7. **Diagnostics:** one label column for every group, labels right-aligned; "receiver: …" and "transmitter: …"; "(announced 512)" on its own line under the round trip.
+
+## 1b.5b part A: UI additions (built 2026-10-11)
+**First:** Settings > Factory reset (confirm), so the new settings start at their defaults.
+
+1. **Hint pane** (60 px at the bottom): hover any setting row, heading, button, slot header, ×, bus chip, slider, Diagnostics line and the corner grips: its explanation shows there; nothing hovered, nothing shown. A long hint (Settings > the "Resizing" heading, "Bay tail cut release"): **Alt+wheel** while still over it scrolls the hint a line at a time; releasing Alt afterwards doesn't open FL's menu bar. No browser tooltips anywhere.
+2. **Settings rows:** labels without their parenthetical explanations (those are in the hints; units and ranges stay). Each checkbox, radio and number field sits level with the first line of its text. Clicking a row's text does nothing; only the control itself changes it. Right-click still works on the whole row.
+3. **Resets:** "Reset all" and "Factory reset" (help cursor over both) each ask first. Make a default of your own (right-click a setting > Set as default), change it, then: Reset all > your own default; Factory reset > the factory value, your own default still offered on right-click. Right-click Reset all > Clear user defaults (asks; values stay). Right-click Factory reset > Hard reset to factory defaults (asks; everything at the factory's, no defaults of your own).
+4. **Swap width and height** (beside Reset size): the window turns landscape (1,270 × 790 plus FL's border) and back; with Diagnostics open the 400 px stays on the right. Alt+click swaps around the window's centre (detached, attached inside FL's workspace, and in Patcher). With "flip drag and alt+drag" on, the two are swapped.
+5. **Diagnostics:** Reset counters at the top; the groups in the new order with dividers; labels and units grey (#555555), the values white; explanations only in the hints. The names probe, key log and window list are gone. The bay's MUTE/BYPASS/OFF buttons, pressed: orange.
+6. **Buses:** with BUS X taller than the other buses (add slots to it), the sideways scrollbar sits at the bottom of the whole bus area.
+7. **Fonts:** stage bars and "Bay link" in Rubik Bold; setting headings and "Events" in Rubik; bus titles and body text in Barlow; slot text in m5x7, crisp pixels at 100% and 200% (uneven pixel widths between is expected). Settings > Slot text: "Anti-alias pixel text" softens it; "Rendering fallback" switches slot text to small Barlow (and greys out the first).
+8. **Colours:** checkboxes, radios, sliders, the tab underline, pressed bus chips: orange (#ff6000). Drag a slot: the drop line and the ghost's border are pink-red (#ff0055). Menus: the page background with a thin orange border. Warnings still light orange.
+9. **Regression:** 1b.5a's steps 2 to 8 (sound, collapsing, adding, routing, dragging, Param 1, removing).
+
 ## 1b.5a: structure and graph (built 2026-10-10)
 **Status:** the user's first look in FL (2026-10-10): "the interface looks great, and it works smoothly" (pre-alpha). The steps below weren't reported one by one; use them as the regression run for the structure.
 

@@ -55,7 +55,7 @@ Read only the files relevant to the task at hand. At the start of every session:
 - `docs/style/tokens.md` - *(not yet written)* Named visual constants; may be superseded by the live-reloading JSON token file.
 - `docs/components/<name>.md` - *(not yet written)* One file per UI component: geometry source, states, value-to-visual behaviour.
 
-SVG assets from the user go in `assets/` (auto-embedded as BinaryData). SVGs are geometry only (named layer ids, text outlined, no filters); all styling is done in code. JUCE's SVG support is partial. Fonts (OFL, licences alongside) are in `assets/fonts/`; the page embeds the ones it uses through `cmake-local/Ui.cmake`, `source/bridge/UiFiles.cpp` and `ui/src/app.css`.
+SVG assets from the user go in `assets/` (auto-embedded as BinaryData). SVGs are geometry only (named layer ids, text outlined, no filters); all styling is done in code. JUCE's SVG support is partial. Fonts (OFL, licences alongside) are in `ui/fonts/`, only the ones the page uses (`assets/` would also embed them in the plugin binary; the full families are in `C:\dev\auxiliary materials\fonts`); the page embeds them through `cmake-local/Ui.cmake`, `source/bridge/UiFiles.cpp` and `ui/src/app.css`.
 
 ## Build Commands
 

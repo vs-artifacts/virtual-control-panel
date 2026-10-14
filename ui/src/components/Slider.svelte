@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onDestroy } from "svelte";
     import { editor } from "../lib/editor.svelte";
+    import { hinted } from "../lib/hint.svelte";
     import { openParameterMenu } from "../lib/menu.svelte";
     import {
         beginGesture,
@@ -10,7 +11,7 @@
         type Param,
     } from "../lib/params.svelte";
 
-    // compact: inside a slot (its name and value; the host's name as a tooltip)
+    // compact: inside a slot (its name and value; the host's name as a hint)
     let { param, compact = false }: { param: Param; compact?: boolean } =
         $props();
 
@@ -88,11 +89,11 @@
     class="slider"
     class:compact
     oncontextmenu={showMenu}
-    title={compact && param.host ? `Host: ${param.host}` : undefined}
+    use:hinted={param.host ? `Host: ${param.host}` : ""}
 >
-    <span class="name">{param.name}</span>
+    <span class="name" class:crisp={compact}>{param.name}</span>
     {#if compact}
-        <span class="value-text">{param.text}</span>
+        <span class="value-text crisp">{param.text}</span>
     {:else}
         <span class="owner">{param.slot}: {param.plugin}</span>
     {/if}
@@ -124,7 +125,7 @@
     }
 
     .name {
-        font-weight: 500;
+        font-weight: 600;
     }
 
     .owner,

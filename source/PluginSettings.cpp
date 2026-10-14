@@ -193,6 +193,38 @@ void PluginSettings::resetAll()
         std::visit ([this] (const auto& entry) { file.removeValue (nameOf (entry.key)); }, setting);
 }
 
+void PluginSettings::factoryResetAll()
+{
+    for (const auto& setting : Defaults::all)
+        std::visit ([this] (const auto& entry) { write (file, entry, factory (entry)); }, setting);
+}
+
+void PluginSettings::clearUserDefaults()
+{
+    for (const auto& setting : Defaults::all)
+    {
+        std::visit (
+            [this] (const auto& entry) {
+                write (file, entry, read (file, entry));
+                file.removeValue (userDefaultName (entry.key));
+            },
+            setting);
+    }
+}
+
+void PluginSettings::hardReset()
+{
+    for (const auto& setting : Defaults::all)
+    {
+        std::visit (
+            [this] (const auto& entry) {
+                file.removeValue (nameOf (entry.key));
+                file.removeValue (userDefaultName (entry.key));
+            },
+            setting);
+    }
+}
+
 bool PluginSettings::getKeepWebViewWarm() const
 {
     return read (file, Defaults::keepWebViewWarm);
@@ -257,6 +289,40 @@ bool PluginSettings::getResizeBlocksLanguageSwitch() const
 void PluginSettings::setResizeBlocksLanguageSwitch (bool shouldBlock)
 {
     write (file, Defaults::resizeBlocksLanguageSwitch, shouldBlock);
+}
+
+bool PluginSettings::isPageOnly (const juce::String& key)
+{
+    return std::any_of (pageOnlyKeys.begin(), pageOnlyKeys.end(), [&key] (const char* entry) { return key == entry; });
+}
+
+juce::var PluginSettings::getPageOnly (const juce::String& key) const
+{
+    const auto* setting = isPageOnly (key) ? find (key) : nullptr;
+
+    if (setting == nullptr)
+        return {};
+
+    return std::visit ([this] (const auto& entry) { return juce::var (read (file, entry)); }, *setting);
+}
+
+bool PluginSettings::setPageOnly (const juce::String& key, const juce::var& value)
+{
+    const auto* setting = isPageOnly (key) ? find (key) : nullptr;
+
+    if (setting == nullptr)
+        return false;
+
+    return std::visit (
+        [this, &value] (const auto& entry) {
+            const auto chosen = fromVar (entry, value);
+
+            if (chosen.has_value())
+                write (file, entry, *chosen);
+
+            return chosen.has_value();
+        },
+        *setting);
 }
 
 double PluginSettings::getLastEditorScale() const

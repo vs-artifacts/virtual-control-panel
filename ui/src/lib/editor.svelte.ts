@@ -1,9 +1,12 @@
 import factoryDefaults from '../../../source/SettingsDefaults.json'
-import { fetchEditorState, onHostDiagnostics, onProcessing, sendAddBus, sendAddSlot, sendCollapse, sendDiagnostics, sendGeneratorBus, sendMoveSlot, sendMutePlugin, sendNamesProbe, sendOpenPlugin, sendRemoveBus, sendRemoveSlot, sendResetSettings, sendResetSize, sendScroll, sendSetting, sendSettingDefault, sendTab } from './bridge'
+import { fetchEditorState, isResetKind, onProcessing, sendAddBus, sendAddSlot, sendCollapse, sendDiagnostics, sendGeneratorBus, sendMoveSlot, sendMutePlugin, sendOpenPlugin, sendRemoveBus, sendRemoveSlot, sendResetSettings, sendResetSize, sendScroll, sendSetting, sendSettingDefault, sendSwapSize, sendTab, type ResetKind } from './bridge'
 import { link, listenForLink, readLink } from './link.svelte'
 import { asRecord } from './read'
 
 export const tabNames = ['Panel', 'Settings'] as const
+
+// The key the plugin reads for "around the window's centre" (corner grips, Swap): see PluginEditor::wantsCenterAnchor
+export const centreModifier = 'Alt'
 
 // The page's scrolling areas, as the plugin saves them: the Panel tab (down, and its generator and bus rows sideways), the
 // Settings tab, and Diagnostics
@@ -27,6 +30,13 @@ export interface Settings {
     resizeRendering: (typeof renderings)[number]
     resizeFlipAlt: boolean
     resizeBlocksLanguageSwitch: boolean
+    // Slot text (p2, p3): pixel fonts with anti-aliasing, or Barlow for everything; snapped to whole screen pixels; the
+    // next whole pixel size from this far past each scale step; anti-aliased steps as a share of a screen pixel
+    pixelTextAntialiasing: boolean
+    fontFallback: boolean
+    pixelTextSnap: boolean
+    pixelStepAtPercent: number
+    pixelStepAntialiasedPercent: number
     flOutputCorrection: boolean
     // 0: automatic
     bayRoundTrip: (typeof roundTrips)[number]
@@ -116,6 +126,10 @@ export const doubleClickRange = rangeOf('doubleClickMs')
 // Real blocks start at one tick at this tempo at least: BPM, 0 for none
 export const lowestTempoRange = rangeOf('bayLowestTempo')
 
+// Pixel text: where the next whole pixel size starts, and the anti-aliased step (percent)
+export const pixelStepAtRange = rangeOf('pixelStepAtPercent')
+export const pixelStepAntialiasedRange = rangeOf('pixelStepAntialiasedPercent')
+
 // Whether a value from the plugin (or the page) fits a setting
 export function fits(key: SettingKey, value: unknown): boolean {
     const definition = definitions[key]
@@ -190,11 +204,6 @@ export const editor = $state({
     collapsed: Object.fromEntries(sections.map((section) => [section, false])) as Record<Section, boolean>,
     // Unknown (null) until the plugin says
     processing: null as boolean | null,
-    // Test-build diagnostics: the last forwarded keys (newest first) and the windows around the editor
-    keyLog: [] as string[],
-    windows: [] as string[],
-    // Names probe (test build): what the host is told Param 1 is called
-    probeName: '',
 })
 
 // Only a page that has heard from the plugin sends changes back to it
@@ -305,25 +314,11 @@ function readUserDefaults(raw: unknown): void {
     editor.userDefaults = defaults
 }
 
-function readLines(raw: unknown, limit: number): string[] {
-    return Array.isArray(raw) ? raw.slice(0, limit).filter((line): line is string => typeof line === 'string') : []
-}
-
-function readProbeName(raw: unknown): void {
-    if (typeof raw === 'string') editor.probeName = raw.slice(0, 200)
-}
-
 export async function loadEditorState(): Promise<void> {
     onProcessing((message) => {
         const running = asRecord(message)?.running
 
         if (typeof running === 'boolean') editor.processing = running
-    })
-
-    onHostDiagnostics((message) => {
-        const fields = asRecord(message) ?? {}
-        editor.keyLog = readLines(fields.keys, 32)
-        editor.windows = readLines(fields.windows, 32)
     })
 
     listenForLink()
@@ -344,7 +339,6 @@ export async function loadEditorState(): Promise<void> {
         readCollapsed(state.collapsed)
         readSettings(state.settings, editor.settings)
         readUserDefaults(state.userDefaults)
-        readProbeName(state.probeName)
         editor.structure = readStructure(state.structure)
         link.status = readLink(state.link)
     } catch {
@@ -363,7 +357,6 @@ async function refreshFromPlugin(): Promise<void> {
 
         readSettings(state.settings, editor.settings)
         readUserDefaults(state.userDefaults)
-        readProbeName(state.probeName)
     } catch {
         // The page keeps what it showed
     }
@@ -393,26 +386,30 @@ export function setAsDefault<Name extends SettingKey>(name: Name, value: Setting
     if (connected) sendSettingDefault(name, value)
 }
 
-// Back to the default (the user's own or the factory's): one setting, or all of them
-export function resetSettings(which: SettingKey | 'all'): void {
-    for (const key of which === 'all' ? settingKeys : [which]) (editor.settings as Record<SettingKey, unknown>)[key] = defaultOf(key)
+// Back to the default (the user's own or the factory's) for one setting. For all of them (see ResetKind): to their
+// defaults, to the factory's (the user's own kept), forgetting the user's own (values kept), or everything to the factory's.
+export function resetSettings(which: SettingKey | ResetKind): void {
+    const kind = isResetKind(which) ? which : null
+    const settings = editor.settings as Record<SettingKey, unknown>
+
+    if (kind === 'clearUserDefaults' || kind === 'hard') editor.userDefaults = {}
+
+    if (kind !== 'clearUserDefaults')
+        for (const key of kind === null ? [which as SettingKey] : settingKeys) settings[key] = kind === 'factory' || kind === 'hard' ? factoryDefault(key) : defaultOf(key)
 
     if (!connected) return
 
-    sendResetSettings(which === 'all' ? { all: true } : { name: which })
-    void refreshFromPlugin()
-}
-
-// Names probe (test build): Param 1's name with or without the plugin's name
-export function toggleNamesProbe(): void {
-    if (!connected) return
-
-    sendNamesProbe()
+    sendResetSettings(kind === null ? { name: which } : { all: kind })
     void refreshFromPlugin()
 }
 
 export function resetSize(): void {
     if (connected) sendResetSize()
+}
+
+// The main area's width and height swap (Diagnostics stays out of it); the plugin reads the modifiers for the anchor
+export function swapSize(): void {
+    if (connected) sendSwapSize()
 }
 
 export function openPlugin(slot: number): void {

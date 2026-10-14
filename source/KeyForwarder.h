@@ -34,9 +34,8 @@ public:
     // The chords actually in force (unknown or unsupported entries dropped), for the page
     const juce::StringArray& getAllowedChords() const noexcept { return allowedChords; }
 
-    // Delivers keys to the window that hosts the given editor, as if typed there (Windows only for now). Each delivery
-    // is described to log, if given (a diagnostic).
-    static Post postToHostOf (juce::Component& editor, std::function<void (const juce::String&)> log = {});
+    // Delivers keys to the window that hosts the given editor, as if typed there (Windows only for now)
+    static Post postToHostOf (juce::Component& editor);
     static Modifiers readPhysicalModifiers();
 
     // Types one key with no meaning (Windows: virtual key 0xE8, unassigned), so modifiers held now no longer form a

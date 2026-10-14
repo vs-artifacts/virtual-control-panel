@@ -21,7 +21,7 @@ PluginProcessor::PluginProcessor()
     };
 
     engine.onStructureChanged = [this] {
-        applyNamesProbe();
+        nameParam1();
 
         if (onStructureChanged)
             onStructureChanged();
@@ -179,16 +179,10 @@ void PluginProcessor::bindExposedParameters()
     for (const auto& entry : engine.getExposedParameters())
         hostControls.bind (entry.hostControl, *entry.parameter);
 
-    applyNamesProbe();
+    nameParam1();
 }
 
-void PluginProcessor::toggleNamesProbe()
-{
-    namesProbeShowsPlugin = !namesProbeShowsPlugin;
-    applyNamesProbe();
-}
-
-void PluginProcessor::applyNamesProbe()
+void PluginProcessor::nameParam1()
 {
     const auto& exposed = engine.getExposedParameters();
     const auto first = std::find_if (exposed.begin(), exposed.end(), [] (const ExposedParameter& entry) { return entry.hostControl == 0; });
@@ -200,7 +194,7 @@ void PluginProcessor::applyNamesProbe()
     }
 
     auto* plugin = engine.findPlugin (first->slot);
-    const auto pluginName = namesProbeShowsPlugin && plugin != nullptr ? plugin->getName() + " - " : juce::String();
+    const auto pluginName = plugin != nullptr ? plugin->getName() + " - " : juce::String();
     hostControls.setName (0, engine.getSlotLabel (first->slot) + ": " + pluginName + first->parameter->getName (HostControls::maxNameLength));
 }
 

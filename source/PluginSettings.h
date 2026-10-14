@@ -29,6 +29,15 @@ public:
     // Every setting in SettingsDefaults.h back to its default (the remembered editor size and the forwarded keys stay)
     void resetAll();
 
+    // Every setting to its factory default; the user's own defaults are kept
+    void factoryResetAll();
+
+    // Forgets every user default; each setting keeps the value it has now
+    void clearUserDefaults();
+
+    // Every setting and every user default gone: all at the factory's
+    void hardReset();
+
     // Keep a hidden web view running so the editor reopens instantly, at the cost of memory
     bool getKeepWebViewWarm() const;
     void setKeepWebViewWarm (bool);
@@ -55,6 +64,12 @@ public:
     // While a corner is dragged, keep Shift with Alt or Ctrl from switching Windows' input language
     bool getResizeBlocksLanguageSwitch() const;
     void setResizeBlocksLanguageSwitch (bool);
+
+    // Settings only the page acts on (pixel text): stored and checked like any other, by key
+    static constexpr std::array pageOnlyKeys { "pixelTextAntialiasing", "fontFallback", "pixelTextSnap", "pixelStepAtPercent", "pixelStepAntialiasedPercent" };
+    static bool isPageOnly (const juce::String& key);
+    juce::var getPageOnly (const juce::String& key) const;
+    bool setPageOnly (const juce::String& key, const juce::var& value); // false if it doesn't fit
 
     // The size new instances' editors open at: the last one used
     double getLastEditorScale() const;

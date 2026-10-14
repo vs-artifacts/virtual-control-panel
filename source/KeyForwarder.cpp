@@ -69,16 +69,6 @@ namespace
     constexpr auto ctrlPrefix = "Ctrl+";
 
 #if JUCE_WINDOWS
-    juce::String classNameOf (HWND window)
-    {
-        if (window == nullptr)
-            return "none";
-
-        wchar_t name[128] {};
-        GetClassNameW (window, name, static_cast<int> (std::size (name)));
-        return juce::String (name);
-    }
-
     // Physical buttons, so swapped mouse buttons count too
     bool isMouseButtonDown()
     {
@@ -181,14 +171,14 @@ void KeyForwarder::releaseAll()
     heldKeys.clear();
 }
 
-KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor, std::function<void (const juce::String&)> log)
+KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor)
 {
 #if JUCE_WINDOWS
     // Remembered, so key releases still arrive after the editor's own window has gone
     auto host = std::make_shared<HWND> (nullptr);
     const auto isFlStudio = juce::PluginHostType().isFruityLoops();
 
-    return [&editor, host, isFlStudio, log] (std::uint32_t scanCode, bool down, bool isRepeat) {
+    return [&editor, host, isFlStudio] (std::uint32_t scanCode, bool down, bool isRepeat) {
         if (down)
             if (auto* peer = editor.getPeer())
                 *host = GetParent (static_cast<HWND> (peer->getNativeHandle()));
@@ -211,52 +201,29 @@ KeyForwarder::Post KeyForwarder::postToHostOf (juce::Component& editor, std::fun
         // Then we send the control notification ourselves, up the window chain to the first of FL's windows that takes it.
         // (Also FL-checked: the plain key message sent straight to FL's main window, GA_ROOTOWNER; see docs/decisions.md.)
         const auto ourCapture = GetCapture();
-        const auto mouseHeld = isMouseButtonDown();
-        auto described = juce::String ("posted");
         auto delivered = false;
 
-        if (isFlStudio && (ourCapture != nullptr || mouseHeld))
+        if (isFlStudio && (ourCapture != nullptr || isMouseButtonDown()))
         {
             constexpr UINT vclControlNotificationBase = 0xBC00;
             const auto controlMessage = vclControlNotificationBase + message;
-            juce::StringArray refused;
+            auto tried = 0;
 
-            for (auto window = *host; window != nullptr && window != GetDesktopWindow() && refused.size() < 16; window = nextWindowUp (window))
+            for (auto window = *host; window != nullptr && window != GetDesktopWindow() && tried < 16; window = nextWindowUp (window), ++tried)
             {
                 if (SendMessageW (window, controlMessage, virtualKey, static_cast<LPARAM> (flags)) != 0)
                 {
                     delivered = true;
-                    described = "control message taken by " + classNameOf (window);
                     break;
                 }
-
-                refused.add (classNameOf (window));
             }
-
-            if (!delivered)
-                described = "control message refused by all, posted";
-
-            if (!refused.isEmpty())
-                described += " (refused: " + refused.joinIntoString (", ") + ")";
         }
 
         if (!delivered)
             PostMessageW (*host, message, virtualKey, static_cast<LPARAM> (flags));
-
-        if (log != nullptr)
-        {
-            GUITHREADINFO foreground {};
-            foreground.cbSize = sizeof (foreground);
-            const auto foregroundCapture = GetGUIThreadInfo (0, &foreground) != 0 ? foreground.hwndCapture : nullptr;
-
-            log (nameOf (scanCode) + (down ? (isRepeat ? " repeat" : " down") : " up")
-                 + "; mouse " + (mouseHeld ? "held" : "up")
-                 + "; capture: ours " + classNameOf (ourCapture) + ", foreground " + classNameOf (foregroundCapture)
-                 + "; " + described);
-        }
     };
 #else
-    juce::ignoreUnused (editor, log);
+    juce::ignoreUnused (editor);
     return [] (std::uint32_t, bool, bool) {};
 #endif
 }

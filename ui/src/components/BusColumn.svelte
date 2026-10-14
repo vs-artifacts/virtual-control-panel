@@ -7,6 +7,7 @@
         type BusInfo,
     } from "../lib/editor.svelte";
     import { openPageMenu } from "../lib/menu.svelte";
+    import { hinted } from "../lib/hint.svelte";
     import { slotDrag } from "../lib/slotDrag.svelte";
     import SlotBox from "./SlotBox.svelte";
 
@@ -51,11 +52,11 @@
 
 <div class="bus" class:master data-drop-bus={bus.id}>
     <div class="bus-header">
-        <span class="title">{bus.label}</span>
+        <span class="title h3">{bus.label}</span>
         {#if bus.parent !== 0}
             <span
                 class="sub"
-                title="A sub-bus: it feeds {parentLabel}'s end stage"
+                use:hinted={`A sub-bus: it feeds ${parentLabel}'s end stage.`}
                 >→ {parentLabel.replace(/^BUS /, "")}.X</span
             >
         {/if}
@@ -63,20 +64,20 @@
         {#if !master && bus.parent === 0}
             <button
                 type="button"
-                title="Add a sub-bus to {bus.label}"
+                use:hinted={`Adds a sub-bus to ${bus.label}.`}
                 onclick={() => addBus(bus.id)}>+ sub</button
             >
         {/if}
         {#if !master}
             <button
                 type="button"
-                title="Remove {bus.label}, its slots and its sub-buses"
+                use:hinted={`Removes ${bus.label}, its slots and its sub-buses.`}
                 onclick={() => removeBus(bus.id)}>×</button
             >
         {/if}
     </div>
 
-    <div class="stage">{number}.0</div>
+    <div class="stage p2"><span class="crisp">{number}.0</span></div>
 
     {#each bus.slots as slot, index (slot.id)}
         {#if places[index] >= 0 && lineAt(places[index])}
@@ -91,7 +92,7 @@
     {/if}
 
     <button type="button" class="add" onclick={chooseNewSlot}>+ slot</button>
-    <div class="stage">{number}.X</div>
+    <div class="stage p2"><span class="crisp">{number}.X</span></div>
 </div>
 
 <style>
@@ -108,10 +109,6 @@
         align-items: center;
         gap: 6px;
         height: 24px;
-    }
-
-    .title {
-        font-weight: 500;
     }
 
     .sub {
@@ -151,8 +148,6 @@
         padding: 0 8px;
         border: 1px dashed rgba(255, 255, 255, 0.12);
         border-radius: 4px;
-        font-family: "m5x7", monospace;
-        font-size: 16px;
         opacity: 0.45;
     }
 
@@ -160,6 +155,6 @@
     .drop-line {
         height: 0;
         margin: -4px 0;
-        border-top: 2px solid #8fa2ff;
+        border-top: 2px solid var(--drag);
     }
 </style>

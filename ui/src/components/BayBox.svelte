@@ -7,10 +7,10 @@
 </script>
 
 {#if params.length > 0}
-    <div class="bay">
+    <div class="bay p2">
         <div class="bay-header">
-            <span class="label">BAY 1</span>
-            <span>FL plugin, through relays</span>
+            <span class="label crisp">BAY 1</span>
+            <span class="crisp">FL plugin, through relays</span>
         </div>
         <div class="controls">
             {#each params as param (param.h)}
@@ -25,9 +25,6 @@
         border: 1px solid rgba(255, 255, 255, 0.14);
         border-radius: 4px;
         background: rgba(255, 255, 255, 0.05);
-        font-family: "m5x7", monospace;
-        font-size: 16px;
-        line-height: 1;
     }
 
     .bay-header {

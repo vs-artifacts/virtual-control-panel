@@ -74,6 +74,18 @@ TEST_CASE ("The editor reopens as its instance left it: tab, Diagnostics, scroll
         CHECK (editor->getWidth() == juce::roundToInt (EditorScale::designWidth * EditorScale::minimum));
         CHECK_THAT (processor.getEditorScale().value_or (0.0), WithinAbs (EditorScale::minimum, 1e-9));
 
+        // Swap: the main area's width and height trade places at the same scale, Diagnostics left out
+        pluginEditor.setScale (1.0);
+        processor.setDiagnosticsOpen (true);
+        pluginEditor.setLayout ({ 1.0, 1.0 });
+        pluginEditor.swapSize();
+        CHECK (editor->getWidth() == EditorScale::designHeight + EditorScale::diagnosticsWidth);
+        CHECK (editor->getHeight() == EditorScale::designWidth);
+        pluginEditor.swapSize();
+        CHECK (editor->getWidth() == EditorScale::designWidth + EditorScale::diagnosticsWidth);
+        CHECK (editor->getHeight() == EditorScale::designHeight);
+        processor.setDiagnosticsOpen (false);
+
         processor.editorBeingDeleted (editor.get());
     }
 

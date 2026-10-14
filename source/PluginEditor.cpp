@@ -123,7 +123,7 @@ namespace
 PluginEditor::PluginEditor (PluginProcessor& p)
     : AudioProcessorEditor (&p),
       pluginProcessor (p),
-      keyForwarder (settings->getForwardedKeys(), KeyForwarder::postToHostOf (*this, [this] (const juce::String& line) { logKey (line); }), KeyForwarder::readPhysicalModifiers),
+      keyForwarder (settings->getForwardedKeys(), KeyForwarder::postToHostOf (*this), KeyForwarder::readPhysicalModifiers),
       session (p.createSessionParameters()),
       hostMenus (*this, session)
 {
@@ -193,10 +193,10 @@ WebUi::Handlers PluginEditor::createPageHandlers()
              layout = { 1.0, 1.0 };
              setScale (1.0);
          } },
+        { "swapSize", [this] (const juce::var&) { swapSize(); } },
         { "setting", [this] (const juce::var& message) { handleSetting (message); } },
         { "settingDefault", [this] (const juce::var& message) { handleSettingDefault (message); } },
         { "resetSettings", [this] (const juce::var& message) { handleResetSettings (message); } },
-        { "namesProbe", [this] (const juce::var&) { pluginProcessor.toggleNamesProbe(); } },
         { "tab", [this] (const juce::var& message) { handleTab (message); } },
         { "openPlugin", [this] (const juce::var& message) { handleOpenPlugin (message); } },
         { "mutePlugin", [this] (const juce::var& message) { handleMutePlugin (message); } },
@@ -263,6 +263,8 @@ juce::var PluginEditor::describeEditor() const
     current->setProperty ("resizeRendering", EditorScale::toSettingsValue (settings->getResizeRendering()));
     current->setProperty ("resizeFlipAlt", settings->getFlipAltResize());
     current->setProperty ("resizeBlocksLanguageSwitch", settings->getResizeBlocksLanguageSwitch());
+    for (const auto* key : PluginSettings::pageOnlyKeys)
+        current->setProperty (key, settings->getPageOnly (key));
     current->setProperty ("flOutputCorrection", settings->getFlOutputCorrection());
     current->setProperty ("bayRoundTrip", settings->getRoundTripBlocks());
     current->setProperty ("bayRealBlocks", settings->getRoundTripRealBlocks());
@@ -300,7 +302,6 @@ juce::var PluginEditor::describeEditor() const
     state->setProperty ("collapsed", collapsed);
     state->setProperty ("settings", current);
     state->setProperty ("userDefaults", settings->getUserDefaults());
-    state->setProperty ("probeName", pluginProcessor.getHostControls()[0].getName (HostControls::maxNameLength));
     state->setProperty ("structure", describeStructure (pluginProcessor.getEngine()));
     state->setProperty ("processing", pluginProcessor.isBeingProcessed());
     state->setProperty ("link", describeLink());
@@ -404,6 +405,12 @@ void PluginEditor::handleSetting (const juce::var& message)
 {
     const auto name = message["name"].toString();
     const auto& value = message["value"];
+
+    if (PluginSettings::isPageOnly (name))
+    {
+        settings->setPageOnly (name, value);
+        return;
+    }
 
     for (const auto fade : BayLink::fades)
     {
@@ -554,10 +561,25 @@ void PluginEditor::handleSettingDefault (const juce::var& message)
 
 void PluginEditor::handleResetSettings (const juce::var& message)
 {
-    if (const auto& all = message["all"]; all.isBool() && static_cast<bool> (all))
-        settings->resetAll();
+    if (const auto& all = message["all"]; all.isString())
+    {
+        const auto kind = all.toString();
+
+        if (kind == "defaults")
+            settings->resetAll();
+        else if (kind == "factory")
+            settings->factoryResetAll();
+        else if (kind == "clearUserDefaults")
+            settings->clearUserDefaults();
+        else if (kind == "hard")
+            settings->hardReset();
+        else
+            return;
+    }
     else if (!settings->reset (message["name"].toString()))
+    {
         return;
+    }
 
     applyKeepWebViewWarm();
     pluginProcessor.applyLinkSettings();
@@ -667,29 +689,6 @@ void PluginEditor::reportLink()
 {
     if (webUi != nullptr && webUi->isShowing())
         webUi->emitEventIfBrowserIsVisible ("link", describeLink());
-}
-
-void PluginEditor::logKey (const juce::String& line)
-{
-    keyLog.insert (0, juce::Time::getCurrentTime().formatted ("%H:%M:%S ") + line);
-    keyLog.removeRange (maxKeyLogLines, keyLog.size());
-}
-
-void PluginEditor::reportHostDiagnostics()
-{
-    if (webUi == nullptr || !webUi->isShowing())
-        return;
-
-    auto* message = new juce::DynamicObject();
-    message->setProperty ("keys", keyLog);
-    message->setProperty ("windows", EditorPlacement::describeWindows (*this));
-    const juce::var diagnostics (message);
-
-    if (const auto text = juce::JSON::toString (diagnostics, true); text != sentHostDiagnostics)
-    {
-        sentHostDiagnostics = text;
-        webUi->emitEventIfBrowserIsVisible ("hostDiagnostics", diagnostics);
-    }
 }
 
 void PluginEditor::reportProcessing()
@@ -877,6 +876,27 @@ void PluginEditor::setLayout (juce::Point<double> newLayout)
 {
     layout = { EditorScale::constrainLayout (newLayout.x), EditorScale::constrainLayout (newLayout.y) };
     applySize();
+}
+
+void PluginEditor::swapSize()
+{
+    using namespace EditorScale;
+
+    const auto startWindow = EditorPlacement::getMovableWindowBounds (*this);
+    const auto startSize = juce::Point<int> (getWidth(), getHeight());
+    const auto aroundCenter = wantsCenterAnchor();
+
+    // The main area's width becomes its height and the other way round, at the same scale (Diagnostics stays out of it)
+    setLayout ({ layout.y * designHeight / designWidth, layout.x * designWidth / designHeight });
+
+    if (!aroundCenter || !startWindow.has_value())
+        return;
+
+    const auto& start = *startWindow;
+    const auto physical = getPhysicalPixelsPerPixel();
+    const auto width = start.getWidth() + juce::roundToInt ((getWidth() - startSize.x) * physical);
+    const auto height = start.getHeight() + juce::roundToInt ((getHeight() - startSize.y) * physical);
+    EditorPlacement::moveWindowTo (*this, { start.getCentreX() - width / 2, start.getCentreY() - height / 2 });
 }
 
 double PluginEditor::designAreaWidth (juce::Point<double> layoutArea) const

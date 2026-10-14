@@ -122,13 +122,11 @@ public:
     // Whether the host has run our audio in the last half second; false while it doesn't (e.g. FL's smart disable)
     bool isBeingProcessed() const noexcept;
 
-    // Names probe (test build): Param 1 is named after its parameter, "SLOT 1.1: kHs 3-Band EQ - Low", and Diagnostics
-    // toggles the plugin's name, to see what the host updates
-    void toggleNamesProbe();
-
 private:
     void reportLatency();
-    void applyNamesProbe();
+
+    // "SLOT 1.1: kHs 3-Band EQ - Low" (until 1b.5d's dynamic names), "Param 1" when unbound
+    void nameParam1();
     void bindExposedParameters();
 
     static constexpr auto bayControlsTag = "BayControls";
@@ -146,7 +144,6 @@ private:
     std::optional<double> editorScale;
     std::optional<juce::Point<double>> editorLayout;
     bool diagnosticsOpen = false;
-    bool namesProbeShowsPlugin = true;
     std::array<int, editorScrollAreas.size()> editorScroll {};
     std::array<bool, editorSections.size()> collapsed {};
 

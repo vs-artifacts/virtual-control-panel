@@ -42,6 +42,32 @@
         "type": "flag",
         "default": false
     },
+    "pixelTextAntialiasing": {
+        "type": "flag",
+        "default": false
+    },
+    "fontFallback": {
+        "type": "flag",
+        "default": false
+    },
+    "pixelTextSnap": {
+        "type": "flag",
+        "default": true
+    },
+    "pixelStepAtPercent": {
+        "type": "whole",
+        "default": 50,
+        "min": 1,
+        "max": 100,
+        "unit": "%"
+    },
+    "pixelStepAntialiasedPercent": {
+        "type": "whole",
+        "default": 25,
+        "min": 5,
+        "max": 100,
+        "unit": "%"
+    },
     "doubleClickMs": {
         "type": "whole",
         "default": 500,

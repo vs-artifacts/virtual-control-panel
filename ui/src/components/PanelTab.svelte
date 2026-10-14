@@ -8,12 +8,20 @@
     } from "../lib/editor.svelte";
     import { scrollMemory } from "../lib/layout";
     import { openPageMenu } from "../lib/menu.svelte";
+    import { scheduleSnap } from "../lib/pixelText.svelte";
     import { slotDrag } from "../lib/slotDrag.svelte";
     import BayBox from "./BayBox.svelte";
     import BusColumn from "./BusColumn.svelte";
     import SlotBox from "./SlotBox.svelte";
 
     let { status }: { status: string } = $props();
+
+    // The ghost's text follows the pointer: snap it again as it moves
+    $effect(() => {
+        void [slotDrag.x, slotDrag.y];
+
+        if (slotDrag.active) scheduleSnap();
+    });
 
     const titles: Record<Section, string> = {
         header: "Header",
@@ -59,7 +67,7 @@
         onclick={() => setCollapsed(section, !editor.collapsed[section])}
     >
         <span class="arrow">{editor.collapsed[section] ? "▸" : "▾"}</span>
-        {titles[section]}
+        <span class="h1">{titles[section]}</span>
     </button>
 {/snippet}
 
@@ -68,7 +76,6 @@
         {@render bar("header", 0)}
         {#if !editor.collapsed.header}
             <div class="header">
-                <h1>heartseeker panel</h1>
                 <p id="bridge-status">{status}</p>
                 {#if editor.processing !== null}
                     <p>
@@ -148,7 +155,7 @@
         style:left="{slotDrag.x + 12}px"
         style:top="{slotDrag.y + 12}px"
     >
-        {slotDrag.label}
+        <span class="p2 crisp">{slotDrag.label}</span>
     </div>
 {/if}
 
@@ -189,12 +196,6 @@
         padding: 12px 16px;
     }
 
-    h1 {
-        margin: 0 0 8px;
-        font-size: 20px;
-        font-weight: 500;
-    }
-
     p {
         margin: 0;
     }
@@ -215,9 +216,10 @@
         padding: 12px 16px;
     }
 
+    /* As tall as BUS X too, so the bus row's scrollbar is at the bottom of the whole bus area */
     .buses {
         display: flex;
-        align-items: flex-start;
+        align-items: stretch;
     }
 
     .buses .row {
@@ -260,18 +262,16 @@
         align-self: stretch;
         width: 0;
         margin: 0 -5px;
-        border-left: 2px solid #8fa2ff;
+        border-left: 2px solid var(--drag);
     }
 
     .ghost {
         position: fixed;
         z-index: 10;
         padding: 4px 8px;
-        border: 1px solid #8fa2ff;
+        border: 1px solid var(--drag);
         border-radius: 4px;
         background: rgba(22, 24, 28, 0.9);
-        font-family: "m5x7", monospace;
-        font-size: 16px;
         pointer-events: none;
     }
 </style>

@@ -321,6 +321,45 @@ TEST_CASE ("Settings: the user's own defaults, resetting, and the defaults file"
         CHECK (settings.getRoundTripBlocks() == BayLink::defaultRoundTripBlocks);
         CHECK (juce::exactlyEqual (settings.getLastEditorScale(), 1.5));
     }
+
+    SECTION ("factory reset keeps the user's own defaults; clearing them keeps the values; a hard reset clears both")
+    {
+        settings.setUserDefault ("doubleClickMs", 800);
+        settings.setUserDefault ("bayQuietMs", 1200);
+        settings.setQuietMs (300);
+        CHECK (settings.setPageOnly ("fontFallback", true));
+        CHECK_FALSE (settings.setPageOnly ("pixelStepAtPercent", 0));
+        CHECK_FALSE (settings.setPageOnly ("bayQuietMs", 400));
+
+        for (const auto* key : PluginSettings::pageOnlyKeys)
+        {
+            INFO (key);
+            CHECK_FALSE (settings.getPageOnly (key).isVoid());
+        }
+        settings.setLastEditorScale (1.5);
+
+        settings.factoryResetAll();
+        CHECK (settings.getDoubleClickMs() == PluginSettings::defaultDoubleClickMs);
+        CHECK (settings.getQuietMs() == BayLink::defaultQuietMs);
+        CHECK (settings.getPageOnly ("fontFallback") == juce::var (false));
+        CHECK (settings.getUserDefaults().getDynamicObject()->getProperties().size() == 2);
+
+        // Back to the user's own, then forget them: each value stays as it is
+        settings.resetAll();
+        CHECK (settings.getDoubleClickMs() == 800);
+        settings.setQuietMs (400);
+        settings.clearUserDefaults();
+        CHECK (settings.getUserDefaults().getDynamicObject()->getProperties().isEmpty());
+        CHECK (settings.getDoubleClickMs() == 800);
+        CHECK (settings.getQuietMs() == 400);
+
+        settings.setUserDefault ("bayQuietMs", 1200);
+        settings.hardReset();
+        CHECK (settings.getUserDefaults().getDynamicObject()->getProperties().isEmpty());
+        CHECK (settings.getDoubleClickMs() == PluginSettings::defaultDoubleClickMs);
+        CHECK (settings.getQuietMs() == BayLink::defaultQuietMs);
+        CHECK (juce::exactlyEqual (settings.getLastEditorScale(), 1.5));
+    }
 }
 
 TEST_CASE ("Settings: a hand-edited file's user defaults are checked like its values", "[settings]")

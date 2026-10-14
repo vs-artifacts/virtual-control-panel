@@ -2,7 +2,7 @@ import { fetchParameterMenu, sendMenuChoice, sendMenuClosed } from './bridge'
 import { currentZoom } from './display.svelte'
 
 export type MenuItem =
-    | { kind: 'action'; id: number; text: string; enabled: boolean; checked: boolean }
+    | { kind: 'action'; id: number; text: string; enabled: boolean; checked: boolean; hint?: string }
     | { kind: 'separator' }
     | { kind: 'header'; text: string }
     | { kind: 'submenu'; text: string; enabled: boolean; items: MenuItem[] }
@@ -22,6 +22,7 @@ export interface PageMenuItem {
     text: string
     enabled: boolean
     action: () => void
+    hint?: string
 }
 
 function parseItems(raw: unknown, depth: number): MenuItem[] {
@@ -68,7 +69,7 @@ export function openPageMenu(items: PageMenuItem[], clientX: number, clientY: nu
     ++latestRequest
     pageActions = items.map((item) => item.action)
     show(
-        items.map((item, id) => ({ kind: 'action', id, text: item.text, enabled: item.enabled, checked: false })),
+        items.map((item, id) => ({ kind: 'action', id, text: item.text, enabled: item.enabled, checked: false, hint: item.hint })),
         clientX,
         clientY,
     )
