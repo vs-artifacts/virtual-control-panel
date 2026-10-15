@@ -4,6 +4,30 @@ The user's checks in FL Studio: the latest slice's, and the earlier ones kept fo
 
 **Common setup:** close FL during the build, so the junctions in the system VST3 folder pick up the Debug builds (if FL was open, restart it). Fresh blank project, 48 kHz, ASIO4ALL, buffer 512. Bay tests run inside Patcher (smart disable off): panel, receiver relay, an FL plugin, transmitter relay, the marker wire (the receiver's Marker output, target 1, into the transmitter's Marker input), and for 1-block round trips a wire from the panel into the receiver. Diagnostics open.
 
+## 1b.5b part A round 3 and part B: settings, shortcuts, slot states (built 2026-10-15)
+**First:** close FL during the build; then Settings > Factory reset (confirm), so the new settings start at their defaults. Old projects open as new instances (engine state version 3).
+
+**Part A round 3**
+1. **Pixel text near 100%** (Ctrl+drag a corner to 101 to 110%, both renderings): no label loses its first pixel column ("k" keeps its stroke, "S" its left edge). Text now only ever moves right or down when it's lined up.
+2. **Re-rendering:** switch Settings > Panel, open and close Diagnostics, make tiny size changes: the pixel text is crisp every time, without a hover or scroll to fix it.
+3. **Two instances, both editors open:** change a Slot text setting (or any setting) in one: the other changes at once.
+4. **Grip hint:** hover a corner grip: line 1 shows the scale and size (e.g. "125%   988 x 1588"), updating while you drag; the old text from line 2.
+5. **Hint scrolling** (Settings > General > Hints): hover a long hint (the Resizing heading): it waits (smart delay: about 3 s at the design width), scrolls at 1 line per second, waits at the bottom, jumps back to the top and starts again. Alt+wheel stops it for that hint. Smart delay off: the 3 s / 1 line/s / 3 s fields apply; speed 0: no scrolling.
+6. **Sections:** the title, resets and note stay at the top, with Expand all and Collapse all; below them General, Window, Slot text, Bays, Slot changes, Keyboard Shortcuts, each under a bar (pinned while its section scrolls by) that collapses it; right-click a bar resets the section. Collapse some, close and reopen the editor, switch tabs, save and reload the project: they stay. A new instance follows "Settings open": as set in last instance (the last collapse state from any instance), expanded, or collapsed.
+7. **Ctrl+T:** flips to Settings and back to Panel, also while a number field has focus.
+8. **Shortcut box** (Keyboard Shortcuts): click the box ("Press keys"), press Ctrl+K: it shows "Ctrl+K"; click elsewhere: back to Ctrl+T. Again, then ">": Ctrl+K flips the tabs, Ctrl+T doesn't. Backspace or Delete while listening: "none"; Esc cancels. Press a plain letter FL's typing keyboard uses (e.g. Q): ⚠ appears between ">" and the label (its hint: passed on to the host); the first click on ">" shows the warning in the hint pane in orange without moving anything on the line; a second click (or a double-click) applies; ⚠ stays; Q now flips the tabs and no longer plays a note in FL. On a different keyboard layout (e.g. German), the box shows the layout's letters.
+
+**Part B: slot states** (use kHs Compactor, 489 samples of latency, and kHs Reverb from "+ slot")
+9. **Header:** two rows: label, name, ×; then M, B, OFF (tiny, grey; the selected one orange) and a short MIX slider. Empty slots: all shown but disabled. Generators: the old Mute checkbox is gone.
+10. **MUTE** on an FX slot: the dry sound plays (34 ms crossfade), no timing jump, the host's latency unchanged; the plugin keeps running (a reverb tail continues underneath and is there when you go back ON). On a generator: silence, held notes still there when back ON. M again: back ON.
+11. **BYPASS:** like MUTE, but the plugin stops; back ON, no old reverb tail plays (it was reset). With Compactor: no timing jump either way, the host's latency unchanged.
+12. **OFF:** the output dips (17 ms out, 100 ms in) and the slot leaves the graph: with Compactor, the host's latency drops by 489 samples (Diagnostics' "host told"); back ON, it returns, under the dip again. A generator OFF: silent.
+13. **MIX:** dry/wet, linear; on a generator it's the level. Double-click: 100%. Its hint shows the percentage.
+14. **End signal path when off** (right-click OFF > tick it; a line under OFF shows it's set): with OFF selected, every later slot in that bus is greyed with "Cut off: an earlier slot ends the signal path", silent, and its latency gone (put Compactor after it); their own buttons still work. Sub-buses into the same bus still play. Unticked, or back ON: the later slots return.
+15. **Saved:** states, MIX and the OFF option survive saving and reloading the project.
+16. **The bay** (Diagnostics' Slot buttons): works as before; the events log says "Slot state: on" instead of "active". Settings > Slot changes: "MUTE and BYPASS" fades (34 ms each) now apply to slots and the bay; the bay's own OFF fade stays under Bays.
+17. **Regression:** 1b.5a's steps 2 to 8.
+
 ## 1b.5b part A, second build: pixel text and polish (built 2026-10-13)
 Run after the part A steps below (they still apply, except where this changes them).
 

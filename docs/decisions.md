@@ -73,7 +73,7 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
 - Small slices, each ending in an FL check by the user (checklists in `docs/fl-checks.md`). Testing uses a fresh blank project each time; save and reload only when a test calls for it.
 - Latency matters for live playing: prefer 1 block per bay; several bays in series at large buffers is the worry. Zero-latency segments only if the numbers are bad, and only if they reassemble into one interface.
 - Nothing the user must re-measure and re-enter when slots move or plugins change (e.g. a bay plugin's latency is found automatically).
-- Naming: "bypass" is the explicit switch of what plays. Slot states: Active, Mute, Bypass, Off. Dropouts play silence ("safe", dry dropouts, is a future refinement).
+- Naming: "bypass" is the explicit switch of what plays. Slot states: ON, MUTE, BYPASS, OFF ("Active" renamed ON, 2026-10-15). Dropouts play silence ("safe", dry dropouts, is a future refinement).
 - Safety over continuity: a dropout must never be louder than the bay's sound would have been, so dropouts are silence (faded).
 - Reopening a saved project restores the panel's UI exactly as it was left (tab, sections, scroll positions).
 - Fades: separate fade out and fade in where a cause has both (short out against the click, long in against a pulse). 10 ms still pops on bass-heavy material for crossfades between unrelated audio.
@@ -90,7 +90,7 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
    - **1b.4. External module bays:** our way to use FL's own plugins, which we can't host ("1b.2 wrap-up"). FL forbids feedback loops, so relay nodes on both sides of the FL plugin talk to our plugin directly instead of over Patcher wires ("Module bays and relay nodes"). Placed before plugin swap to validate the idea, or to settle a full move away from FL's plugins. **Done, all FL-checked 2026-10-01 to 2026-10-08:** the audio round trip, control outputs and the automatic round trip, the bay plugin's own latency (the position marker, C1 and C2), slot states and silent dropouts, real blocks. Left: the Diagnostics line "return silent while the sent audio isn't" (kept for the alpha slot interface).
    - **1b.5. Slots and plugin swap** (core, non-negotiable: choosing the plugin in a slot). Split into sub-slices, each with its FL check (agreed 2026-10-08; details in "Slots: decided with the user (2026-10-08)"):
      - **a. Structure and graph:** the generator stage, buses (with sub-buses) and slots with permanent IDs, routed in sequence within each bus, saved with the project; add, remove and move slots (drag). **Built 2026-10-10**; the user's first look in FL was positive. Older projects open as a new instance (no backward compatibility before the first release). See "1b.5a as built".
-     - **b. Slot states** inside each slot's box: Mute, Bypass, Off, and "End signal path when off"; the default slot controls (M, B, X, MIX).
+     - **b. Slot states** inside each slot's box: Mute, Bypass, Off, and "End signal path when off"; the default slot controls (M, B, OFF, MIX). **Parts A and B built 2026-10-15** (with part A's third round); part C (following a plugin's own latency changes) next.
      - **c. Plugin swap** from a flat list of installed plugins, with a rule for the slot's bindings.
      - **d. Exposed controls per slot,** host-control binding ("Bind…") and dynamic names ("SLOT 1.1: parameter").
      - **e. Bays as slots:** relays choose a bay number; per-bay control values; Bay 2 to 4's parameters work.
@@ -102,7 +102,9 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
 
 ## Open items (kept current)
 **Slots (1b.5):**
-- **A hosted plugin changing its own latency** (e.g. linear phase in a slot) isn't followed yet: its box takes the latency when prepared. Needed before latent plugins go into slots.
+- **A hosted plugin changing its own latency** (e.g. linear phase in a slot) isn't followed yet: its box takes the latency when prepared. Needed before latent plugins go into slots (1b.5b part C).
+- **Ending the signal path at a generator** (and a bus fed only by generators that are OFF) kills nothing downstream yet: deferred by the user (latency jumps).
+- **Slot states and MIX aren't host controls yet** (1b.5d: a stepped state control, MIX).
 - **Removing a slot asks nothing first** (× removes it with its plugin's settings). A confirmation or undo: the user's call.
 - **Sub-bus layout and routing:** expect regular revision (layouts to try: buses scrolling right, "leaf" tabs, wrapped rows with strict or top-aligned rows).
 - **Dynamic names (1b.5d):** safe to build ("Names probe"). The probe itself is archived ("Archived diagnostics").
@@ -111,8 +113,10 @@ In effect a pseudo-wrapper for a mini-DAW: a patcher-style routing matrix with t
 - **Choosing and naming bay controls** in the UI.
 
 **Page (1b.5b part A):**
-- **Pixel fonts are still being tuned** (user, 2026-10-14: in parallel with part B): the 75% threshold, stepping and snapping await the user's FL check; Tiny5 (p3) is unchecked in practice. Fallback if thresholding stays fragile: drawing pixel text ourselves. State of play: `docs/current.md`.
-- **Part A's full FL checklist** (`fl-checks.md`, both part A sections) hasn't been run yet.
+- **Pixel fonts are still being tuned** (user, 2026-10-14: in parallel with part B): the 75% threshold at 100% looks perfect (user, 2026-10-15); right-only snapping and the extra re-snaps (round 3) await the FL check; Tiny5 (p3) gets its first users in the slot header. Fallback if thresholding stays fragile: drawing pixel text ourselves. State of play: `docs/current.md`.
+- **Part A's full FL checklist** (`fl-checks.md`, all three part A sections) hasn't been run yet.
+- **Shortcuts on macOS:** no keyboard layout map there (the typed character is used); Cmd isn't a modifier yet.
+- **Esc, Backspace and Delete can't be assigned** as shortcuts (they cancel or clear while listening): fine for now (user).
 
 **Bays (1b.4, 1b.5e):**
 - **The Diagnostics line "return silent while the sent audio isn't"**: kept for the alpha slot interface.
@@ -740,3 +744,30 @@ Removed from Diagnostics and the code in 1b.5b part A; recoverable from the git 
 - **Settings text:** option labels mid-gray (`--mid-gray`, #555555, a global token, also the hint pane's text); no forced line breaks in labels; ranges and other values (the control output gain, the double-click range) in the hints as "(min to max)"; no emphasis on option labels.
 - **Controls:** buttons, number fields, checkboxes and radios share one style (`app.css`, zero specificity so components can override): background #1a1d21 (`--control-background`), mid-gray border, Barlow; checked: an orange tick or dot. Slot buttons keep the slot font (p2) inside the new style.
 - **Diagnostics:** one label column for every group (a CSS subgrid), labels right-aligned; "receiver: …", "transmitter: …"; "(announced N)" on its own line.
+
+### Part A round 3 and part B: decided with the user (2026-10-15)
+From the user's look at the second build: pixel text perfect at 100%; just above 100% some labels lost their first pixel column; re-rendering was inconsistent after switching tabs, toggling Diagnostics and some tiny scale changes. Built in one session with part B (user's choice, to save tokens), as two local commits.
+- **Settings reach every open instance at once** (they're plugin-wide; pages only read them on opening before).
+- **Grip hint:** line 1 the scale and size, the old text from line 2.
+- **Settings sections**, each under a collapsible bar: General, Window, Slot text, Bays, Slot changes, Keyboard Shortcuts. The title, resets, note, and Expand all / Collapse all stay above them. **"Settings open"** (General): as set in last instance (default), expanded, collapsed; only for new instances (reopening an instance or tab keeps its own).
+- **Hint scrolling** (General > Hints): on by default; smart delay (on): 1 s + 1 s per 400 px of window width without Diagnostics, the same at the bottom; without it 3 s, 1 line/s, 3 s; tenths; speed 0 means no scrolling.
+- **Keyboard shortcuts** (a section at the end): `[keys] [>] [⚠] label`. Clicking the box listens; a click elsewhere keeps the old keys; ">" applies; Backspace/Delete: none; Esc cancels (so those three can't be assigned for now). **Keys follow the keyboard layout.** **Warnings (⚠, U+26A0):** keys passed on to the host or used by another shortcut; the first click on ">" forces the warning into the hint pane in the warning colour (nothing on the line moves, so a double-click applies); the ⚠ stays after applying. **A conflict:** the latest applied wins; the overwritten one gets a red ⚠. First shortcut: **Ctrl+T** flips between Settings and the last other tab.
+- **Part B, kill switch:** a bus fed only by a generator that's OFF is not killed (it could make latency jumps; an edge case for later). A box with no inputs at all stays live as today.
+
+### Part A round 3 as built (2026-10-15)
+- **Snapping** (`pixelText.svelte.ts`) moves text only right or down (by under a pixel): moving left pushed the first pixel column partly past a clipping edge (the ellipsis boxes), where the threshold dropped it. It now also runs on class changes and on the page's scaling (zoom or transform on the root elements), and checks again for two frames after each change (and while anything still moves), for layout that settles a frame later.
+- **Settings broadcast:** `PluginSettings` passes on the settings file's change messages (`PropertiesFile` is a `ChangeBroadcaster`, asynchronous); each editor sends its page a `settings` event (`{ settings, userDefaults }`) when what the page shows changed (the remembered size alone isn't sent).
+- **Sections:** `PluginProcessor::editorSections` now lists the Settings sections too (`settings.general` …); `settingsSectionsKnown` (saved) marks whether the instance has had them set; until then `describeEditor` applies "Settings open", with the last collapse state from any instance kept in the settings file (`lastSettingsCollapsed`). The tab's old two-column flow (`columnFlow`) is gone: each section balances its own two columns.
+- **New settings** (page-only): `hintAutoScroll`, `hintSmartDelay`, `hintScrollDelaySeconds`, `hintScrollSpeed`, `hintScrollEndSeconds`, `settingsOpen`, `shortcutFlipSettings`. The defaults file has a new type, **chord**: optional `~` (overwritten), then `Ctrl+`, `Alt+`, `Shift+` in that order, then one printable character (no controls, spaces or invisible formatting) or a key's name (`F5`, `Space`, `Plus`); empty for none; checked the same way in C++ (`PluginSettings::isChord`) and on the page.
+- **Shortcuts** (`ui/src/lib/shortcuts.svelte.ts`): a chord names the key's own unshifted character on the current layout (the browser's keyboard layout map; letters uppercase; layouts without Latin letters fall back to the US position); macOS has no layout map, so the typed character is used there. They're matched before the keys passed to the host, which then don't reach FL (the release neither). Plain-key shortcuts don't fire in text fields. "Passed on to the host" maps the character back to its physical key and checks the forwarded list.
+- **Hint pane:** `forceHint`/`releaseHint` (a warning in the warning colour, whatever the pointer is over); automatic scrolling is an action on the pane (made anew per hint).
+
+### Part B as built (2026-10-15)
+- **`SlotState`** (`source/engine/SlotState.h`): on, mute, bypass, off, shared by slots and the bay (`BayLink::SlotState` is an alias); names "on", "mute", "bypass", "off" ("active" is gone everywhere, the bay's saved state too).
+- **Inside `Engine::SlotBox`** (generators and slots with a plugin; empty slots and b.0/b.X pass their input on): the input goes into a delay line of the plugin's latency (the dry sound); the output is `wet × plugin + (1 − wet) × dry`, with wet = the state's level × MIX (linear; 20 ms MIX ramp). A generator's dry is silence. MUTE and BYPASS ramp the state's level over the shared `muteFadeMs` / `bypassFadeMs` (renamed from `bayMuteFadeMs`/`bayBypassFadeMs`; 34 ms each; in Settings > Slot changes > MUTE and BYPASS); returning ON uses the fade of the state left.
+- **BYPASS** stops calling the plugin once faded out; the message thread then resets it (a 20 Hz check). A handshake (two atomics) makes sure the plugin is never reset while it runs, nor run while it's reset or a reset is still due: until then it plays dry.
+- **OFF** changes the graph under the dip (Slot changes pair): the box is left unconnected (the graph still calls it; it runs nothing and outputs silence), so its latency drops out (JUCE counts latency only along paths to the output). Until the dip reaches silence the box plays on as it was. **End signal path when off** (per slot, right-click OFF): while OFF, every later slot in its bus is left out too ("cut off"); b.X still takes its sub-buses. On a generator it has no further effect for now. A box coming back clears its delay line and starts at its level at once (the dip covers it).
+- **Engine API:** `setSlotState`, `getSlotState`, `hasStates`, `setMix`, `getMix`, `setEndsPathWhenOff`, `endsPathWhenOff`, `isCutOff`, `setStateFades`; the generator Mute (`setMuted`) is gone. Engine saved state **version 3** (per slot: `state`, `mix`, `endsPath`).
+- **Page:** the slot header's two 20 px rows (label, name, × / M, B, OFF in p3 and a short MIX range); `slotState` messages `{ slot, state?, mix?, endsPath? }`, checked in C++; the structure carries `hasStates`, `state`, `mix`, `endsPath`, `cutOff`. Cut-off slots are greyed with a note.
+- **Plugin list:** kHs Compactor (`khsCompactor`, 489 samples of latency) and kHs Reverb (`khsReverb`).
+- **Tests (95 test cases, Debug and Release):** chords, the settings change message, Settings sections for new instances, settings from another instance and shortcuts on the page (warning, confirm, cancel), slot buttons and MIX on the page, a generator's MUTE and BYPASS, latency with BYPASS, OFF and the end of the signal path (Compactor).
