@@ -51,6 +51,11 @@ export function sendSettingDefault(name: string, value: string | boolean | numbe
     window.__JUCE__.backend.emitEvent('settingDefault', { name, value })
 }
 
+// { settings, userDefaults }: after any change to the plugin-wide settings, from any instance
+export function onSettings(listener: (message: unknown) => void): void {
+    window.__JUCE__.backend.addEventListener('settings', listener)
+}
+
 // Every setting at once: to its default (the user's own where set), to the factory's (the user's own kept), forgetting
 // the user's own defaults (the values stay), or everything to the factory's, user defaults included
 export const resetKinds = ['defaults', 'factory', 'clearUserDefaults', 'hard'] as const

@@ -384,3 +384,38 @@ TEST_CASE ("Settings: a hand-edited file's user defaults are checked like its va
     CHECK (defaults.getDynamicObject()->getProperties().size() == 1);
     CHECK (defaults["doubleClickMs"] == juce::var (750));
 }
+
+TEST_CASE ("Settings: keyboard shortcuts are checked chords, and a change reaches every listener", "[settings]")
+{
+    for (const auto* chord : { "", "Ctrl+T", "~Ctrl+T", "Ctrl+Alt+Shift+F12", "Shift+1", "Plus", "Space", "~", "Ctrl+\xc3\xb6" })
+    {
+        INFO (chord);
+        CHECK (PluginSettings::isChord (juce::String::fromUTF8 (chord)));
+    }
+
+    for (const auto* chord : { "Ctrl+", "Alt+Ctrl+T", "Ctrl+ab", "Ctrl+ ", "+", "Ctrl+\xe2\x80\xae", "Ctrl+TooLongForAKeyName", "Ctrl+\x01" })
+    {
+        INFO (chord);
+        CHECK_FALSE (PluginSettings::isChord (juce::String::fromUTF8 (chord)));
+    }
+
+    const juce::TemporaryFile temporary (".settings");
+    PluginSettings settings (temporary.getFile());
+    CHECK (settings.getPageOnly ("shortcutFlipSettings") == juce::var ("Ctrl+T"));
+    CHECK_FALSE (settings.setPageOnly ("shortcutFlipSettings", "Ctrl+"));
+    CHECK_FALSE (settings.setPageOnly ("shortcutFlipSettings", 5));
+
+    struct Counter : juce::ChangeListener
+    {
+        void changeListenerCallback (juce::ChangeBroadcaster*) override { ++changes; }
+        int changes = 0;
+    } counter;
+
+    settings.addChangeListener (&counter);
+    CHECK (settings.setPageOnly ("shortcutFlipSettings", "~Alt+K"));
+    CHECK (settings.setPageOnly ("hintScrollSpeed", 1.5));
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    CHECK (counter.changes >= 1);
+    CHECK (settings.getPageOnly ("shortcutFlipSettings") == juce::var ("~Alt+K"));
+    settings.removeChangeListener (&counter);
+}

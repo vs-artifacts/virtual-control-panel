@@ -88,8 +88,15 @@ foreach(index RANGE ${lastSetting})
             "    inline constexpr std::array<std::string_view, ${choiceCount}> ${key}Choices { ${choices} };\n"
             "    inline constexpr Choice ${key} { \"${key}\", \"${default}\", ${key}Choices };\n"
             "    static_assert (${key}.allows (${key}.value), \"${key}: the default must be one of its choices\");\n")
+    elseif (type STREQUAL "chord")
+        # A keyboard shortcut (see PluginSettings' isChord); a default is a plain key (no quotes for the header) or empty
+        if (NOT default MATCHES "^((Ctrl\\+)?(Alt\\+)?(Shift\\+)?([A-Z][A-Za-z0-9]+|[A-Z0-9,./;'=-]))?$")
+            settings_defaults_fail("${key}" "a chord's default must be like Ctrl+Alt+Shift+K, or empty")
+        endif ()
+
+        string(APPEND SETTINGS_DEFAULTS_ENTRIES "    inline constexpr Chord ${key} { \"${key}\", \"${default}\" };\n")
     else ()
-        settings_defaults_fail("${key}" "type must be flag, whole, decimal or choice")
+        settings_defaults_fail("${key}" "type must be flag, whole, decimal, choice or chord")
     endif ()
 
     string(APPEND SETTINGS_DEFAULTS_ALL "        Setting { ${key} },\n")

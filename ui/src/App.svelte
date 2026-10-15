@@ -20,8 +20,8 @@
     showTab,
     tabNames,
   } from "./lib/editor.svelte";
-  import { followHints, hint, hinted } from "./lib/hint.svelte";
-  import { columnFlow, scrollMemory } from "./lib/layout";
+  import { autoScroll, followHints, hint, hinted } from "./lib/hint.svelte";
+  import { scrollMemory } from "./lib/layout";
   import { listenForChanges, loadCatalog } from "./lib/params.svelte";
   import {
     applyPixelSizes,
@@ -125,8 +125,8 @@
       <div class="tab">
         {#if editor.ready}
           {#if editor.tab === 1}
-            <div class="scroll" use:scrollMemory={"settings"}>
-              <div class="flow" use:columnFlow={true}>
+            <div class="scroll settings" use:scrollMemory={"settings"}>
+              <div>
                 <SettingsTab />
               </div>
             </div>
@@ -136,7 +136,7 @@
         {/if}
       </div>
       {#key hint.text}
-        <div class="hint" id="hint">{hint.text}</div>
+        <div class="hint" class:warning={hint.warning} id="hint" use:autoScroll>{hint.text}</div>
       {/key}
     </div>
 
@@ -237,6 +237,10 @@
     white-space: pre-line;
   }
 
+  .hint.warning {
+    color: var(--warning);
+  }
+
   /* Takes no room; display: none would switch the filter off */
   .filters {
     position: absolute;
@@ -257,6 +261,11 @@
 
   .scroll {
     height: 100%;
+  }
+
+  /* The Settings tab's section bars span the whole width; it pads its own content */
+  .scroll.settings {
+    padding: 0;
   }
 
   .diagnostics {

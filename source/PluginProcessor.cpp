@@ -285,6 +285,36 @@ std::optional<size_t> PluginProcessor::findEditorSection (const juce::String& na
     return std::nullopt;
 }
 
+void PluginProcessor::setSectionCollapsed (size_t section, bool isCollapsed) noexcept
+{
+    collapsed[section] = isCollapsed;
+
+    if (section >= firstSettingsSection)
+        settingsSectionsKnown = true;
+}
+
+void PluginProcessor::applyNewSettingsSections (const juce::String& rule, const juce::StringArray& lastCollapsed)
+{
+    if (settingsSectionsKnown)
+        return;
+
+    for (auto section = firstSettingsSection; section < editorSections.size(); ++section)
+        collapsed[section] = rule == "collapsed" || (rule == "last" && lastCollapsed.contains (editorSections[section]));
+
+    settingsSectionsKnown = true;
+}
+
+juce::StringArray PluginProcessor::getCollapsedSettingsSections() const
+{
+    juce::StringArray names;
+
+    for (auto section = firstSettingsSection; section < editorSections.size(); ++section)
+        if (collapsed[section])
+            names.add (editorSections[section]);
+
+    return names;
+}
+
 //==============================================================================
 bool PluginProcessor::hasEditor() const
 {
@@ -313,6 +343,7 @@ void PluginProcessor::getStateInformation (juce::MemoryBlock& destData)
             collapsedNames.add (editorSections[section]);
 
     state.setAttribute ("collapsed", collapsedNames.joinIntoString (" "));
+    state.setAttribute ("settingsSectionsKnown", settingsSectionsKnown);
 
     if (editorScale.has_value())
         state.setAttribute ("editorScale", *editorScale);
@@ -359,6 +390,8 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
         for (const auto& name : juce::StringArray::fromTokens (state->getStringAttribute ("collapsed"), " ", {}))
             if (const auto section = findEditorSection (name))
                 collapsed[*section] = true;
+
+        settingsSectionsKnown = state->getBoolAttribute ("settingsSectionsKnown");
 
         if (auto* scroll = state->getChildByName (editorScrollTag))
             for (auto* entry : scroll->getChildWithTagNameIterator ("Area"))

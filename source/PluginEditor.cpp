@@ -171,11 +171,14 @@ PluginEditor::PluginEditor (PluginProcessor& p)
 
     p.onStructureChanged = [this] { reportStructure(); };
 
+    sentSettings = juce::JSON::toString (describeSettings(), true);
+    settings->addChangeListener (this);
     processingCheck.startTimerHz (4);
 }
 
 PluginEditor::~PluginEditor()
 {
+    settings->removeChangeListener (this);
     pluginProcessor.onSlotRemoving = nullptr;
     pluginProcessor.onStructureChanged = nullptr;
 }
@@ -234,7 +237,12 @@ WebUi::Handlers PluginEditor::createPageHandlers()
 
              if (name.isString() && collapsed.isBool())
                  if (const auto section = PluginProcessor::findEditorSection (name.toString()))
+                 {
                      pluginProcessor.setSectionCollapsed (*section, static_cast<bool> (collapsed));
+
+                     if (*section >= PluginProcessor::firstSettingsSection)
+                         settings->setLastSettingsCollapsed (pluginProcessor.getCollapsedSettingsSections());
+                 }
          } },
         { "diagnostics", [this] (const juce::var& message) { handleDiagnostics (message); } },
         { "scroll", [this] (const juce::var& message) { handleScroll (message); } },
@@ -254,7 +262,7 @@ WebUi::Handlers PluginEditor::createPageHandlers()
     return handlers;
 }
 
-juce::var PluginEditor::describeEditor() const
+juce::var PluginEditor::describeSettings() const
 {
     auto* current = new juce::DynamicObject();
     current->setProperty ("keepWebViewWarm", settings->getKeepWebViewWarm());
@@ -283,6 +291,28 @@ juce::var PluginEditor::describeEditor() const
     current->setProperty ("doubleClickMs", settings->getDoubleClickMs());
     current->setProperty ("doubleClickSets", settings->getDoubleClickSets());
 
+    auto* both = new juce::DynamicObject();
+    both->setProperty ("settings", current);
+    both->setProperty ("userDefaults", settings->getUserDefaults());
+    return both;
+}
+
+void PluginEditor::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    // The remembered size changes too, often while resizing: only a change the page shows is sent
+    const auto description = describeSettings();
+
+    if (const auto text = juce::JSON::toString (description, true); text != sentSettings && webUi != nullptr)
+    {
+        sentSettings = text;
+        webUi->emitEventIfBrowserIsVisible ("settings", description);
+    }
+}
+
+juce::var PluginEditor::describeEditor() const
+{
+    const auto both = describeSettings();
+    pluginProcessor.applyNewSettingsSections (settings->getPageOnly ("settingsOpen").toString(), settings->getLastSettingsCollapsed());
     auto* scroll = new juce::DynamicObject();
 
     for (size_t area = 0; area < PluginProcessor::editorScrollAreas.size(); ++area)
@@ -300,8 +330,8 @@ juce::var PluginEditor::describeEditor() const
     state->setProperty ("diagnostics", pluginProcessor.isDiagnosticsOpen());
     state->setProperty ("scroll", scroll);
     state->setProperty ("collapsed", collapsed);
-    state->setProperty ("settings", current);
-    state->setProperty ("userDefaults", settings->getUserDefaults());
+    state->setProperty ("settings", both["settings"]);
+    state->setProperty ("userDefaults", both["userDefaults"]);
     state->setProperty ("structure", describeStructure (pluginProcessor.getEngine()));
     state->setProperty ("processing", pluginProcessor.isBeingProcessed());
     state->setProperty ("link", describeLink());

@@ -52,6 +52,24 @@ TEST_CASE ("The editor reopens as its instance left it: tab, Diagnostics, scroll
     CHECK (processor.getEditorScroll (*diagnostics) == 75);
     CHECK (processor.isSectionCollapsed (*generators));
 
+    // A new instance's Settings sections follow "Settings open" once; then the instance keeps its own
+    const auto general = PluginProcessor::findEditorSection ("settings.general");
+    const auto window = PluginProcessor::findEditorSection ("settings.window");
+    REQUIRE (general.has_value());
+    REQUIRE (window.has_value());
+    processor.applyNewSettingsSections ("last", { "settings.window", "generators" });
+    CHECK (processor.isSectionCollapsed (*window));
+    CHECK_FALSE (processor.isSectionCollapsed (*general));
+    processor.applyNewSettingsSections ("collapsed", {});
+    CHECK_FALSE (processor.isSectionCollapsed (*general));
+    CHECK (processor.getCollapsedSettingsSections() == juce::StringArray { "settings.window" });
+
+    // A project saved before its Settings sections were set opens them as a new instance would
+    processor.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
+    processor.applyNewSettingsSections ("collapsed", {});
+    CHECK (processor.getCollapsedSettingsSections().size() == 6);
+    CHECK (processor.isSectionCollapsed (*generators));
+
     {
         // Diagnostics widens the window to the right of the layout area
         std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());

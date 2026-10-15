@@ -2,7 +2,7 @@ import '@juce-framework/webview'
 
 // Keys the host should get (e.g. FL Studio's typing keyboard) go to C++, which decides what actually passes;
 // this list only stops those keys also acting on the page
-function readForwardedKeys(): string[] {
+export function readForwardedKeys(): string[] {
     const data = window.__JUCE__.initialisationData as unknown as Record<string, unknown>
     const keys = data['forwardedKeys']
     return Array.isArray(keys) ? keys.filter((key): key is string => typeof key === 'string') : []

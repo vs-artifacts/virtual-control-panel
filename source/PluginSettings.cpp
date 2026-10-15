@@ -10,6 +10,7 @@ namespace
     constexpr auto lastEditorScaleKey = "lastEditorScale";
     constexpr auto lastEditorLayoutWidthKey = "lastEditorLayoutWidth";
     constexpr auto lastEditorLayoutHeightKey = "lastEditorLayoutHeight";
+    constexpr auto lastSettingsCollapsedKey = "lastSettingsCollapsed";
 
     juce::String nameOf (std::string_view key)
     {
@@ -67,6 +68,15 @@ namespace
         return setting.allows (value.toStdString()) ? std::optional (value) : std::nullopt;
     }
 
+    std::optional<juce::String> stored (const juce::PropertySet& file, const Defaults::Chord&, const juce::String& name)
+    {
+        if (!file.containsKey (name))
+            return std::nullopt;
+
+        const auto value = file.getValue (name);
+        return PluginSettings::isChord (value) ? std::optional (value) : std::nullopt;
+    }
+
     template <typename Entry>
     auto factory (const Entry& setting)
     {
@@ -74,6 +84,11 @@ namespace
     }
 
     juce::String factory (const Defaults::Choice& setting)
+    {
+        return nameOf (setting.value);
+    }
+
+    juce::String factory (const Defaults::Chord& setting)
     {
         return nameOf (setting.value);
     }
@@ -115,6 +130,11 @@ namespace
     std::optional<juce::String> fromVar (const Defaults::Choice& setting, const juce::var& value)
     {
         return value.isString() && setting.allows (value.toString().toStdString()) ? std::optional (value.toString()) : std::nullopt;
+    }
+
+    std::optional<juce::String> fromVar (const Defaults::Chord&, const juce::var& value)
+    {
+        return value.isString() && PluginSettings::isChord (value.toString()) ? std::optional (value.toString()) : std::nullopt;
     }
 
     const Defaults::Setting* find (const juce::String& key)
@@ -296,6 +316,36 @@ bool PluginSettings::isPageOnly (const juce::String& key)
     return std::any_of (pageOnlyKeys.begin(), pageOnlyKeys.end(), [&key] (const char* entry) { return key == entry; });
 }
 
+bool PluginSettings::isChord (const juce::String& text)
+{
+    constexpr int maxLength = 40, maxNameLength = 16;
+
+    if (text.isEmpty())
+        return true;
+
+    if (text.length() > maxLength)
+        return false;
+
+    // "~": a shortcut another one has overwritten (it then gives way)
+    auto rest = text.length() > 1 && text.startsWithChar ('~') ? text.substring (1) : text;
+
+    for (const auto* modifier : { "Ctrl+", "Alt+", "Shift+" })
+        if (rest.startsWith (modifier) && rest.length() > static_cast<int> (std::strlen (modifier)))
+            rest = rest.substring (static_cast<int> (std::strlen (modifier)));
+
+    if (rest.length() == 1)
+    {
+        // One printable character (the key's own on the user's layout); no controls, spaces or invisible formatting
+        const auto c = rest[0];
+        const auto invisible = (c >= 0x7f && c < 0xa0) || (c >= 0x200b && c <= 0x200f) || (c >= 0x202a && c <= 0x202e)
+                               || (c >= 0x2060 && c <= 0x206f) || c == 0xfeff || c >= 0xfff0;
+        return c > 0x20 && c != '+' && !invisible && !juce::CharacterFunctions::isWhitespace (c);
+    }
+
+    // A named key: Space, F5, ArrowUp, Plus, ...
+    return rest.length() <= maxNameLength && rest[0] >= 'A' && rest[0] <= 'Z' && rest.containsOnly ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789");
+}
+
 juce::var PluginSettings::getPageOnly (const juce::String& key) const
 {
     const auto* setting = isPageOnly (key) ? find (key) : nullptr;
@@ -345,6 +395,16 @@ void PluginSettings::setLastEditorLayout (juce::Point<double> layout)
 {
     file.setValue (lastEditorLayoutWidthKey, layout.x);
     file.setValue (lastEditorLayoutHeightKey, layout.y);
+}
+
+juce::StringArray PluginSettings::getLastSettingsCollapsed() const
+{
+    return juce::StringArray::fromTokens (file.getValue (lastSettingsCollapsedKey), " ", {});
+}
+
+void PluginSettings::setLastSettingsCollapsed (const juce::StringArray& sections)
+{
+    file.setValue (lastSettingsCollapsedKey, sections.joinIntoString (" "));
 }
 
 bool PluginSettings::getFlOutputCorrection() const

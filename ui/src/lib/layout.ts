@@ -26,35 +26,6 @@ function watchChanges(node: HTMLElement, area: HTMLElement, changed: () => void)
     }
 }
 
-// Two columns: the left one fills to the area's height, then the right one. Content longer than both columns is
-// split evenly between them, and the area scrolls. Off: one column.
-export function columnFlow(node: HTMLElement, enabled: boolean) {
-    const area = node.parentElement ?? node
-
-    const fit = () => {
-        // Measuring without 'balanced' briefly makes the area shorter, which would pull its scroll position up
-        const top = area.scrollTop
-        node.classList.toggle('columns', enabled)
-        node.classList.remove('balanced')
-
-        // Past two columns' worth, multi-column layout adds columns off to the side
-        if (enabled && node.scrollWidth > node.clientWidth + 1) node.classList.add('balanced')
-
-        area.scrollTop = top
-    }
-
-    fit()
-    const stopWatching = watchChanges(node, area, fit)
-
-    return {
-        update(next: boolean) {
-            enabled = next
-            fit()
-        },
-        destroy: stopWatching,
-    }
-}
-
 // Keeps a scrolling area's position for each view it shows (by area name, see scrollAreas; sideways for the areas in
 // sidewaysScrollAreas), sends it to the plugin once scrolling stops, and puts it back when that view returns: also once
 // late content (e.g. the parameter list) makes the area big enough, unless the user has scrolled since

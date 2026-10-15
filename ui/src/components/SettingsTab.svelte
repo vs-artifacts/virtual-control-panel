@@ -1,4 +1,5 @@
 <script lang="ts">
+    import type { Snippet } from "svelte";
     import {
         sendRecheckBlockSize,
         sendRetryOneBlock,
@@ -11,6 +12,9 @@
         doubleClickRange,
         editor,
         fadeSettings,
+        hintDelayRange,
+        hintEndRange,
+        hintSpeedRange,
         lowestTempoRange,
         pixelStepAntialiasedRange,
         pixelStepAtRange,
@@ -19,14 +23,17 @@
         releaseRange,
         resetSettings,
         resetSize,
+        setAllSettingsCollapsed,
+        setCollapsed,
         settleRange,
         slotChangeFadeSettings,
         swapSize,
         type FadeKey,
         type SettingKey,
         type Settings,
+        type SettingsSection,
     } from "../lib/editor.svelte";
-    import { hinted } from "../lib/hint.svelte";
+    import { hinted, smartHintDelay } from "../lib/hint.svelte";
     import { link } from "../lib/link.svelte";
     import { openPageMenu } from "../lib/menu.svelte";
     import {
@@ -34,6 +41,14 @@
         openSettingMenu,
         typedNumber,
     } from "../lib/settingMenu";
+    import {
+        applyRecording,
+        recording,
+        shortcuts,
+        startRecording,
+        warningFor,
+        withoutMark,
+    } from "../lib/shortcuts.svelte";
 
     // A reset waiting for its confirmation
     let confirming: ResetKind | null = $state(null);
@@ -97,6 +112,14 @@
             "pixelStepAntialiasedPercent",
         ],
         doubleClick: ["doubleClickMs", "doubleClickSets"],
+        hintScrolling: [
+            "hintAutoScroll",
+            "hintSmartDelay",
+            "hintScrollDelaySeconds",
+            "hintScrollSpeed",
+            "hintScrollEndSeconds",
+        ],
+        settingsOpen: ["settingsOpen"],
         roundTrip: ["bayRoundTrip"],
         countedIn: ["bayRealBlocks", "bayLowestTempo"],
         stoppedShrink: ["bayStoppedShrink", "bayQuietLevelDb", "bayQuietMs"],
@@ -105,6 +128,71 @@
         settle: ["bayLatencySettleMs"],
         tailCutRelease: ["bayTailCutReleaseMs"],
     } satisfies Record<string, SettingKey[]>;
+
+    // Each section's settings, for its bar's right-click menu
+    const sectionSettings: Record<SettingsSection, SettingKey[]> = {
+        "settings.general": [
+            ...groups.settingsOpen,
+            "keepWebViewWarm",
+            "flOutputCorrection",
+            ...groups.doubleClick,
+            ...groups.hintScrolling,
+        ],
+        "settings.window": [
+            ...groups.editorPlacement,
+            ...groups.attachedPlacement,
+            ...groups.resizing,
+            "resizeBlocksLanguageSwitch",
+        ],
+        "settings.slotText": groups.slotText,
+        "settings.bays": [
+            ...groups.roundTrip,
+            ...groups.countedIn,
+            ...groups.stoppedShrink,
+            ...groups.bayFades,
+            ...groups.settle,
+            ...groups.tailCutRelease,
+        ],
+        "settings.slotChanges": groups.slotChanges,
+        "settings.shortcuts": shortcuts.map((shortcut) => shortcut.key),
+    };
+
+    const settingsOpenChoices: {
+        value: Settings["settingsOpen"];
+        text: string;
+    }[] = [
+        { value: "last", text: "As set in last instance" },
+        { value: "expanded", text: "Expanded" },
+        { value: "collapsed", text: "Collapsed" },
+    ];
+
+    // Smart delay: the fields show the delay it works out
+    const smartDelay = $derived(
+        editor.settings.hintSmartDelay ? smartHintDelay() : null,
+    );
+
+    // Tenths, kept in range; anything else puts the field back
+    function changeTenths(
+        event: Event & { currentTarget: HTMLInputElement },
+        name:
+            | "hintScrollDelaySeconds"
+            | "hintScrollSpeed"
+            | "hintScrollEndSeconds",
+        limits: { min: number; max: number },
+    ) {
+        const typed = event.currentTarget.valueAsNumber;
+
+        if (Number.isFinite(typed))
+            changeSetting(
+                name,
+                Math.min(
+                    limits.max,
+                    Math.max(limits.min, Math.round(typed * 10) / 10),
+                ),
+            );
+
+        event.currentTarget.value = String(editor.settings[name]);
+    }
 
     const placements: { value: Settings["editorPlacement"]; text: string }[] = [
         { value: "off", text: "Off" },
@@ -258,6 +346,7 @@
     }
 </script>
 
+<div class="top">
 <p class="version">{editor.title}</p>
 
 <div class="line" id="reset-all">
@@ -304,11 +393,96 @@
                 )}>Factory reset</button
         >
     {/if}
+    <span class="buttons expand">
+        <button
+            type="button"
+            id="expand-all-settings"
+            onclick={() => setAllSettingsCollapsed(false)}>Expand all</button
+        >
+        <button
+            type="button"
+            id="collapse-all-settings"
+            onclick={() => setAllSettingsCollapsed(true)}>Collapse all</button
+        >
+    </span>
 </div>
 <p class="note">
     Right-click any setting to make its value your default, or to reset it;
-    right-click a heading to reset its whole group.
+    right-click a heading to reset its whole group or section.
 </p>
+</div>
+
+{@render section("settings.general", "General", "", general)}
+{@render section("settings.window", "Window", "", windowSettings)}
+{@render section(
+    "settings.slotText",
+    "Slot text",
+    "The slot fonts (m5x7, Tiny5) are pixel fonts: each font pixel is kept a whole number of screen pixels, stepping up as the window grows.",
+    slotText,
+)}
+{@render section("settings.bays", "Bays", "", bays)}
+{@render section("settings.slotChanges", "Slot changes", "", slotChanges)}
+{@render section(
+    "settings.shortcuts",
+    "Keyboard Shortcuts",
+    "Click a box and press keys (Backspace or Delete: none; Esc or a click elsewhere: keep the old ones), then > to apply. Keys follow your keyboard layout.",
+    shortcutRows,
+)}
+
+<!-- A bar that collapses its section (pinned at the top while its section scrolls by); right-click resets the section -->
+{#snippet section(
+    name: SettingsSection,
+    title: string,
+    hint: string,
+    body: Snippet,
+)}
+    <section class="section">
+        <button
+            type="button"
+            class="bar"
+            aria-expanded={!editor.collapsed[name]}
+            use:hinted={hint}
+            onclick={() => setCollapsed(name, !editor.collapsed[name])}
+            oncontextmenu={(event) =>
+                openGroupMenu(event, sectionSettings[name])}
+        >
+            <span class="arrow">{editor.collapsed[name] ? "▸" : "▾"}</span>
+            <span class="h1">{title}</span>
+        </button>
+        {#if !editor.collapsed[name]}
+            <div class="columns">
+                {@render body()}
+            </div>
+        {/if}
+    </section>
+{/snippet}
+
+{#snippet general()}
+<fieldset>
+    <legend
+        class="h2"
+        use:hinted={"Only for new instances: reopening an instance, or its Settings tab, keeps how its sections were left."}
+        oncontextmenu={(event) => openGroupMenu(event, groups.settingsOpen)}
+        >Settings open</legend
+    >
+    {#each settingsOpenChoices as option (option.value)}
+        <div
+            class="option"
+            role="group"
+            oncontextmenu={(event) =>
+                openSettingMenu(event, "settingsOpen", option.value)}
+        >
+            <input
+                type="radio"
+                name="settingsOpen"
+                aria-label={option.text}
+                checked={editor.settings.settingsOpen === option.value}
+                onchange={() => changeSetting("settingsOpen", option.value)}
+            />
+            <span>{option.text}</span>
+        </div>
+    {/each}
+</fieldset>
 
 <div
     class="option"
@@ -352,6 +526,11 @@
     <span>Correct FL Studio's gain on our control outputs (FL only)</span>
 </div>
 
+{@render doubleClick()}
+{@render hintScrolling()}
+{/snippet}
+
+{#snippet windowSettings()}
 <div
     class="option"
     role="group"
@@ -379,7 +558,6 @@
     >
 </div>
 
-<div class="group" id="window-settings">
     <fieldset>
         <legend
             class="h2"
@@ -485,12 +663,16 @@
         </div>
     </fieldset>
 
+    {@render sizeLine()}
+{/snippet}
+
+{#snippet slotText()}
     <fieldset id="text-settings">
         <legend
             class="h2"
             use:hinted={"The slot fonts (m5x7, Tiny5) are pixel fonts: each font pixel is kept a whole number of screen pixels, stepping up as the window grows."}
             oncontextmenu={(event) => openGroupMenu(event, groups.slotText)}
-            >Slot text</legend
+            >Pixel fonts</legend
         >
         <div
             class="option"
@@ -620,7 +802,9 @@
             <span>Rendering fallback: Barlow instead of the pixel fonts</span>
         </div>
     </fieldset>
+{/snippet}
 
+{#snippet sizeLine()}
     <div class="size">
         <span
             >Size: {view.width} x {view.height} ({Math.round(
@@ -641,8 +825,9 @@
             >
         </span>
     </div>
-</div>
+{/snippet}
 
+{#snippet doubleClick()}
 <fieldset>
     <legend
         class="h2"
@@ -701,8 +886,147 @@
         >
     </div>
 </fieldset>
+{/snippet}
 
-<div class="group" id="bay-settings">
+{#snippet hintScrolling()}
+<fieldset id="hint-scrolling">
+    <legend
+        class="h2"
+        use:hinted={"A hint too long for the pane waits, scrolls, waits at the bottom, then starts again from the top. Alt+wheel scrolls it by hand, which stops that for the hint."}
+        oncontextmenu={(event) => openGroupMenu(event, groups.hintScrolling)}
+        >Hints</legend
+    >
+    <div
+        class="option"
+        role="group"
+        oncontextmenu={(event) =>
+            openSettingMenu(
+                event,
+                "hintAutoScroll",
+                editor.settings.hintAutoScroll,
+            )}
+    >
+        <input
+            type="checkbox"
+            aria-label="Hints scroll automatically"
+            checked={editor.settings.hintAutoScroll}
+            onchange={(event) =>
+                changeSetting("hintAutoScroll", event.currentTarget.checked)}
+        />
+        <span>Hints scroll automatically</span>
+    </div>
+    <div
+        class="option"
+        role="group"
+        use:hinted={`1 s, plus 1 s per 400 page pixels of the window's width (Diagnostics left out), before scrolling and at the bottom: now ${smartHintDelay()} s.`}
+        oncontextmenu={(event) =>
+            openSettingMenu(
+                event,
+                "hintSmartDelay",
+                editor.settings.hintSmartDelay,
+            )}
+    >
+        <input
+            type="checkbox"
+            aria-label="Smart delay"
+            disabled={!editor.settings.hintAutoScroll}
+            checked={editor.settings.hintSmartDelay}
+            onchange={(event) =>
+                changeSetting("hintSmartDelay", event.currentTarget.checked)}
+        />
+        <span>Smart delay</span>
+    </div>
+    <div
+        class="option"
+        role="group"
+        use:hinted={`Seconds before scrolling starts ${range(hintDelayRange)}.`}
+        oncontextmenu={(event) =>
+            openSettingMenu(
+                event,
+                "hintScrollDelaySeconds",
+                typedNumber(
+                    event.currentTarget.querySelector("input"),
+                    "hintScrollDelaySeconds",
+                ),
+            )}
+    >
+        <input
+            id="hint-delay"
+            class="number"
+            type="number"
+            aria-label="Initial delay in seconds"
+            disabled={!editor.settings.hintAutoScroll || smartDelay !== null}
+            min={hintDelayRange.min}
+            max={hintDelayRange.max}
+            step="0.1"
+            value={smartDelay ?? editor.settings.hintScrollDelaySeconds}
+            onchange={(event) =>
+                changeTenths(event, "hintScrollDelaySeconds", hintDelayRange)}
+        />
+        <span>s initial delay</span>
+    </div>
+    <div
+        class="option"
+        role="group"
+        use:hinted={`Lines per second; 0: no scrolling ${range(hintSpeedRange)}.`}
+        oncontextmenu={(event) =>
+            openSettingMenu(
+                event,
+                "hintScrollSpeed",
+                typedNumber(
+                    event.currentTarget.querySelector("input"),
+                    "hintScrollSpeed",
+                ),
+            )}
+    >
+        <input
+            id="hint-speed"
+            class="number"
+            type="number"
+            aria-label="Scroll speed in lines per second"
+            disabled={!editor.settings.hintAutoScroll}
+            min={hintSpeedRange.min}
+            max={hintSpeedRange.max}
+            step="0.1"
+            value={editor.settings.hintScrollSpeed}
+            onchange={(event) =>
+                changeTenths(event, "hintScrollSpeed", hintSpeedRange)}
+        />
+        <span>lines per second</span>
+    </div>
+    <div
+        class="option"
+        role="group"
+        use:hinted={`Seconds at the bottom before jumping back to the top to loop ${range(hintEndRange)}.`}
+        oncontextmenu={(event) =>
+            openSettingMenu(
+                event,
+                "hintScrollEndSeconds",
+                typedNumber(
+                    event.currentTarget.querySelector("input"),
+                    "hintScrollEndSeconds",
+                ),
+            )}
+    >
+        <input
+            id="hint-end"
+            class="number"
+            type="number"
+            aria-label="Delay at the bottom in seconds"
+            disabled={!editor.settings.hintAutoScroll || smartDelay !== null}
+            min={hintEndRange.min}
+            max={hintEndRange.max}
+            step="0.1"
+            value={smartDelay ?? editor.settings.hintScrollEndSeconds}
+            onchange={(event) =>
+                changeTenths(event, "hintScrollEndSeconds", hintEndRange)}
+        />
+        <span>s at the bottom</span>
+    </div>
+</fieldset>
+{/snippet}
+
+{#snippet bays()}
     <fieldset>
         <legend
             class="h2"
@@ -940,12 +1264,16 @@
         {/each}
     </fieldset>
 
+    {@render bayEnd()}
+{/snippet}
+
+{#snippet slotChanges()}
     <fieldset id="slot-change-fades">
         <legend
             class="h2"
             use:hinted={fadesHint}
             oncontextmenu={(event) => openGroupMenu(event, groups.slotChanges)}
-            >Slot changes</legend
+            >Adding, removing and moving</legend
         >
         {#each slotChangeFadeSettings as fade (fade.key)}
             <div
@@ -977,7 +1305,9 @@
             </div>
         {/each}
     </fieldset>
+{/snippet}
 
+{#snippet bayEnd()}
     <fieldset>
         <legend
             class="h2"
@@ -1052,7 +1382,52 @@
             <span>ms</span>
         </div>
     </fieldset>
-</div>
+{/snippet}
+
+{#snippet shortcutRows()}
+    {#each shortcuts as shortcut (shortcut.key)}
+        {@const listening = recording.key === shortcut.key}
+        {@const stored = editor.settings[shortcut.key]}
+        {@const pending = listening ? recording.pending : null}
+        {@const shown = pending ?? stored}
+        {@const warning = warningFor(shortcut.key, shown, pending !== null)}
+        <div
+            class="shortcut"
+            role="group"
+            oncontextmenu={(event) =>
+                openSettingMenu(event, shortcut.key, stored)}
+        >
+            <button
+                type="button"
+                class="chord"
+                class:listening
+                data-shortcut={shortcut.key}
+                aria-label="{shortcut.label}: keys"
+                onclick={() => startRecording(shortcut.key)}
+                >{listening && pending === null
+                    ? "Press keys"
+                    : withoutMark(shown) === ""
+                      ? "none"
+                      : withoutMark(shown)}</button
+            >
+            <button
+                type="button"
+                class="apply"
+                data-shortcut={shortcut.key}
+                aria-label="Apply"
+                disabled={pending === null}
+                onclick={() => applyRecording(shortcut.key)}>&gt;</button
+            >
+            <span
+                class="warning-sign"
+                class:overwritten={warning?.overwritten}
+                use:hinted={warning?.text ?? ""}
+                >{warning !== null ? "\u26A0\uFE0E" : ""}</span
+            >
+            <span class="label">{shortcut.label}</span>
+        </div>
+    {/each}
+{/snippet}
 
 <style>
     p {
@@ -1138,10 +1513,79 @@
         cursor: help;
     }
 
-    .group {
-        margin: 14px 0;
-        padding: 4px 0 12px;
-        border-top: 1px solid rgba(255, 255, 255, 0.3);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+    .top {
+        padding: 12px 16px 4px;
+    }
+
+    .expand {
+        margin-left: auto;
+    }
+
+    /* Each bar pins at the top while its section scrolls by */
+    .bar {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        box-sizing: border-box;
+        width: 100%;
+        height: 30px;
+        padding: 0 16px;
+        border: none;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 0;
+        background: #16181c;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+    }
+
+    .arrow {
+        width: 12px;
+        opacity: 0.7;
+    }
+
+    /* Two balanced columns per section */
+    .columns {
+        padding: 2px 16px 14px;
+        columns: 2;
+        column-gap: 32px;
+    }
+
+    .columns > :global(*) {
+        break-inside: avoid;
+    }
+
+    /* [keys] [>] [warning] label: the warning keeps its room, so nothing moves when it shows */
+    .shortcut {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 0 1px;
+    }
+
+    .chord {
+        min-width: 7em;
+        text-align: left;
+    }
+
+    .chord.listening {
+        border-color: var(--accent);
+    }
+
+    .warning-sign {
+        width: 1.2em;
+        color: var(--warning);
+        text-align: center;
+    }
+
+    .warning-sign.overwritten {
+        color: var(--error);
+    }
+
+    .label {
+        color: var(--mid-gray);
     }
 </style>

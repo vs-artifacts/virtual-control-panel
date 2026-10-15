@@ -14,7 +14,8 @@
 //==============================================================================
 // The whole editor is our web page; C++ keeps the parts only it can do (window size and position, host menus,
 // hosted plugins' own windows, settings)
-class PluginEditor : public juce::AudioProcessorEditor
+class PluginEditor : public juce::AudioProcessorEditor,
+                     private juce::ChangeListener
 {
 public:
     explicit PluginEditor (PluginProcessor&);
@@ -70,6 +71,7 @@ private:
     double getPhysicalPixelsPerPixel() const;
     WebUi::Handlers createPageHandlers();
     juce::var describeEditor() const;
+    juce::var describeSettings() const;
     juce::var describeLink() const;
     void handleResize (const juce::var&);
     void handleSetting (const juce::var&);
@@ -87,6 +89,9 @@ private:
     void handleBayBypass (const juce::var&);
     void reportProcessing();
     void reportLink();
+
+    // Another instance (or this one) changed the plugin-wide settings: the page shows them at once
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;
 
     PluginProcessor& pluginProcessor;
     juce::SharedResourcePointer<PluginSettings> settings;
@@ -106,6 +111,7 @@ private:
     juce::Point<double> layout { 1.0, 1.0 };
     std::unique_ptr<EditorPlacement> placement;
     std::optional<bool> sentProcessing;
+    juce::String sentSettings;
     juce::TimedCallback processingCheck { [this] {
         reportProcessing();
         reportLink();

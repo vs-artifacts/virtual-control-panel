@@ -113,11 +113,19 @@ public:
     int getEditorScroll (size_t area) const noexcept { return editorScroll[area]; }
     void setEditorScroll (size_t area, int top) noexcept { editorScroll[area] = juce::jlimit (0, maxEditorScroll, top); }
 
-    // The Panel tab's sections that can collapse to their bar; which are collapsed is saved with the instance
-    static constexpr std::array<const char*, 3> editorSections { "header", "generators", "buses" };
+    // The sections that can collapse to their bar (the Panel tab's, then the Settings tab's); which are collapsed is saved
+    // with the instance
+    static constexpr std::array<const char*, 9> editorSections { "header", "generators", "buses", "settings.general", "settings.window",
+        "settings.slotText", "settings.bays", "settings.slotChanges", "settings.shortcuts" };
+    static constexpr size_t firstSettingsSection = 3;
     static std::optional<size_t> findEditorSection (const juce::String& name);
     bool isSectionCollapsed (size_t section) const noexcept { return collapsed[section]; }
-    void setSectionCollapsed (size_t section, bool isCollapsed) noexcept { collapsed[section] = isCollapsed; }
+    void setSectionCollapsed (size_t section, bool isCollapsed) noexcept;
+
+    // A new instance's Settings sections follow the "Settings open" setting (rule: last, expanded or collapsed; last: the
+    // sections collapsed last in any instance); once set, or saved in the project, they stay as the instance left them
+    void applyNewSettingsSections (const juce::String& rule, const juce::StringArray& lastCollapsed);
+    juce::StringArray getCollapsedSettingsSections() const;
 
     // Whether the host has run our audio in the last half second; false while it doesn't (e.g. FL's smart disable)
     bool isBeingProcessed() const noexcept;
@@ -146,6 +154,7 @@ private:
     bool diagnosticsOpen = false;
     std::array<int, editorScrollAreas.size()> editorScroll {};
     std::array<bool, editorSections.size()> collapsed {};
+    bool settingsSectionsKnown = false;
 
     std::atomic<juce::uint32> lastBlockTime { 0 }; // Time::getMillisecondCounter()
 

@@ -33,6 +33,7 @@
   --accent-soft: rgba(255, 96, 0, 0.2);
   --drag: #ff0055;
   --warning: #ffb36b;
+  --error: #ff3b30;
   --mid-gray: #555555;
   --control-background: #1a1d21;
 
@@ -192,21 +193,4 @@ em {
 /* Snapping moves it with translate, which inline boxes ignore */
 :where(span.crisp) {
   display: inline-block;
-}
-
-/* Two columns (see columnFlow): the left one fills to the area's height first; balanced when that isn't enough */
-.flow.columns {
-  height: 100%;
-  columns: 2;
-  column-gap: 32px;
-  column-fill: auto;
-}
-
-.flow.columns.balanced {
-  height: auto;
-  column-fill: balance;
-}
-
-.flow.columns > * {
-  break-inside: avoid;
 }

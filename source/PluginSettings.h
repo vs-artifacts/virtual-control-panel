@@ -16,6 +16,10 @@ public:
     PluginSettings();
     explicit PluginSettings (const juce::File& file);
 
+    // Any change to the file, from any instance (asynchronously, on the message thread)
+    void addChangeListener (juce::ChangeListener* listener) { file.addChangeListener (listener); }
+    void removeChangeListener (juce::ChangeListener* listener) { file.removeChangeListener (listener); }
+
     // By the settings' keys (as in SettingsDefaults.h). False if there's no such setting or the value doesn't fit it;
     // a default equal to the factory's is forgotten.
     bool setUserDefault (const juce::String& key, const juce::var& value);
@@ -65,11 +69,22 @@ public:
     bool getResizeBlocksLanguageSwitch() const;
     void setResizeBlocksLanguageSwitch (bool);
 
-    // Settings only the page acts on (pixel text): stored and checked like any other, by key
-    static constexpr std::array pageOnlyKeys { "pixelTextAntialiasing", "fontFallback", "pixelTextSnap", "pixelStepAtPercent", "pixelStepAntialiasedPercent" };
+    // Settings only the page acts on (pixel text, hint scrolling, how the Settings tab opens, keyboard shortcuts): stored
+    // and checked like any other, by key
+    static constexpr std::array pageOnlyKeys { "pixelTextAntialiasing", "fontFallback", "pixelTextSnap", "pixelStepAtPercent", "pixelStepAntialiasedPercent",
+        "hintAutoScroll", "hintSmartDelay", "hintScrollDelaySeconds", "hintScrollSpeed", "hintScrollEndSeconds", "settingsOpen", "shortcutFlipSettings" };
     static bool isPageOnly (const juce::String& key);
     juce::var getPageOnly (const juce::String& key) const;
     bool setPageOnly (const juce::String& key, const juce::var& value); // false if it doesn't fit
+
+    // A keyboard shortcut as the page writes it: optional "~" (overwritten), then Ctrl+, Alt+, Shift+ in that order, then
+    // one printable character or a key's name ("F5"); empty for none
+    static bool isChord (const juce::String&);
+
+    // Which Settings tab sections were collapsed last, in any instance (for "Settings open: as set in last instance");
+    // names are unchecked here
+    juce::StringArray getLastSettingsCollapsed() const;
+    void setLastSettingsCollapsed (const juce::StringArray&);
 
     // The size new instances' editors open at: the last one used
     double getLastEditorScale() const;

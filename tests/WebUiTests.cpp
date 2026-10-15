@@ -621,3 +621,70 @@ TEST_CASE ("Right-clicking a setting makes its value the default or resets it; t
     CHECK (resets[6]["name"] == "bayQuietLevelDb");
     CHECK (resets[7]["name"] == "bayQuietMs");
 }
+
+TEST_CASE ("Settings from another instance show at once; keyboard shortcuts flip the tab and can be changed, with warnings", "[webui][webview]")
+{
+    if (!WebUi::isSupported())
+        SKIP ("No supported web view on this system");
+
+    juce::Array<juce::var> tabs, changes;
+    WebUi::Handlers handlers;
+    handlers.describeEditor = [] {
+        return juce::JSON::parse (R"({ "title": "test", "tab": 1, "settings": { "doubleClickMs": 500, "shortcutFlipSettings": "Ctrl+T" } })");
+    };
+    handlers.events["tab"] = [&tabs] (const juce::var& message) { tabs.add (message); };
+    handlers.events["setting"] = [&changes] (const juce::var& message) { changes.add (message); };
+
+    // Q goes to the host (FL's typing keyboard)
+    KeyForwarder keys ("KeyQ", [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
+    ControlSession noParameters ({});
+    OffscreenWebUi page (keys, noParameters, std::move (handlers));
+    REQUIRE (page.waitFor ("document.getElementById('double-click-ms')?.value ?? ''", "500") == "500");
+
+    page.webUi.emitEventIfBrowserIsVisible ("settings", juce::JSON::parse (R"({ "settings": { "doubleClickMs": 777 }, "userDefaults": {} })"));
+    CHECK (page.waitFor ("document.getElementById('double-click-ms').value", "777") == "777");
+
+    const auto press = [&page] (const juce::String& key, const juce::String& code, bool ctrl) {
+        page.evaluate ("window.dispatchEvent (new KeyboardEvent ('keydown', { key: '" + key + "', code: '" + code + "', ctrlKey: " + (ctrl ? "true" : "false") + ", bubbles: true, cancelable: true }))");
+    };
+
+    // Ctrl+T: to the tab before Settings, and back
+    press ("t", "KeyT", true);
+    page.pumpUntil ([&tabs] { return !tabs.isEmpty(); });
+    REQUIRE (tabs.size() == 1);
+    CHECK (tabs[0]["index"] == juce::var (0));
+    press ("t", "KeyT", true);
+    page.pumpUntil ([&tabs] { return tabs.size() >= 2; });
+    CHECK (tabs[1]["index"] == juce::var (1));
+
+    // Recording keys the host gets: a warning, and the first click on > only shows it
+    const auto box = "document.querySelector('.shortcut .chord')";
+    const auto apply = juce::String ("document.querySelector('.shortcut .apply')");
+    REQUIRE (page.waitFor (juce::String (box) + "?.textContent.trim() ?? ''", "Ctrl+T") == "Ctrl+T");
+    page.evaluate (juce::String (box) + ".click()");
+    CHECK (page.waitFor (juce::String (box) + ".textContent.trim()", "Press keys") == "Press keys");
+    press ("q", "KeyQ", false);
+    const auto recorded = page.waitFor ("document.querySelector('.shortcut .warning-sign').textContent.length > 0 ? 'warned' : ''", "warned");
+    CHECK (recorded == "warned");
+    CHECK (tabs.size() == 2);
+
+    page.evaluate (apply + ".click()");
+    CHECK (page.waitFor ("document.getElementById('hint').textContent.includes ('passed on to the host') ? 'shown' : ''", "shown") == "shown");
+    CHECK (page.evaluate ("String (document.getElementById('hint').classList.contains ('warning'))") == "true");
+    CHECK (changes.isEmpty());
+
+    page.evaluate (apply + ".click()");
+    page.pumpUntil ([&changes] { return !changes.isEmpty(); });
+    REQUIRE (changes.size() == 1);
+    CHECK (changes[0]["name"] == "shortcutFlipSettings");
+    CHECK (changes[0]["value"].toString().isNotEmpty());
+    CHECK (page.evaluate ("String (document.querySelector('.shortcut .warning-sign').textContent.length > 0)") == "true");
+
+    // A click elsewhere puts the keys back
+    page.evaluate (juce::String (box) + ".click()");
+    press ("k", "KeyK", true);
+    CHECK (page.waitFor (juce::String (box) + ".textContent.trim()", "Ctrl+K") == "Ctrl+K");
+    page.evaluate ("document.querySelector('.top').dispatchEvent (new PointerEvent ('pointerdown', { bubbles: true }))");
+    CHECK (page.waitFor (juce::String (box) + ".textContent.trim()", changes[0]["value"].toString()) == changes[0]["value"].toString());
+    CHECK (changes.size() == 1);
+}

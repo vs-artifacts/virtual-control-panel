@@ -42,7 +42,14 @@ namespace SettingsDefaults
         constexpr bool allows (std::string_view candidate) const { return std::ranges::find (choices, candidate) != choices.end(); }
     };
 
-    using Setting = std::variant<Flag, Whole, Decimal, Choice>;
+    // A keyboard shortcut: modifiers and a key, as the page names them ("Ctrl+T"); empty for none
+    struct Chord
+    {
+        std::string_view key;
+        std::string_view value;
+    };
+
+    using Setting = std::variant<Flag, Whole, Decimal, Choice, Chord>;
 
     // clang-format off
 @SETTINGS_DEFAULTS_ENTRIES@

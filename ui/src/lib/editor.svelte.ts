@@ -1,9 +1,11 @@
 import factoryDefaults from '../../../source/SettingsDefaults.json'
-import { fetchEditorState, isResetKind, onProcessing, sendAddBus, sendAddSlot, sendCollapse, sendDiagnostics, sendGeneratorBus, sendMoveSlot, sendMutePlugin, sendOpenPlugin, sendRemoveBus, sendRemoveSlot, sendResetSettings, sendResetSize, sendScroll, sendSetting, sendSettingDefault, sendSwapSize, sendTab, type ResetKind } from './bridge'
+import { fetchEditorState, isResetKind, onProcessing, onSettings, sendAddBus, sendAddSlot, sendCollapse, sendDiagnostics, sendGeneratorBus, sendMoveSlot, sendMutePlugin, sendOpenPlugin, sendRemoveBus, sendRemoveSlot, sendResetSettings, sendResetSize, sendScroll, sendSetting, sendSettingDefault, sendSwapSize, sendTab, type ResetKind } from './bridge'
 import { link, listenForLink, readLink } from './link.svelte'
 import { asRecord } from './read'
 
 export const tabNames = ['Panel', 'Settings'] as const
+const settingsTab = tabNames.indexOf('Settings')
+let lastOtherTab = 0
 
 // The key the plugin reads for "around the window's centre" (corner grips, Swap): see PluginEditor::wantsCenterAnchor
 export const centreModifier = 'Alt'
@@ -14,8 +16,12 @@ export const scrollAreas = ['panel', 'panel.generators', 'panel.buses', 'setting
 export const sidewaysScrollAreas: readonly string[] = ['panel.generators', 'panel.buses']
 const maxScroll = 1000000
 
-// The Panel tab's sections, each collapsible to its bar
-export const sections = ['header', 'generators', 'buses'] as const
+// The sections that collapse to their bar: the Panel tab's, then the Settings tab's
+export const panelSections = ['header', 'generators', 'buses'] as const
+export type PanelSection = (typeof panelSections)[number]
+export const settingsSections = ['settings.general', 'settings.window', 'settings.slotText', 'settings.bays', 'settings.slotChanges', 'settings.shortcuts'] as const
+export type SettingsSection = (typeof settingsSections)[number]
+const sections = [...panelSections, ...settingsSections] as const
 export type Section = (typeof sections)[number]
 
 export const renderings = ['smooth', 'sharp'] as const
@@ -62,6 +68,17 @@ export interface Settings {
     doubleClickMs: number
     // Placeholder: double-click will open a value entry instead of resetting
     doubleClickSets: boolean
+    // Long hints scroll by themselves: after a delay (smart: by the window's width), at lines per second, then wait at
+    // the bottom and start again
+    hintAutoScroll: boolean
+    hintSmartDelay: boolean
+    hintScrollDelaySeconds: number
+    hintScrollSpeed: number
+    hintScrollEndSeconds: number
+    // How a new instance's Settings sections open
+    settingsOpen: 'last' | 'expanded' | 'collapsed'
+    // Keyboard shortcuts (see shortcuts.svelte.ts)
+    shortcutFlipSettings: string
 }
 
 // Every setting's factory default and limits, from the file the plugin is built from (source/SettingsDefaults.json)
@@ -69,6 +86,7 @@ type Definition =
     | { type: 'flag'; default: boolean }
     | { type: 'whole' | 'decimal'; default: number; min: number; max: number; unit: string }
     | { type: 'choice'; default: string; choices: string[] }
+    | { type: 'chord'; default: string }
 
 export type SettingKey = keyof typeof factoryDefaults
 export const settingKeys = Object.keys(factoryDefaults) as SettingKey[]
@@ -130,6 +148,32 @@ export const lowestTempoRange = rangeOf('bayLowestTempo')
 export const pixelStepAtRange = rangeOf('pixelStepAtPercent')
 export const pixelStepAntialiasedRange = rangeOf('pixelStepAntialiasedPercent')
 
+// Hint scrolling: seconds, and lines per second (tenths)
+export const hintDelayRange = rangeOf('hintScrollDelaySeconds')
+export const hintSpeedRange = rangeOf('hintScrollSpeed')
+export const hintEndRange = rangeOf('hintScrollEndSeconds')
+
+// A keyboard shortcut as stored (as PluginSettings::isChord): optional "~" (overwritten by another), then Ctrl+, Alt+,
+// Shift+ in that order, then one printable character or a key's name ("F5"); empty for none
+export function isChord(text: string): boolean {
+    if (text === '') return true
+    if (Array.from(text).length > 40) return false
+
+    let rest = text.length > 1 && text.startsWith('~') ? text.slice(1) : text
+
+    for (const modifier of ['Ctrl+', 'Alt+', 'Shift+']) if (rest.startsWith(modifier) && rest.length > modifier.length) rest = rest.slice(modifier.length)
+
+    const characters = Array.from(rest)
+
+    if (characters.length === 1) {
+        const c = characters[0].codePointAt(0) ?? 0
+        const invisible = (c >= 0x7f && c < 0xa0) || (c >= 0x200b && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2060 && c <= 0x206f) || c === 0xfeff || c >= 0xfff0
+        return c > 0x20 && c !== 0x2b && !invisible && !/\s/u.test(characters[0])
+    }
+
+    return /^[A-Z][A-Za-z0-9]{0,15}$/.test(rest)
+}
+
 // Whether a value from the plugin (or the page) fits a setting
 export function fits(key: SettingKey, value: unknown): boolean {
     const definition = definitions[key]
@@ -143,6 +187,8 @@ export function fits(key: SettingKey, value: unknown): boolean {
             return typeof value === 'number' && Number.isFinite(value) && value >= definition.min && value <= definition.max
         case 'choice':
             return typeof value === 'string' && definition.choices.includes(value)
+        case 'chord':
+            return typeof value === 'string' && isChord(value)
     }
 }
 
@@ -323,6 +369,15 @@ export async function loadEditorState(): Promise<void> {
 
     listenForLink()
 
+    onSettings((message) => {
+        const fields = asRecord(message)
+
+        if (fields === null) return
+
+        readSettings(fields.settings, editor.settings)
+        readUserDefaults(fields.userDefaults)
+    })
+
     try {
         const state = asRecord(await fetchEditorState())
 
@@ -332,6 +387,7 @@ export async function loadEditorState(): Promise<void> {
 
         if (typeof state.title === 'string') editor.title = state.title
         if (typeof state.tab === 'number' && Number.isInteger(state.tab) && state.tab >= 0 && state.tab < tabNames.length) editor.tab = state.tab
+        if (editor.tab !== settingsTab) lastOtherTab = editor.tab
         if (typeof state.diagnostics === 'boolean') editor.diagnostics = state.diagnostics
         if (typeof state.processing === 'boolean') editor.processing = state.processing
 
@@ -363,9 +419,16 @@ async function refreshFromPlugin(): Promise<void> {
 }
 
 export function showTab(index: number): void {
+    if (index !== settingsTab) lastOtherTab = index
+
     editor.tab = index
 
     if (connected) sendTab(index)
+}
+
+// To Settings, or back to the tab shown before it
+export function flipSettingsTab(): void {
+    showTab(editor.tab === settingsTab ? lastOtherTab : settingsTab)
 }
 
 export function changeSetting<Name extends keyof Settings>(name: Name, value: Settings[Name]): void {
@@ -478,6 +541,10 @@ export function setCollapsed(section: Section, collapsed: boolean): void {
     editor.collapsed[section] = collapsed
 
     if (connected) sendCollapse(section, collapsed)
+}
+
+export function setAllSettingsCollapsed(collapsed: boolean): void {
+    for (const section of settingsSections) if (editor.collapsed[section] !== collapsed) setCollapsed(section, collapsed)
 }
 
 export function showDiagnostics(open: boolean): void {

@@ -7,6 +7,7 @@ const choiceNames: Partial<Record<SettingKey, Record<string, string>>> = {
     attachedPlacement: { off: 'Off', workspace: "FL's workspace", hostMonitor: 'the monitor where FL is open' },
     resizeRendering: { smooth: 'Smooth', sharp: 'Sharp' },
     bayStoppedShrink: { never: 'Never', whenQuiet: 'Only when quiet', always: 'Always' },
+    settingsOpen: { last: 'as set in last instance', expanded: 'expanded', collapsed: 'collapsed' },
 }
 
 function describe(key: SettingKey, value: unknown): string {
@@ -24,6 +25,8 @@ function describe(key: SettingKey, value: unknown): string {
             return `${value} ${definition.unit}`
         case 'choice':
             return choiceNames[key]?.[String(value)] ?? String(value)
+        case 'chord':
+            return value === '' ? 'none' : String(value).replace(/^~(?=.)/, '')
     }
 }
 

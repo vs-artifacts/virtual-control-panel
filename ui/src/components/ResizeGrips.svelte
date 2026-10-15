@@ -2,11 +2,14 @@
     import { sendResize, type Corner } from "../lib/bridge";
     import { centreModifier, editor } from "../lib/editor.svelte";
     import { hinted } from "../lib/hint.svelte";
+    import { view } from "../lib/display.svelte";
 
+    // The window's scale and size first, live while dragging
     const gripHint = $derived(
-        editor.settings.resizeFlipAlt
-            ? `Drag: resizes around the window's center. ${centreModifier}+drag: keeps the opposite corner in place. Ctrl: 25% steps. Shift: width and height apart.`
-            : `Drag: keeps the opposite corner in place. ${centreModifier}+drag: resizes around the window's center. Ctrl: 25% steps. Shift: width and height apart.`,
+        `${Math.round(view.uiScale * 100)}%   ${view.width} x ${view.height}\n` +
+            (editor.settings.resizeFlipAlt
+                ? `Drag: resizes around the window's center. ${centreModifier}+drag: keeps the opposite corner in place. Ctrl: 25% steps. Shift: width and height apart.`
+                : `Drag: keeps the opposite corner in place. ${centreModifier}+drag: resizes around the window's center. Ctrl: 25% steps. Shift: width and height apart.`),
     );
 
     // The web view covers the whole editor, so the page provides its corner handles

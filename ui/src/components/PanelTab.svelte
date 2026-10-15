@@ -4,7 +4,7 @@
         addSlot,
         editor,
         setCollapsed,
-        type Section,
+        type PanelSection,
     } from "../lib/editor.svelte";
     import { scrollMemory } from "../lib/layout";
     import { openPageMenu } from "../lib/menu.svelte";
@@ -23,7 +23,7 @@
         if (slotDrag.active) scheduleSnap();
     });
 
-    const titles: Record<Section, string> = {
+    const titles: Record<PanelSection, string> = {
         header: "Header",
         generators: "Generator stage",
         buses: "Buses",
@@ -58,7 +58,7 @@
     }
 </script>
 
-{#snippet bar(section: Section, index: number)}
+{#snippet bar(section: PanelSection, index: number)}
     <button
         type="button"
         class="bar"

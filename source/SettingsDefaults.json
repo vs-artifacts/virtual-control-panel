@@ -79,6 +79,48 @@
         "type": "flag",
         "default": false
     },
+    "hintAutoScroll": {
+        "type": "flag",
+        "default": true
+    },
+    "hintSmartDelay": {
+        "type": "flag",
+        "default": true
+    },
+    "hintScrollDelaySeconds": {
+        "type": "decimal",
+        "default": 3,
+        "min": 0,
+        "max": 10,
+        "unit": "s"
+    },
+    "hintScrollSpeed": {
+        "type": "decimal",
+        "default": 1,
+        "min": 0,
+        "max": 2,
+        "unit": "lines/s"
+    },
+    "hintScrollEndSeconds": {
+        "type": "decimal",
+        "default": 3,
+        "min": 0,
+        "max": 10,
+        "unit": "s"
+    },
+    "settingsOpen": {
+        "type": "choice",
+        "default": "last",
+        "choices": [
+            "last",
+            "expanded",
+            "collapsed"
+        ]
+    },
+    "shortcutFlipSettings": {
+        "type": "chord",
+        "default": "Ctrl+T"
+    },
     "bayRoundTrip": {
         "type": "whole",
         "default": 0,
