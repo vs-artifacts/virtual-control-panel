@@ -162,6 +162,7 @@ void PluginProcessor::applyLinkSettings()
 void PluginProcessor::applyEngineSettings()
 {
     engine.setChangeFades (settings->getSlotChangeFadeOutMs(), settings->getSlotChangeFadeInMs());
+    engine.setStateFades (settings->getFadeMs (BayLink::Fade::mute), settings->getFadeMs (BayLink::Fade::bypass));
 }
 
 void PluginProcessor::bindExposedParameters()
@@ -398,7 +399,7 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
                 if (const auto area = findEditorScrollArea (entry->getStringAttribute ("name")))
                     setEditorScroll (*area, entry->getIntAttribute ("top"));
 
-        bayLink.setSlotState (BayLink::slotStateFromName (state->getStringAttribute ("baySlotState")).value_or (BayLink::SlotState::active));
+        bayLink.setSlotState (BayLink::slotStateFromName (state->getStringAttribute ("baySlotState")).value_or (BayLink::SlotState::on));
 
         if (state->hasAttribute ("editorScale"))
             editorScale = EditorScale::constrain (state->getDoubleAttribute ("editorScale"));

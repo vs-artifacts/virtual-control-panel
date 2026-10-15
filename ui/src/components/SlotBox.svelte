@@ -2,13 +2,16 @@
     import {
         editor,
         fillSlot,
-        mutePlugin,
         openPlugin,
         removeSlot,
+        setEndsPath,
         setGeneratorBus,
+        setSlotMix,
+        setSlotState,
         type GeneratorInfo,
         type SlotInfo,
     } from "../lib/editor.svelte";
+    import type { SlotStateName } from "../lib/bridge";
     import { openPageMenu } from "../lib/menu.svelte";
     import { hinted } from "../lib/hint.svelte";
     import { controls } from "../lib/params.svelte";
@@ -44,11 +47,67 @@
             event.clientY,
         );
     }
+
+    // The state buttons: the selected one again goes back to ON
+    const isGenerator = $derived(kind === "generator");
+    const states = $derived<
+        { state: SlotStateName; text: string; hint: string }[]
+    >([
+        {
+            state: "mute",
+            text: "M",
+            hint: isGenerator
+                ? "MUTE: silent; the plugin keeps running. Again: back to ON."
+                : "MUTE: the dry sound plays; the plugin keeps running. Again: back to ON.",
+        },
+        {
+            state: "bypass",
+            text: "B",
+            hint: isGenerator
+                ? "BYPASS: silent; the plugin stops and is reset (no old tail when it comes back). Again: back to ON."
+                : "BYPASS: the dry sound plays, delayed by the plugin's latency; the plugin stops and is reset (no old tail when it comes back). Again: back to ON.",
+        },
+        {
+            state: "off",
+            text: "OFF",
+            hint: `OFF: out of the processing graph, so its latency no longer counts (the output dips while it changes). Again: back to ON.\nRight-click: end signal path when off (${slot.endsPath ? "on" : "off"}).`,
+        },
+    ]);
+
+    function chooseState(state: SlotStateName) {
+        setSlotState(slot.id, slot.state === state ? "on" : state);
+    }
+
+    function offMenu(event: MouseEvent) {
+        event.preventDefault();
+
+        if (!slot.hasStates) return;
+
+        openPageMenu(
+            [
+                {
+                    text: `${slot.endsPath ? "✓ " : ""}End signal path when off`,
+                    enabled: true,
+                    hint: isGenerator
+                        ? "For a generator this has no further effect yet."
+                        : "While OFF, every later slot in this bus is cut off too: not run, not connected (no CPU, no latency).",
+                    action: () => setEndsPath(slot.id, !slot.endsPath),
+                },
+            ],
+            event.clientX,
+            event.clientY,
+        );
+    }
+
+    const mixHint = $derived(
+        `MIX ${Math.round(slot.mix * 100)}%: ${isGenerator ? "the generator's level" : "dry/wet, linear"}. Double-click: 100%.`,
+    );
 </script>
 
 <div
     class="slot p2"
     class:dragging={slotDrag.active && slotDrag.slot === slot.id}
+    class:cut-off={slot.cutOff}
 >
     <div
         class="slot-header"
@@ -59,17 +118,56 @@
         onpointerdown={(event) =>
             beginSlotDrag(event, slot.id, kind, `${slot.label} ${slot.name}`)}
     >
-        <span class="label crisp">{slot.label}</span>
-        <span class="name crisp">{slot.name}</span>
-        <button
-            type="button"
-            class="remove crisp"
-            use:hinted={"Removes this slot, with its plugin's settings."}
-            onclick={() => removeSlot(slot.id)}>×</button
-        >
+        <div class="header-row">
+            <span class="label crisp">{slot.label}</span>
+            <span class="name crisp">{slot.name}</span>
+            <button
+                type="button"
+                class="remove crisp"
+                use:hinted={"Removes this slot, with its plugin's settings."}
+                onclick={() => removeSlot(slot.id)}>×</button
+            >
+        </div>
+        <div class="header-row controls p3">
+            {#each states as choice (choice.state)}
+                <button
+                    type="button"
+                    class="state"
+                    class:selected={slot.state === choice.state}
+                    class:ends={choice.state === "off" && slot.endsPath}
+                    data-state={choice.state}
+                    disabled={!slot.hasStates}
+                    aria-pressed={slot.state === choice.state}
+                    use:hinted={choice.hint}
+                    onclick={() => chooseState(choice.state)}
+                    oncontextmenu={choice.state === "off" ? offMenu : undefined}
+                    ><span class="crisp">{choice.text}</span></button
+                >
+            {/each}
+            <label class="mix" use:hinted={mixHint}>
+                <span class="crisp">MIX</span>
+                <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    aria-label="Mix"
+                    disabled={!slot.hasStates}
+                    value={slot.mix}
+                    oninput={(event) =>
+                        setSlotMix(slot.id, event.currentTarget.valueAsNumber)}
+                    ondblclick={() => setSlotMix(slot.id, 1)}
+                />
+            </label>
+        </div>
     </div>
 
     <div class="slot-body">
+        {#if slot.cutOff}
+            <div class="note crisp">
+                Cut off: an earlier slot ends the signal path
+            </div>
+        {/if}
         {#if slot.plugin === ""}
             <button type="button" onclick={choosePlugin}
                 ><span class="crisp">Choose plugin…</span></button
@@ -86,22 +184,6 @@
                     onclick={() => openPlugin(slot.id)}
                     ><span class="crisp">Open</span></button
                 >
-                {#if slot.canMute}
-                    <label
-                        use:hinted={"Silences this generator's output (30 ms fade); it keeps running, so the load stays the same."}
-                    >
-                        <input
-                            type="checkbox"
-                            checked={slot.muted}
-                            onchange={(event) =>
-                                mutePlugin(
-                                    slot.id,
-                                    event.currentTarget.checked,
-                                )}
-                        />
-                        <span class="crisp">Mute</span>
-                    </label>
-                {/if}
             </div>
             {#if fedBuses !== null}
                 <div
@@ -144,10 +226,16 @@
         opacity: 0.35;
     }
 
+    /* Greyed; its own buttons still work */
+    .slot.cut-off .slot-body,
+    .slot.cut-off .header-row:first-child {
+        opacity: 0.4;
+    }
+
+    /* Two 20 px rows: label, name and x; the state buttons and MIX */
     .slot-header {
         display: flex;
-        align-items: center;
-        gap: 6px;
+        flex-direction: column;
         height: 40px;
         box-sizing: border-box;
         padding: 0 4px 0 8px;
@@ -155,6 +243,62 @@
         cursor: grab;
         user-select: none;
         touch-action: none;
+    }
+
+    .header-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        height: 20px;
+    }
+
+    .controls {
+        gap: 2px;
+    }
+
+    /* Text only; the selected state in the accent */
+    .state {
+        padding: 0 3px;
+        border: none;
+        border-radius: 0;
+        background: none;
+        color: var(--mid-gray);
+        cursor: default;
+    }
+
+    .state:not(:disabled):hover {
+        color: #fff;
+    }
+
+    .state.selected {
+        color: var(--accent);
+    }
+
+    /* "End signal path when off" is on: a line under OFF */
+    .state.ends {
+        cursor: help;
+        box-shadow: inset 0 -1px 0 currentColor;
+    }
+
+    .mix {
+        display: flex;
+        flex: 1;
+        align-items: center;
+        gap: 4px;
+        min-width: 0;
+        margin-left: 4px;
+        color: var(--mid-gray);
+    }
+
+    .mix input {
+        flex: 1;
+        min-width: 0;
+        height: 12px;
+        margin: 0;
+    }
+
+    .note {
+        opacity: 0.8;
     }
 
     .label {
@@ -187,16 +331,6 @@
         flex-wrap: wrap;
         align-items: center;
         gap: 6px;
-    }
-
-    label {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-    }
-
-    input[type="checkbox"] {
-        margin: 0;
     }
 
     button {

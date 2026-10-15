@@ -183,14 +183,14 @@
         "max": 500,
         "unit": "ms"
     },
-    "bayMuteFadeMs": {
+    "muteFadeMs": {
         "type": "whole",
         "default": 34,
         "min": 0,
         "max": 500,
         "unit": "ms"
     },
-    "bayBypassFadeMs": {
+    "bypassFadeMs": {
         "type": "whole",
         "default": 34,
         "min": 0,

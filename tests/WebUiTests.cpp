@@ -17,9 +17,9 @@ namespace
     // An editor state with one generator (ID 3) feeding BUS 1 (ID 2), which holds one slot (ID 5)
     constexpr auto oneSlotState = R"({ "title": "test", "tab": 0, "settings": {},
         "structure": {
-            "generators": [ { "id": 3, "label": "GEN 1", "plugin": "synth", "name": "Synth", "status": "", "canOpen": true, "canMute": true, "muted": false, "buses": [ 2 ] } ],
+            "generators": [ { "id": 3, "label": "GEN 1", "plugin": "synth", "name": "Synth", "status": "", "canOpen": true, "hasStates": true, "state": "on", "mix": 1, "buses": [ 2 ] } ],
             "buses": [ { "id": 2, "label": "BUS 1", "parent": 0, "slots": [
-                { "id": 5, "label": "1.1", "plugin": "eq", "name": "Test plugin", "status": "", "canOpen": true, "canMute": false, "muted": false } ] } ],
+                { "id": 5, "label": "1.1", "plugin": "eq", "name": "Test plugin", "status": "", "canOpen": true, "hasStates": true, "state": "off", "endsPath": true, "mix": 0.5 } ] } ],
             "master": { "id": 1, "label": "BUS X", "parent": 0, "slots": [] },
             "menu": { "generators": [ { "key": "synth", "name": "Synth" } ], "fx": [ { "key": "eq", "name": "Test plugin" } ] } } })";
 
@@ -252,11 +252,11 @@ TEST_CASE ("The page's slider controls a parameter both ways", "[webui][webview]
         KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
         ControlSession session ({ { "SLOT 1.1", "Test plugin", "Gain", "Param 1", &gain, &gain, 5 } });
         OffscreenWebUi page (keys, session, oneSlotHandlers());
-        REQUIRE (page.waitFor ("document.querySelectorAll('.slot input[type=range]').length", "1") == "1");
+        REQUIRE (page.waitFor ("document.querySelectorAll('.slot .slider input[type=range]').length", "1") == "1");
         CHECK (page.evaluate ("document.querySelector('.value-text').textContent") == gain.getCurrentValueAsText());
 
         // A drag on the page: press, move, release (anywhere)
-        page.evaluate ("{ const slider = document.querySelector('input[type=range]');"
+        page.evaluate ("{ const slider = document.querySelector('.slider input[type=range]');"
                        "  slider.dispatchEvent (new PointerEvent ('pointerdown', { bubbles: true }));"
                        "  slider.value = '0.75';"
                        "  slider.dispatchEvent (new Event ('input', { bubbles: true }));"
@@ -268,7 +268,7 @@ TEST_CASE ("The page's slider controls a parameter both ways", "[webui][webview]
 
         // A change from elsewhere (the plugin's own window, automation) shows on the page
         gain.setValueNotifyingHost (0.25f);
-        CHECK (page.waitFor ("document.querySelector('input[type=range]').value", "0.25") == "0.25");
+        CHECK (page.waitFor ("document.querySelector('.slider input[type=range]').value", "0.25") == "0.25");
         CHECK (page.waitFor ("document.querySelector('.value-text').textContent", gain.getCurrentValueAsText()) == gain.getCurrentValueAsText());
     }
 
@@ -332,9 +332,9 @@ TEST_CASE ("Right-clicking a slider shows the host's options for its parameter",
     KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
     ControlSession session ({ { "SLOT 1.1", "Test plugin", "Gain", "Param 1", &gain, &gain, 5 } });
     OffscreenWebUi page (keys, session, std::move (handlers));
-    REQUIRE (page.waitFor ("document.querySelectorAll('input[type=range]').length", "1") == "1");
+    REQUIRE (page.waitFor ("document.querySelectorAll('.slider input[type=range]').length", "1") == "1");
 
-    page.evaluate ("document.querySelector('input[type=range]').dispatchEvent (new MouseEvent ('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 60 }))");
+    page.evaluate ("document.querySelector('.slider input[type=range]').dispatchEvent (new MouseEvent ('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 60 }))");
     CHECK (page.waitFor ("String (document.querySelector('.context-menu button')?.textContent.startsWith ('Host menu'))", "true") == "true");
     CHECK (static_cast<int> (askedFor) == 0);
 
@@ -437,7 +437,7 @@ TEST_CASE ("Diagnostics shows the bay link beside the tabs and sends the slot st
     chosen = juce::var();
     page.evaluate ("document.getElementById('link-slot-off').click()");
     page.pumpUntil ([&chosen] { return !chosen.isVoid(); });
-    CHECK (chosen["value"] == juce::var ("active"));
+    CHECK (chosen["value"] == juce::var ("on"));
 }
 
 TEST_CASE ("The page reopens scrolled where it was left, and reports new positions", "[webui][webview]")
@@ -468,7 +468,7 @@ TEST_CASE ("The page reopens scrolled where it was left, and reports new positio
     CHECK (reports[0]["top"] == juce::var (25));
 }
 
-TEST_CASE ("The Panel tab's slots: mute for generators only, and structure changes go to the plugin", "[webui][webview]")
+TEST_CASE ("The Panel tab's slots: state buttons and MIX, and structure changes go to the plugin", "[webui][webview]")
 {
     if (!WebUi::isSupported())
         SKIP ("No supported web view on this system");
@@ -476,25 +476,38 @@ TEST_CASE ("The Panel tab's slots: mute for generators only, and structure chang
     std::map<juce::String, juce::var> sent;
     WebUi::Handlers handlers = oneSlotHandlers();
 
-    for (const auto* name : { "mutePlugin", "removeSlot", "addBus", "generatorBus", "collapse", "addSlot" })
+    for (const auto* name : { "slotState", "removeSlot", "addBus", "generatorBus", "collapse", "addSlot" })
         handlers.events[name] = [&sent, name] (const juce::var& message) { sent[name] = message; };
 
     KeyForwarder keys ({}, [] (std::uint32_t, bool, bool) {}, [] { return KeyForwarder::Modifiers {}; });
     ControlSession noParameters ({});
     OffscreenWebUi page (keys, noParameters, std::move (handlers));
     REQUIRE (page.waitFor ("String (document.querySelectorAll('.slot').length)", "2") == "2");
-    CHECK (page.evaluate ("String (document.querySelectorAll('.slot input[type=checkbox]').length)") == "1");
+    CHECK (page.evaluate ("String (document.querySelectorAll('.slot .state').length)") == "6");
     CHECK (page.evaluate ("String (document.querySelectorAll('.stage').length)") == "4"); // 1.0, 1.X, X.0, X.X
 
+    // The slot that's OFF shows it selected, with the line for "end signal path when off"
+    CHECK (page.evaluate ("{ const off = document.querySelectorAll('.slot')[1].querySelector('[data-state=off]'); off.classList.contains ('selected') && off.classList.contains ('ends') ? 'yes' : 'no' }") == "yes");
+
     const auto click = [&page, &sent] (const juce::String& element, const char* event) {
+        sent.erase (event);
         page.evaluate (element + ".click()");
         page.pumpUntil ([&sent, event] { return sent.contains (event); });
         return sent[event];
     };
 
-    const auto muted = click ("document.querySelector('.slot input[type=checkbox]')", "mutePlugin");
+    const auto muted = click ("document.querySelector('.slot [data-state=mute]')", "slotState");
     CHECK (static_cast<int> (muted["slot"]) == 3);
-    CHECK (muted["muted"] == juce::var (true));
+    CHECK (muted["state"] == juce::var ("mute"));
+
+    // The selected state again: back to ON
+    const auto on = click ("document.querySelector('.slot [data-state=mute]')", "slotState");
+    CHECK (on["state"] == juce::var ("on"));
+
+    page.evaluate ("{ const mix = document.querySelectorAll('.slot input[type=range]')[1]; mix.value = '0.25'; mix.dispatchEvent (new Event ('input', { bubbles: true })); }");
+    page.pumpUntil ([&sent] { return sent.contains ("slotState") && sent["slotState"].hasProperty ("mix"); });
+    CHECK (static_cast<int> (sent["slotState"]["slot"]) == 5);
+    CHECK (static_cast<double> (sent["slotState"]["mix"]) == 0.25);
 
     const auto removed = click ("document.querySelectorAll('.slot .remove')[1]", "removeSlot");
     CHECK (static_cast<int> (removed["slot"]) == 5);

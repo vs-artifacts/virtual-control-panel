@@ -30,8 +30,11 @@ namespace
         entry->setProperty ("id", id);
         entry->setProperty ("label", engine.getStructure().labelOf (id));
         entry->setProperty ("plugin", pluginKey);
-        entry->setProperty ("canMute", engine.canMute (id));
-        entry->setProperty ("muted", engine.isMuted (id));
+        entry->setProperty ("hasStates", engine.hasStates (id));
+        entry->setProperty ("state", toName (engine.getSlotState (id)));
+        entry->setProperty ("mix", engine.getMix (id));
+        entry->setProperty ("endsPath", engine.endsPathWhenOff (id));
+        entry->setProperty ("cutOff", engine.isCutOff (id));
 
         const auto* plugin = engine.findPlugin (id);
         entry->setProperty ("name", plugin != nullptr ? plugin->getName() : juce::String ("Empty"));
@@ -202,7 +205,7 @@ WebUi::Handlers PluginEditor::createPageHandlers()
         { "resetSettings", [this] (const juce::var& message) { handleResetSettings (message); } },
         { "tab", [this] (const juce::var& message) { handleTab (message); } },
         { "openPlugin", [this] (const juce::var& message) { handleOpenPlugin (message); } },
-        { "mutePlugin", [this] (const juce::var& message) { handleMutePlugin (message); } },
+        { "slotState", [this] (const juce::var& message) { handleSlotState (message); } },
         { "addSlot", [this] (const juce::var& message) { handleAddSlot (message); } },
         { "removeSlot", [this] (const juce::var& message) {
              if (const auto slot = wholeNumber (message["slot"], 1, Structure::maxId))
@@ -639,14 +642,25 @@ void PluginEditor::handleOpenPlugin (const juce::var& message)
             hostedEditors.open (*plugin);
 }
 
-void PluginEditor::handleMutePlugin (const juce::var& message)
+void PluginEditor::handleSlotState (const juce::var& message)
 {
     const auto slot = wholeNumber (message["slot"], 1, Structure::maxId);
-    const auto& muted = message["muted"];
+    auto& engine = pluginProcessor.getEngine();
 
-    // The engine refuses slots that aren't generators
-    if (slot.has_value() && muted.isBool())
-        pluginProcessor.getEngine().setMuted (*slot, static_cast<bool> (muted));
+    // The engine refuses IDs that aren't generators or slots with a plugin
+    if (!slot.has_value())
+        return;
+
+    if (const auto& state = message["state"]; state.isString())
+        if (const auto chosen = slotStateFromName (state.toString()))
+            engine.setSlotState (*slot, *chosen);
+
+    if (const auto& mix = message["mix"]; mix.isDouble() || mix.isInt())
+        if (const auto value = static_cast<double> (mix); value >= 0.0 && value <= 1.0)
+            engine.setMix (*slot, static_cast<float> (value));
+
+    if (const auto& ends = message["endsPath"]; ends.isBool())
+        engine.setEndsPathWhenOff (*slot, static_cast<bool> (ends));
 }
 
 void PluginEditor::handleAddSlot (const juce::var& message)

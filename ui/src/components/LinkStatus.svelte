@@ -261,7 +261,7 @@
                 : "";
 
         switch (status.slotState) {
-            case "active":
+            case "on":
                 return status.awaitingBay
                     ? {
                           parts: [v("ON"), "\nwaiting for the bay's sound"],
@@ -545,7 +545,7 @@
                         onclick={() =>
                             setBaySlotState(
                                 status.slotState === choice.value
-                                    ? "active"
+                                    ? "on"
                                     : choice.value,
                             )}>{choice.text}</button
                     >

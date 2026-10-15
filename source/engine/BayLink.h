@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../link/LinkApi.h"
+#include "SlotState.h"
 #include <SettingsDefaults.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -49,13 +50,9 @@ public:
         safe, // the matching block that was sent; not in the UI (it can be louder than the bay), kept for tests
     };
 
-    // The bay's slot state
-    enum class SlotState {
-        active, // the bay's sound plays
-        mute, // the sent audio plays at the same delay; the bay keeps getting the panel's sound
-        bypass, // the sent audio plays at the same delay; the bay gets silence and its tail cut output is 1
-        off, // the sent audio plays at once (the bay's delay leaves the host's latency); the bay gets silence, tail cut 1
-    };
+    // The bay's slot state (see SlotState): mute and bypass play the sent audio at the same delay (bypass sends the bay
+    // silence and sets its tail cut output to 1); off plays it at once (the bay's delay leaves the host's latency)
+    using SlotState = ::SlotState;
 
     // The transmitter's latest report of the bay plugin's latency
     enum class Reading {
@@ -165,8 +162,8 @@ public:
         bool outputQuiet = false; // quiet for the set time
         StoppedShrink stoppedShrink = StoppedShrink::whenQuiet;
         double sampleRate = 0.0;
-        SlotState slotState = SlotState::active;
-        bool awaitingBay = false; // Active, but the bay's sound isn't back yet (since a state was left, or ever): dry plays
+        SlotState slotState = SlotState::on;
+        bool awaitingBay = false; // On, but the bay's sound isn't back yet (since a state was left, or ever): dry plays
         int tailCutReleaseMs = 0;
         int delay = 0; // samples the output plays behind the engine: round trip + bay latency, or 0 when Off
         int bayLatency = 0; // the one in use
@@ -250,9 +247,9 @@ public:
             case Fade::bayLatencyIn:
                 return SettingsDefaults::bayLatencyFadeInMs;
             case Fade::mute:
-                return SettingsDefaults::bayMuteFadeMs;
+                return SettingsDefaults::muteFadeMs;
             case Fade::bypass:
-                return SettingsDefaults::bayBypassFadeMs;
+                return SettingsDefaults::bypassFadeMs;
             case Fade::off:
                 return SettingsDefaults::bayOffFadeMs;
             case Fade::dropoutOut:
@@ -309,7 +306,7 @@ public:
     static constexpr int maxQuietMs = SettingsDefaults::bayQuietMs.max, defaultQuietMs = SettingsDefaults::bayQuietMs.value;
 
     // The longest fade of any kind
-    static constexpr int maxFadeMs = std::max ({ SettingsDefaults::bayRoundTripFadeMs.max, SettingsDefaults::bayLatencyFadeOutMs.max, SettingsDefaults::bayLatencyFadeInMs.max, SettingsDefaults::bayMuteFadeMs.max, SettingsDefaults::bayBypassFadeMs.max, SettingsDefaults::bayOffFadeMs.max, SettingsDefaults::bayDropoutFadeOutMs.max, SettingsDefaults::bayDropoutFadeInMs.max });
+    static constexpr int maxFadeMs = std::max ({ SettingsDefaults::bayRoundTripFadeMs.max, SettingsDefaults::bayLatencyFadeOutMs.max, SettingsDefaults::bayLatencyFadeInMs.max, SettingsDefaults::muteFadeMs.max, SettingsDefaults::bypassFadeMs.max, SettingsDefaults::bayOffFadeMs.max, SettingsDefaults::bayDropoutFadeOutMs.max, SettingsDefaults::bayDropoutFadeInMs.max });
 
     // How long a new bay latency must hold before it's used
     static constexpr int maxSettleMs = SettingsDefaults::bayLatencySettleMs.max;
@@ -476,7 +473,7 @@ private:
     std::atomic<juce::int64> quietSamples { 0 }; // audio thread: how long the output has been below quietLevel
     std::array<std::atomic<int>, fades.size()> fadeMs;
     std::atomic<AutoState> autoState { AutoState::checking };
-    std::atomic<SlotState> slotState { SlotState::active };
+    std::atomic<SlotState> slotState { SlotState::on };
     std::atomic<Dropouts> dropouts { Dropouts::silence };
     std::atomic<int> settleMs { defaultSettleMs };
     std::atomic<int> tailCutReleaseMs { defaultTailCutReleaseMs };
@@ -511,7 +508,7 @@ private:
     std::vector<float> returnLeft, returnRight, directLeft, directRight;
     int32_t valuesSentTo = -1; // the send handle the last value set went to
     std::array<float, numControls + 1> valuesSent {};
-    SlotState lastSlotState = SlotState::active;
+    SlotState lastSlotState = SlotState::on;
 
     // Audio thread: which fade each ramp uses, chosen when it starts
     Fade sendFade = Fade::bypass; // the bay's send: the state silencing it, or the one that last did
@@ -527,7 +524,7 @@ private:
     // Audio thread: the transmitter's latest report says it's holding the return back
     bool transmitterHolding = false;
 
-    // Audio thread: Active, but the bay's sound hasn't been back since a state was left (or ever): dry plays meanwhile
+    // Audio thread: On, but the bay's sound hasn't been back since a state was left (or ever): dry plays meanwhile
     bool awaiting = true;
     std::atomic<bool> awaitingBay { true }; // for the message thread
 

@@ -2,6 +2,7 @@
 
 #include "HostedPlugin.h"
 #include "PluginCatalog.h"
+#include "SlotState.h"
 #include "Structure.h"
 
 // A hosted plugin's parameter chosen for control from our UI, and the host control it's bound to
@@ -76,12 +77,31 @@ public:
     // True if source's audio reaches destination (through any boxes in between)
     bool feeds (Id source, Id destination) const;
 
-    // Generators only: fades the generator's output out (or back in) over muteFadeSeconds while the plugin keeps
-    // running, so the load and timing stay the same. Any thread. False if it isn't a generator.
-    bool setMuted (Id, bool muted);
-    bool isMuted (Id) const;
-    bool canMute (Id) const;
-    static constexpr double muteFadeSeconds = 0.03;
+    // Generators and slots with a plugin (an empty slot has no states: it passes its input on). Message thread.
+    // Mute and Bypass crossfade inside the slot (their fades: setStateFades), keeping its latency. Off, and back, takes
+    // the slot out of the graph (or puts it back) under the dip, so its latency no longer counts. False if the ID isn't a
+    // generator or slot with a plugin.
+    bool setSlotState (Id, SlotState);
+    SlotState getSlotState (Id) const;
+    bool hasStates (Id) const;
+
+    // Linear dry/wet, 0 to 1 (a generator's dry is silence, so it's its level). Any thread.
+    bool setMix (Id, float mix);
+    float getMix (Id) const;
+
+    // "End signal path when off": while the slot is Off, every later slot in its bus is cut off too (not run, not
+    // connected; its bus's b.X still takes its sub-buses). A generator's has no further effect for now.
+    bool setEndsPathWhenOff (Id, bool);
+    bool endsPathWhenOff (Id) const;
+
+    // Whether an earlier slot's end of the signal path cuts this one off
+    bool isCutOff (Id) const;
+
+    // The Mute and Bypass crossfades inside slots (ms; 0: at once)
+    void setStateFades (int muteMs, int bypassMs) noexcept;
+
+    // How long a slot's dry/wet change takes
+    static constexpr double mixRampSeconds = 0.02;
 
     // People-facing name: "GEN 2", "SLOT 1.1", "SLOT X.2"; empty if unknown
     juce::String getSlotLabel (Id) const;
@@ -94,7 +114,7 @@ public:
     const std::vector<ExposedParameter>& getExposedParameters() const noexcept { return exposed; }
 
     static constexpr auto stateTag = "Engine";
-    static constexpr int stateVersion = 2;
+    static constexpr int stateVersion = 3;
 
     // Without a block for this long, audio counts as stopped: changes apply at once
     static constexpr juce::uint32 stoppedAfterMs = 200;
@@ -105,6 +125,14 @@ public:
 private:
     using NodeID = juce::AudioProcessorGraph::NodeID;
     class SlotBox;
+
+    // Shared by every box (declared before the graph, which owns the boxes, so it outlives them)
+    struct StateFades
+    {
+        std::atomic<int> muteMs { 0 }, bypassMs { 0 };
+    };
+
+    StateFades stateFades;
 
     // A box: in the graph (owned there), or waiting to be added (owned here)
     struct Box
@@ -136,6 +164,7 @@ private:
 
     void connectAudio (NodeID source, NodeID destination);
     void connectMidi (NodeID source, NodeID destination);
+    SlotBox* findBox (Id) const;
 
     PluginCatalog catalog;
     juce::AudioPluginFormatManager formatManager;
@@ -159,6 +188,9 @@ private:
     double sampleRate = 0.0;
     std::atomic<bool> prepared { false };
     std::atomic<juce::uint32> lastBlockMs { 0 };
+
+    // Resets plugins the audio thread has stopped running (Bypass, Off, cut off), so no old tail plays when they return
+    juce::TimedCallback resetCheck;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Engine)
 };

@@ -218,7 +218,7 @@ TEST_CASE ("Sylenth1 plays a note from MIDI", "[engine][synths]")
     checkSynthPlaysANote (sylenth1Path, "sylenth1");
 }
 
-TEST_CASE ("Muting a generator fades it out while it keeps running", "[engine][synths]")
+TEST_CASE ("A generator's MUTE fades it out while it keeps running; BYPASS stops and resets it", "[engine][synths]")
 {
     if (!isInstalled (sylenth1Path))
         SKIP ("Not installed: " << sylenth1Path);
@@ -228,11 +228,13 @@ TEST_CASE ("Muting a generator fades it out while it keeps running", "[engine][s
     engine.build (Structure::simple ({ "sylenth1" }, {}));
     REQUIRE (engine.getPlugins()[0]->getInstance() != nullptr);
     const auto id = engine.getStructure().generators[0].id;
+    constexpr int stateFadeMs = 30;
+    engine.setStateFades (stateFadeMs, stateFadeMs);
 
-    CHECK (engine.canMute (id));
-    CHECK_FALSE (engine.canMute (id + 100)); // no such slot
-    CHECK_FALSE (engine.setMuted (id + 100, true));
-    CHECK_FALSE (engine.isMuted (id + 100));
+    CHECK (engine.hasStates (id));
+    CHECK_FALSE (engine.hasStates (id + 100)); // no such slot
+    CHECK_FALSE (engine.setSlotState (id + 100, SlotState::mute));
+    CHECK (engine.getSlotState (id + 100) == SlotState::on);
 
     engine.prepare (testSampleRate, testBlockSize, false);
     juce::AudioBuffer<float> buffer (2, testBlockSize);
@@ -250,24 +252,45 @@ TEST_CASE ("Muting a generator fades it out while it keeps running", "[engine][s
 
     REQUIRE (renderBlock() > 0.001f);
 
-    REQUIRE (engine.setMuted (id, true));
-    CHECK (engine.isMuted (id));
+    REQUIRE (engine.setSlotState (id, SlotState::mute));
+    CHECK (engine.getSlotState (id) == SlotState::mute);
 
     // A fade, not a cut: the first muted block still starts at almost full level
     renderBlock();
     CHECK (buffer.getMagnitude (0, 0, 16) > 0.0f);
 
-    const auto fadeBlocks = static_cast<int> (std::ceil (Engine::muteFadeSeconds * testSampleRate / testBlockSize));
+    const auto fadeBlocks = static_cast<int> (std::ceil (stateFadeMs * testSampleRate / 1000.0 / testBlockSize));
 
     for (int block = 1; block < fadeBlocks; ++block)
         renderBlock();
 
     CHECK (juce::exactlyEqual (renderBlock(), 0.0f));
 
-    // Still running underneath: the held note is there again as soon as it's unmuted
-    REQUIRE (engine.setMuted (id, false));
+    // Still running underneath: the held note is there again as soon as it's back ON
+    REQUIRE (engine.setSlotState (id, SlotState::on));
 
     for (int block = 0; block < fadeBlocks; ++block)
+        renderBlock();
+
+    CHECK (renderBlock() > 0.001f);
+
+    // MIX is a generator's level
+    REQUIRE (engine.setMix (id, 0.5f));
+    CHECK_THAT (engine.getMix (id), Catch::Matchers::WithinAbs (0.5, 1e-6));
+    REQUIRE (engine.setMix (id, 1.0f));
+
+    // BYPASS: silent once faded, and the plugin is reset (its note gone) before it runs again
+    REQUIRE (engine.setSlotState (id, SlotState::bypass));
+
+    for (int block = 0; block < fadeBlocks; ++block)
+        renderBlock();
+
+    CHECK (juce::exactlyEqual (renderBlock(), 0.0f));
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (150);
+    REQUIRE (engine.setSlotState (id, SlotState::on));
+    renderBlock (noteOn());
+
+    for (int block = 0; block < 8; ++block)
         renderBlock();
 
     CHECK (renderBlock() > 0.001f);
@@ -300,11 +323,63 @@ TEST_CASE ("Muting a generator fades it out while it keeps running", "[engine][s
     engine.release();
 
     // Saved with the slot, and restored (after the audio: restoring a plugin's state may stop its notes)
-    REQUIRE (engine.setMuted (id, true));
+    REQUIRE (engine.setSlotState (id, SlotState::mute));
+    REQUIRE (engine.setMix (id, 0.25f));
+    REQUIRE (engine.setEndsPathWhenOff (id, true));
     const auto saved = engine.createStateXml();
-    REQUIRE (engine.setMuted (id, false));
+    REQUIRE (engine.setSlotState (id, SlotState::on));
+    REQUIRE (engine.setMix (id, 1.0f));
     REQUIRE (engine.restoreStateFromXml (*saved));
-    CHECK (engine.isMuted (id));
+    CHECK (engine.getSlotState (id) == SlotState::mute);
+    CHECK_THAT (engine.getMix (id), Catch::Matchers::WithinAbs (0.25, 1e-6));
+    CHECK (engine.endsPathWhenOff (id));
+}
+
+TEST_CASE ("BYPASS keeps a slot's latency; OFF takes it out, and can end the signal path", "[engine]")
+{
+    for (auto* path : { compactorPath, eqPath })
+        if (!isInstalled (path))
+            SKIP ("Not installed: " << path);
+
+    Engine engine;
+    engine.build (Structure::simple ({}, { "khsEq", "khsCompactor" }));
+    const auto& slots = engine.getStructure().buses[0].slots;
+    const auto eq = slots[0].id, compactor = slots[1].id;
+    engine.prepare (testSampleRate, testBlockSize, false);
+    const auto latency = engine.getLatencySamples();
+    REQUIRE (latency > 0); // 489 samples at the time of writing
+
+    REQUIRE (engine.setSlotState (compactor, SlotState::bypass));
+    CHECK (engine.getLatencySamples() == latency);
+    REQUIRE (engine.setSlotState (compactor, SlotState::mute));
+    CHECK (engine.getLatencySamples() == latency);
+
+    // Audio isn't running, so the graph changes at once
+    REQUIRE (engine.setSlotState (compactor, SlotState::off));
+    CHECK_FALSE (engine.isChangeWaiting());
+    CHECK (engine.getLatencySamples() == 0);
+    REQUIRE (engine.setSlotState (compactor, SlotState::on));
+    CHECK (engine.getLatencySamples() == latency);
+
+    // The EQ OFF and ending the path: the compactor after it is cut off (not connected: no latency)
+    REQUIRE (engine.setSlotState (eq, SlotState::off));
+    CHECK (engine.getLatencySamples() == latency);
+    CHECK_FALSE (engine.isCutOff (compactor));
+    REQUIRE (engine.setEndsPathWhenOff (eq, true));
+    CHECK (engine.isCutOff (compactor));
+    CHECK_FALSE (engine.isCutOff (eq));
+    CHECK (engine.getLatencySamples() == 0);
+
+    REQUIRE (engine.setSlotState (eq, SlotState::on));
+    CHECK_FALSE (engine.isCutOff (compactor));
+    CHECK (engine.getLatencySamples() == latency);
+
+    // An empty slot has no states
+    const auto empty = engine.addSlot (engine.getStructure().buses[0].id, 0, {});
+    REQUIRE (empty.has_value());
+    CHECK_FALSE (engine.hasStates (*empty));
+    CHECK_FALSE (engine.setSlotState (*empty, SlotState::off));
+    engine.release();
 }
 
 TEST_CASE ("The fixed setup: both synths summed into the EQ", "[processor][synths]")
@@ -334,9 +409,9 @@ TEST_CASE ("The fixed setup: both synths summed into the EQ", "[processor][synth
     CHECK (engine.feeds (serumID, eqID));
     CHECK (engine.feeds (sylenthID, eqID));
     CHECK_FALSE (engine.feeds (serumID, sylenthID));
-    CHECK (engine.canMute (serumID));
-    CHECK (engine.canMute (sylenthID));
-    CHECK_FALSE (engine.canMute (eqID)); // FX are never muted
+    CHECK (engine.hasStates (serumID));
+    CHECK (engine.hasStates (sylenthID));
+    CHECK (engine.hasStates (eqID));
 
     processor.prepareToPlay (testSampleRate, testBlockSize);
     const auto numChannels = processor.getTotalNumOutputChannels();

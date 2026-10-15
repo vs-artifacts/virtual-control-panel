@@ -1,16 +1,18 @@
 #include "Engine.h"
 
-// One generator or slot in the graph, with its plugin inside (none: an empty slot, or b.0 and b.X for now). A
-// generator's box can silence its output with a short fade while the plugin keeps running.
+// One generator or slot in the graph, with its plugin inside (none: an empty slot, or b.0 and b.X for now, which pass
+// their input on). With a plugin it has the slot states (see SlotState) and a linear dry/wet mix; the dry sound is the
+// input delayed by the plugin's latency, so Mute and Bypass keep the slot's timing. A generator's dry is silence.
 class Engine::SlotBox final : public juce::AudioProcessor
 {
 public:
-    SlotBox (std::unique_ptr<HostedPlugin> pluginIn, bool generatorIn)
+    SlotBox (std::unique_ptr<HostedPlugin> pluginIn, bool generatorIn, const StateFades& fadesIn)
         : AudioProcessor (BusesProperties()
                   .withInput ("Input", juce::AudioChannelSet::stereo(), true)
                   .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
           plugin (std::move (pluginIn)),
-          generator (generatorIn)
+          generator (generatorIn),
+          fades (fadesIn)
     {
     }
 
@@ -19,8 +21,36 @@ public:
     void setPluginKey (const juce::String& key) { pluginKey = key; }
     bool isGenerator() const noexcept { return generator; }
 
-    void setMuted (bool shouldMute) noexcept { muted.store (shouldMute, std::memory_order_relaxed); }
-    bool isMuted() const noexcept { return muted.load (std::memory_order_relaxed); }
+    // Message thread. Off only takes effect once the graph leaves the box out (setOffline); until then it plays on as it was.
+    void setState (SlotState newState) noexcept { state.store (newState); }
+    SlotState getState() const noexcept { return state.load(); }
+    void setMix (float newMix) noexcept { mix.store (juce::jlimit (0.0f, 1.0f, newMix)); }
+    float getMix() const noexcept { return mix.load(); }
+    void setEndsPathWhenOff (bool ends) noexcept { endsPath.store (ends); }
+    bool endsPathWhenOff() const noexcept { return endsPath.load(); }
+
+    // Message thread, as the graph is rewired: out of it (Off, or cut off by an earlier slot): silent, plugin not run
+    void setOffline (bool isOffline) noexcept { offline.store (isOffline); }
+
+    // Message thread: resets the plugin once the audio thread has stopped running it, before it may run again
+    void resetIfIdle()
+    {
+        if (!needsReset.load())
+            return;
+
+        // With running (audio thread), a handshake: the plugin is never reset while it runs, nor run while it's reset
+        holding.store (true);
+
+        if (!running.load())
+        {
+            if (auto* instance = getInstance())
+                instance->reset();
+
+            needsReset.store (false);
+        }
+
+        holding.store (false);
+    }
 
     void prepareToPlay (double sampleRate, int maximumBlockSize) override
     {
@@ -31,8 +61,16 @@ public:
             setLatencySamples (instance->getLatencySamples());
         }
 
-        gain.reset (sampleRate, muteFadeSeconds);
-        gain.setCurrentAndTargetValue (isMuted() ? 0.0f : 1.0f);
+        latency = getLatencySamples();
+        blockCapacity = maximumBlockSize;
+        dryLine.setSize (2, latency + maximumBlockSize);
+        dryLine.clear();
+        dryBlock.setSize (2, maximumBlockSize);
+        writePosition = 0;
+        rate = sampleRate;
+        mixGain.reset (sampleRate, mixRampSeconds);
+        mixGain.setCurrentAndTargetValue (mix.load());
+        stateGain = state.load() == SlotState::on ? 1.0f : 0.0f;
     }
 
     void releaseResources() override
@@ -57,23 +95,88 @@ public:
 
     void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) override
     {
-        if (auto* instance = getInstance())
+        auto* instance = getInstance();
+
+        if (instance == nullptr)
+        {
+            if (generator)
+                buffer.clear();
+
+            return;
+        }
+
+        if (offline.load (std::memory_order_relaxed))
+        {
+            stopRunning();
+            buffer.clear();
+            wasOffline = true;
+            return;
+        }
+
+        // Back in the graph (under the dip): no old dry sound, and the state's level at once
+        const auto returning = std::exchange (wasOffline, false);
+
+        if (returning)
+            dryLine.clear();
+
+        auto target = state.load (std::memory_order_relaxed);
+
+        if (target == SlotState::off)
+            target = playing;
+        else
+            playing = target;
+
+        if (target != SlotState::on)
+            lastLeft = target;
+
+        const auto numSamples = buffer.getNumSamples();
+        const auto channels = std::min (2, buffer.getNumChannels());
+        const auto withDry = !generator && numSamples <= blockCapacity;
+
+        if (withDry)
+            delayDry (buffer, numSamples, channels);
+
+        const auto wanted = target == SlotState::on ? 1.0f : 0.0f;
+        const auto needsPlugin = target != SlotState::bypass || stateGain > 0.0f;
+        const auto runs = needsPlugin && startRunning();
+
+        if (!needsPlugin)
+            stopRunning();
+
+        if (runs)
         {
             instance->setPlayHead (getPlayHead());
             instance->processBlock (buffer, midi);
         }
-        else if (generator)
+        else
         {
             buffer.clear();
         }
 
-        if (!generator)
+        if (returning || !runs)
+            stateGain = runs ? wanted : 0.0f;
+
+        mixGain.setTargetValue (mix.load (std::memory_order_relaxed));
+
+        // The plugin's sound alone, as it was
+        if (juce::exactlyEqual (stateGain, 1.0f) && juce::exactlyEqual (wanted, 1.0f) && !mixGain.isSmoothing() && juce::exactlyEqual (mixGain.getTargetValue(), 1.0f))
             return;
 
-        gain.setTargetValue (isMuted() ? 0.0f : 1.0f);
+        const auto fadeMs = (wanted < stateGain ? target : lastLeft) == SlotState::bypass ? fades.bypassMs.load (std::memory_order_relaxed) : fades.muteMs.load (std::memory_order_relaxed);
+        const auto fadeSamples = fadeMs * rate / 1000.0;
+        const auto step = fadeSamples > 1.0 ? static_cast<float> (1.0 / fadeSamples) : 1.0f;
 
-        if (gain.isSmoothing() || !juce::exactlyEqual (gain.getTargetValue(), 1.0f))
-            gain.applyGain (buffer, buffer.getNumSamples());
+        for (int i = 0; i < numSamples; ++i)
+        {
+            stateGain = wanted > stateGain ? std::min (wanted, stateGain + step) : std::max (wanted, stateGain - step);
+            const auto wet = stateGain * mixGain.getNextValue();
+
+            for (int channel = 0; channel < channels; ++channel)
+            {
+                auto* samples = buffer.getWritePointer (channel);
+                samples[i] = wet * samples[i] + (withDry ? (1.0f - wet) * dryBlock.getSample (channel, i) : 0.0f);
+            }
+        }
     }
 
     const juce::String getName() const override { return plugin != nullptr ? plugin->getName() : juce::String ("Empty"); }
@@ -93,11 +196,78 @@ public:
 private:
     juce::AudioPluginInstance* getInstance() const noexcept { return plugin != nullptr ? plugin->getInstance() : nullptr; }
 
+    // The input into the delay line, and the input of latency samples ago out of it (into dryBlock)
+    void delayDry (const juce::AudioBuffer<float>& buffer, int numSamples, int channels)
+    {
+        const auto size = dryLine.getNumSamples();
+
+        for (int channel = 0; channel < channels; ++channel)
+        {
+            const auto* input = buffer.getReadPointer (channel);
+            auto* line = dryLine.getWritePointer (channel);
+            auto* out = dryBlock.getWritePointer (channel);
+
+            for (int i = 0; i < numSamples; ++i)
+                line[(writePosition + i) % size] = input[i];
+
+            const auto start = writePosition - latency + size;
+
+            for (int i = 0; i < numSamples; ++i)
+                out[i] = line[(start + i) % size];
+        }
+
+        writePosition = (writePosition + numSamples) % size;
+    }
+
+    // Audio thread: false while the message thread resets the plugin, or a reset is still to come
+    bool startRunning() noexcept
+    {
+        if (isRunning)
+            return true;
+
+        if (needsReset.load())
+            return false;
+
+        running.store (true);
+
+        if (holding.load())
+        {
+            running.store (false);
+            return false;
+        }
+
+        isRunning = true;
+        return true;
+    }
+
+    void stopRunning() noexcept
+    {
+        if (!isRunning)
+            return;
+
+        isRunning = false;
+        running.store (false);
+        needsReset.store (true);
+    }
+
     std::unique_ptr<HostedPlugin> plugin;
     juce::String pluginKey;
     const bool generator;
-    std::atomic<bool> muted { false };
-    juce::SmoothedValue<float> gain { 1.0f };
+    const StateFades& fades;
+
+    std::atomic<SlotState> state { SlotState::on };
+    std::atomic<float> mix { 1.0f };
+    std::atomic<bool> endsPath { false }, offline { false };
+    std::atomic<bool> running { false }, holding { false }, needsReset { false };
+
+    // Audio thread
+    bool isRunning = false, wasOffline = false;
+    SlotState playing = SlotState::on, lastLeft = SlotState::mute;
+    float stateGain = 1.0f;
+    juce::SmoothedValue<float> mixGain { 1.0f };
+    juce::AudioBuffer<float> dryLine, dryBlock;
+    int latency = 0, blockCapacity = 0, writePosition = 0;
+    double rate = 44100.0;
 };
 
 Engine::Box::Box() = default;
@@ -118,7 +288,11 @@ Engine::Box& Engine::Box::operator= (Box&& other) noexcept
 Engine::Box::~Box() = default;
 
 Engine::Engine (PluginCatalog catalogIn)
-    : catalog (std::move (catalogIn))
+    : catalog (std::move (catalogIn)),
+      resetCheck ([this] {
+          for (auto& [id, box] : boxes)
+              box.box->resetIfIdle();
+      })
 {
     juce::addDefaultFormatsToManager (formatManager);
 
@@ -130,10 +304,12 @@ Engine::Engine (PluginCatalog catalogIn)
     midiOut = graph.addNode (std::make_unique<IO> (IO::midiOutputNode))->nodeID;
     audioOut = graph.addNode (std::make_unique<IO> (IO::audioOutputNode))->nodeID;
     connectMidi (midiIn, midiOut);
+    resetCheck.startTimerHz (20);
 }
 
 Engine::~Engine()
 {
+    resetCheck.stopTimer();
     stopTimer();
 }
 
@@ -175,7 +351,7 @@ Engine::Box Engine::createBox (const juce::String& pluginKey, bool generator)
     }
 
     Box box;
-    box.waiting = std::make_unique<SlotBox> (std::move (plugin), generator);
+    box.waiting = std::make_unique<SlotBox> (std::move (plugin), generator, stateFades);
     box.waiting->setPluginKey (pluginKey);
     box.box = box.waiting.get();
     return box;
@@ -354,7 +530,9 @@ void Engine::replaceStructure (const Structure& newStructure)
         {
             if (box.box != nullptr && loadedKey == key && box.box->isGenerator() == generator)
             {
-                box.box->setMuted (false);
+                box.box->setState (SlotState::on);
+                box.box->setMix (1.0f);
+                box.box->setEndsPathWhenOff (false);
                 return std::move (box);
             }
         }
@@ -471,24 +649,38 @@ void Engine::syncGraph()
 
     for (const auto& generator : structure.generators)
     {
-        const auto node = boxes.at (generator.id).node;
-        connectMidi (midiIn, node);
+        auto& box = boxes.at (generator.id);
+        const auto off = box.box->getPlugin() != nullptr && box.box->getState() == SlotState::off;
+        box.box->setOffline (off);
+        connectMidi (midiIn, box.node);
 
-        for (const auto bus : generator.buses)
-            connectAudio (node, busPoints.at (bus).entry.node);
+        if (!off)
+            for (const auto bus : generator.buses)
+                connectAudio (box.node, busPoints.at (bus).entry.node);
     }
 
+    // A slot that's Off is left out; one that also ends the signal path leaves out every later slot in its bus
     const auto chain = [this] (const Structure::Bus& bus) {
-        auto previous = busPoints.at (bus.id).entry.node;
+        std::optional<NodeID> previous = busPoints.at (bus.id).entry.node;
 
         for (const auto& slot : bus.slots)
         {
-            const auto node = boxes.at (slot.id).node;
-            connectAudio (previous, node);
-            previous = node;
+            auto& box = boxes.at (slot.id);
+            const auto off = box.box->getPlugin() != nullptr && box.box->getState() == SlotState::off;
+            box.box->setOffline (off || !previous.has_value());
+
+            if (off && box.box->endsPathWhenOff())
+                previous.reset();
+
+            if (off || !previous.has_value())
+                continue;
+
+            connectAudio (*previous, box.node);
+            previous = box.node;
         }
 
-        connectAudio (previous, busPoints.at (bus.id).exit.node);
+        if (previous.has_value())
+            connectAudio (*previous, busPoints.at (bus.id).exit.node);
     };
 
     for (const auto& bus : structure.buses)
@@ -591,8 +783,12 @@ std::unique_ptr<juce::XmlElement> Engine::createStateXml() const
         auto* slotState = xml->createNewChildElement ("SlotState");
         slotState->setAttribute ("id", id);
 
-        if (canMute (id))
-            slotState->setAttribute ("muted", isMuted (id));
+        if (hasStates (id))
+        {
+            slotState->setAttribute ("state", toName (getSlotState (id)));
+            slotState->setAttribute ("mix", getMix (id));
+            slotState->setAttribute ("endsPath", endsPathWhenOff (id));
+        }
 
         if (auto* plugin = findPlugin (id))
             if (auto pluginState = plugin->createStateXml())
@@ -632,7 +828,9 @@ bool Engine::restoreStateFromXml (const juce::XmlElement& xml)
             if (auto* pluginState = slotState->getChildByName (HostedPlugin::stateTag))
                 plugin->restoreStateFromXml (*pluginState);
 
-        setMuted (id, slotState->getBoolAttribute ("muted"));
+        setMix (id, static_cast<float> (slotState->getDoubleAttribute ("mix", 1.0)));
+        setEndsPathWhenOff (id, slotState->getBoolAttribute ("endsPath"));
+        setSlotState (id, slotStateFromName (slotState->getStringAttribute ("state")).value_or (SlotState::on));
     }
 
     for (auto* exposure : xml.getChildWithTagNameIterator ("Exposed"))
@@ -652,24 +850,107 @@ bool Engine::feeds (Id source, Id destination) const
     return graph.isAnInputTo (from->second.node, to->second.node);
 }
 
-bool Engine::setMuted (Id id, bool muted)
+Engine::SlotBox* Engine::findBox (Id id) const
 {
-    if (!canMute (id))
+    const auto box = boxes.find (id);
+    return box != boxes.end() && box->second.box->getPlugin() != nullptr ? box->second.box : nullptr;
+}
+
+bool Engine::hasStates (Id id) const
+{
+    return findBox (id) != nullptr;
+}
+
+bool Engine::setSlotState (Id id, SlotState newState)
+{
+    auto* box = findBox (id);
+
+    if (box == nullptr)
         return false;
 
-    boxes.at (id).box->setMuted (muted);
+    const auto wasOff = box->getState() == SlotState::off;
+    box->setState (newState);
+
+    // Off, and back, rewires the graph
+    if (wasOff != (newState == SlotState::off))
+        graphChanged (true);
+
     return true;
 }
 
-bool Engine::isMuted (Id id) const
+SlotState Engine::getSlotState (Id id) const
 {
-    return canMute (id) && boxes.at (id).box->isMuted();
+    const auto* box = findBox (id);
+    return box != nullptr ? box->getState() : SlotState::on;
 }
 
-bool Engine::canMute (Id id) const
+bool Engine::setMix (Id id, float mix)
 {
-    const auto box = boxes.find (id);
-    return box != boxes.end() && box->second.box->isGenerator();
+    auto* box = findBox (id);
+
+    if (box == nullptr || !std::isfinite (mix))
+        return false;
+
+    box->setMix (mix);
+    return true;
+}
+
+float Engine::getMix (Id id) const
+{
+    const auto* box = findBox (id);
+    return box != nullptr ? box->getMix() : 1.0f;
+}
+
+bool Engine::setEndsPathWhenOff (Id id, bool ends)
+{
+    auto* box = findBox (id);
+
+    if (box == nullptr)
+        return false;
+
+    const auto changed = box->endsPathWhenOff() != ends;
+    box->setEndsPathWhenOff (ends);
+
+    if (changed && box->getState() == SlotState::off && !box->isGenerator())
+        graphChanged (true);
+
+    return true;
+}
+
+bool Engine::endsPathWhenOff (Id id) const
+{
+    const auto* box = findBox (id);
+    return box != nullptr && box->endsPathWhenOff();
+}
+
+bool Engine::isCutOff (Id id) const
+{
+    const auto place = structure.findSlot (id);
+
+    if (!place.has_value())
+        return false;
+
+    const auto* bus = structure.findBus (place->bus);
+
+    if (bus == nullptr)
+        return false;
+
+    for (const auto& slot : bus->slots)
+    {
+        if (slot.id == id)
+            return false;
+
+        if (getSlotState (slot.id) == SlotState::off && endsPathWhenOff (slot.id))
+            return true;
+    }
+
+    return false;
+}
+
+void Engine::setStateFades (int muteMs, int bypassMs) noexcept
+{
+    stateFades.muteMs.store (std::max (0, muteMs));
+    stateFades.bypassMs.store (std::max (0, bypassMs));
 }
 
 juce::String Engine::getSlotLabel (Id id) const

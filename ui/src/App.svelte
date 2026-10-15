@@ -136,7 +136,9 @@
         {/if}
       </div>
       {#key hint.text}
-        <div class="hint" class:warning={hint.warning} id="hint" use:autoScroll>{hint.text}</div>
+        <div class="hint" class:warning={hint.warning} id="hint" use:autoScroll>
+          {hint.text}
+        </div>
       {/key}
     </div>
 

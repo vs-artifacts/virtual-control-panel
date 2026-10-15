@@ -83,10 +83,12 @@ export function sendOpenPlugin(slot: number): void {
     window.__JUCE__.backend.emitEvent('openPlugin', { slot })
 }
 
-// Silences a generator (it keeps running)
-export function sendMutePlugin(slot: number, muted: boolean): void {
-    window.__JUCE__.backend.emitEvent('mutePlugin', { slot, muted })
+// A generator's or slot's state, dry/wet mix (0 to 1) or "end signal path when off"; any of them
+export function sendSlotState(slot: number, change: { state?: SlotStateName; mix?: number; endsPath?: boolean }): void {
+    window.__JUCE__.backend.emitEvent('slotState', { slot, ...change })
 }
+
+export type SlotStateName = 'on' | 'mute' | 'bypass' | 'off'
 
 // A new generator (bus 0) or slot, with a plugin from the plugin list (empty: an empty slot)
 export function sendAddSlot(bus: number, index: number, plugin: string): void {
@@ -147,9 +149,9 @@ export function onLink(listener: (status: unknown) => void): void {
     window.__JUCE__.backend.addEventListener('link', listener)
 }
 
-// The bay's slot state: active (the bay's sound), mute or bypass (the sent audio, delayed like the return; bypass sends
+// The bay's slot state: on (the bay's sound), mute or bypass (the sent audio, delayed like the return; bypass sends
 // the bay silence), or off (the sent audio at once: the bay's delay leaves the latency the host is told)
-export function sendBayBypass(value: 'active' | 'mute' | 'bypass' | 'off'): void {
+export function sendBayBypass(value: 'on' | 'mute' | 'bypass' | 'off'): void {
     window.__JUCE__.backend.emitEvent('bayBypass', { value })
 }
 

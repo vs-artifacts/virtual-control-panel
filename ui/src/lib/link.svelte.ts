@@ -6,7 +6,7 @@ const dropoutModes = ['safe', 'silence'] as const
 const autoStates = ['off', 'checking', 'oneBlock', 'fellBack'] as const
 const lagStates = ['notMeasured', 'measuring', 'found', 'noReturn', 'noMatch'] as const
 const probeStates = ['notRun', 'running', 'found', 'noReturn', 'noChange'] as const
-export const slotStates = ['active', 'mute', 'bypass', 'off'] as const
+export const slotStates = ['on', 'mute', 'bypass', 'off'] as const
 const readings = ['none', 'measured', 'unreadable', 'outOfRange', 'noInput', 'held'] as const
 const transportStates = ['unknown', 'playing', 'stopped'] as const
 
@@ -62,7 +62,7 @@ export interface LinkStatus {
     sampleRate: number
     latency: number
     slotState: SlotState
-    // Active, but the bay's sound isn't back yet (since a state was left, or ever): the sent audio plays
+    // On, but the bay's sound isn't back yet (since a state was left, or ever): the sent audio plays
     awaitingBay: boolean
     tailCutReleaseMs: number
     // Samples the output plays behind the engine: round trip + bay latency, or 0 when Off
@@ -159,7 +159,7 @@ export function readLink(raw: unknown): LinkStatus | null {
         outputQuiet: fields.outputQuiet === true,
         sampleRate: count(fields.sampleRate),
         latency: count(fields.latency),
-        slotState: oneOf(slotStates, fields.slotState) ?? 'active',
+        slotState: oneOf(slotStates, fields.slotState) ?? 'on',
         awaitingBay: fields.awaitingBay === true,
         tailCutReleaseMs: count(fields.tailCutReleaseMs),
         delay: count(fields.delay),

@@ -115,8 +115,7 @@ public:
 
     // The sections that can collapse to their bar (the Panel tab's, then the Settings tab's); which are collapsed is saved
     // with the instance
-    static constexpr std::array<const char*, 9> editorSections { "header", "generators", "buses", "settings.general", "settings.window",
-        "settings.slotText", "settings.bays", "settings.slotChanges", "settings.shortcuts" };
+    static constexpr std::array<const char*, 9> editorSections { "header", "generators", "buses", "settings.general", "settings.window", "settings.slotText", "settings.bays", "settings.slotChanges", "settings.shortcuts" };
     static constexpr size_t firstSettingsSection = 3;
     static std::optional<size_t> findEditorSection (const juce::String& name);
     bool isSectionCollapsed (size_t section) const noexcept { return collapsed[section]; }

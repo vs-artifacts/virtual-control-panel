@@ -27,6 +27,7 @@
         setCollapsed,
         settleRange,
         slotChangeFadeSettings,
+        stateFadeSettings,
         swapSize,
         type FadeKey,
         type SettingKey,
@@ -125,6 +126,7 @@
         stoppedShrink: ["bayStoppedShrink", "bayQuietLevelDb", "bayQuietMs"],
         bayFades: fadeSettings.map((fade) => fade.key),
         slotChanges: slotChangeFadeSettings.map((fade) => fade.key),
+        stateFades: stateFadeSettings.map((fade) => fade.key),
         settle: ["bayLatencySettleMs"],
         tailCutRelease: ["bayTailCutReleaseMs"],
     } satisfies Record<string, SettingKey[]>;
@@ -153,7 +155,7 @@
             ...groups.settle,
             ...groups.tailCutRelease,
         ],
-        "settings.slotChanges": groups.slotChanges,
+        "settings.slotChanges": [...groups.slotChanges, ...groups.stateFades],
         "settings.shortcuts": shortcuts.map((shortcut) => shortcut.key),
     };
 
@@ -347,69 +349,72 @@
 </script>
 
 <div class="top">
-<p class="version">{editor.title}</p>
+    <p class="version">{editor.title}</p>
 
-<div class="line" id="reset-all">
-    {#if confirming !== null}
-        {@const kind = confirming}
-        <span>{confirmations[kind].question}</span>
-        <button
-            type="button"
-            id="confirm-reset-all"
-            onclick={() => {
-                resetSettings(kind);
-                confirming = null;
-            }}>{confirmations[kind].button}</button
-        >
-        <button type="button" onclick={() => (confirming = null)}>Cancel</button
-        >
-    {:else}
-        <button
-            type="button"
-            id="reset-all-settings"
-            class="more"
-            use:hinted={"Every setting back to its default: your own where you've set one, else the factory's.\nRight-click: clear user defaults."}
-            onclick={() => (confirming = "defaults")}
-            oncontextmenu={(event) =>
-                offerOnRightClick(
-                    event,
-                    "Clear user defaults",
-                    "Retains current option values.",
-                    "clearUserDefaults",
-                )}>Reset all</button
-        >
-        <button
-            type="button"
-            id="factory-reset-settings"
-            class="more"
-            use:hinted={"Every setting to its factory default; your own defaults are kept.\nRight-click: hard reset to factory defaults."}
-            onclick={() => (confirming = "factory")}
-            oncontextmenu={(event) =>
-                offerOnRightClick(
-                    event,
-                    "Hard reset to factory defaults",
-                    "Clears all settings options, user defaults, and resets values to factory defaults.",
-                    "hard",
-                )}>Factory reset</button
-        >
-    {/if}
-    <span class="buttons expand">
-        <button
-            type="button"
-            id="expand-all-settings"
-            onclick={() => setAllSettingsCollapsed(false)}>Expand all</button
-        >
-        <button
-            type="button"
-            id="collapse-all-settings"
-            onclick={() => setAllSettingsCollapsed(true)}>Collapse all</button
-        >
-    </span>
-</div>
-<p class="note">
-    Right-click any setting to make its value your default, or to reset it;
-    right-click a heading to reset its whole group or section.
-</p>
+    <div class="line" id="reset-all">
+        {#if confirming !== null}
+            {@const kind = confirming}
+            <span>{confirmations[kind].question}</span>
+            <button
+                type="button"
+                id="confirm-reset-all"
+                onclick={() => {
+                    resetSettings(kind);
+                    confirming = null;
+                }}>{confirmations[kind].button}</button
+            >
+            <button type="button" onclick={() => (confirming = null)}
+                >Cancel</button
+            >
+        {:else}
+            <button
+                type="button"
+                id="reset-all-settings"
+                class="more"
+                use:hinted={"Every setting back to its default: your own where you've set one, else the factory's.\nRight-click: clear user defaults."}
+                onclick={() => (confirming = "defaults")}
+                oncontextmenu={(event) =>
+                    offerOnRightClick(
+                        event,
+                        "Clear user defaults",
+                        "Retains current option values.",
+                        "clearUserDefaults",
+                    )}>Reset all</button
+            >
+            <button
+                type="button"
+                id="factory-reset-settings"
+                class="more"
+                use:hinted={"Every setting to its factory default; your own defaults are kept.\nRight-click: hard reset to factory defaults."}
+                onclick={() => (confirming = "factory")}
+                oncontextmenu={(event) =>
+                    offerOnRightClick(
+                        event,
+                        "Hard reset to factory defaults",
+                        "Clears all settings options, user defaults, and resets values to factory defaults.",
+                        "hard",
+                    )}>Factory reset</button
+            >
+        {/if}
+        <span class="buttons expand">
+            <button
+                type="button"
+                id="expand-all-settings"
+                onclick={() => setAllSettingsCollapsed(false)}
+                >Expand all</button
+            >
+            <button
+                type="button"
+                id="collapse-all-settings"
+                onclick={() => setAllSettingsCollapsed(true)}
+                >Collapse all</button
+            >
+        </span>
+    </div>
+    <p class="note">
+        Right-click any setting to make its value your default, or to reset it;
+        right-click a heading to reset its whole group or section.
+    </p>
 </div>
 
 {@render section("settings.general", "General", "", general)}
@@ -458,105 +463,108 @@
 {/snippet}
 
 {#snippet general()}
-<fieldset>
-    <legend
-        class="h2"
-        use:hinted={"Only for new instances: reopening an instance, or its Settings tab, keeps how its sections were left."}
-        oncontextmenu={(event) => openGroupMenu(event, groups.settingsOpen)}
-        >Settings open</legend
-    >
-    {#each settingsOpenChoices as option (option.value)}
-        <div
-            class="option"
-            role="group"
-            oncontextmenu={(event) =>
-                openSettingMenu(event, "settingsOpen", option.value)}
+    <fieldset>
+        <legend
+            class="h2"
+            use:hinted={"Only for new instances: reopening an instance, or its Settings tab, keeps how its sections were left."}
+            oncontextmenu={(event) => openGroupMenu(event, groups.settingsOpen)}
+            >Settings open</legend
         >
-            <input
-                type="radio"
-                name="settingsOpen"
-                aria-label={option.text}
-                checked={editor.settings.settingsOpen === option.value}
-                onchange={() => changeSetting("settingsOpen", option.value)}
-            />
-            <span>{option.text}</span>
-        </div>
-    {/each}
-</fieldset>
+        {#each settingsOpenChoices as option (option.value)}
+            <div
+                class="option"
+                role="group"
+                oncontextmenu={(event) =>
+                    openSettingMenu(event, "settingsOpen", option.value)}
+            >
+                <input
+                    type="radio"
+                    name="settingsOpen"
+                    aria-label={option.text}
+                    checked={editor.settings.settingsOpen === option.value}
+                    onchange={() => changeSetting("settingsOpen", option.value)}
+                />
+                <span>{option.text}</span>
+            </div>
+        {/each}
+    </fieldset>
 
-<div
-    class="option"
-    role="group"
-    use:hinted={"Reopens instantly, uses more memory."}
-    oncontextmenu={(event) =>
-        openSettingMenu(
-            event,
-            "keepWebViewWarm",
-            editor.settings.keepWebViewWarm,
-        )}
->
-    <input
-        type="checkbox"
-        aria-label="Keep web UI warm"
-        checked={editor.settings.keepWebViewWarm}
-        onchange={(event) =>
-            changeSetting("keepWebViewWarm", event.currentTarget.checked)}
-    />
-    <span>Keep web UI warm</span>
-</div>
+    <div
+        class="option"
+        role="group"
+        use:hinted={"Reopens instantly, uses more memory."}
+        oncontextmenu={(event) =>
+            openSettingMenu(
+                event,
+                "keepWebViewWarm",
+                editor.settings.keepWebViewWarm,
+            )}
+    >
+        <input
+            type="checkbox"
+            aria-label="Keep web UI warm"
+            checked={editor.settings.keepWebViewWarm}
+            onchange={(event) =>
+                changeSetting("keepWebViewWarm", event.currentTarget.checked)}
+        />
+        <span>Keep web UI warm</span>
+    </div>
 
-<div
-    class="option"
-    role="group"
-    use:hinted={"FL Studio multiplies a generator's added outputs; this undoes it (x1.283291). We have no control outputs yet: a safety setting for when we do."}
-    oncontextmenu={(event) =>
-        openSettingMenu(
-            event,
-            "flOutputCorrection",
-            editor.settings.flOutputCorrection,
-        )}
->
-    <input
-        type="checkbox"
-        aria-label="Correct FL Studio's gain on our control outputs"
-        checked={editor.settings.flOutputCorrection}
-        onchange={(event) =>
-            changeSetting("flOutputCorrection", event.currentTarget.checked)}
-    />
-    <span>Correct FL Studio's gain on our control outputs (FL only)</span>
-</div>
+    <div
+        class="option"
+        role="group"
+        use:hinted={"FL Studio multiplies a generator's added outputs; this undoes it (x1.283291). We have no control outputs yet: a safety setting for when we do."}
+        oncontextmenu={(event) =>
+            openSettingMenu(
+                event,
+                "flOutputCorrection",
+                editor.settings.flOutputCorrection,
+            )}
+    >
+        <input
+            type="checkbox"
+            aria-label="Correct FL Studio's gain on our control outputs"
+            checked={editor.settings.flOutputCorrection}
+            onchange={(event) =>
+                changeSetting(
+                    "flOutputCorrection",
+                    event.currentTarget.checked,
+                )}
+        />
+        <span>Correct FL Studio's gain on our control outputs (FL only)</span>
+    </div>
 
-{@render doubleClick()}
-{@render hintScrolling()}
+    {@render doubleClick()}
+    {@render hintScrolling()}
 {/snippet}
 
 {#snippet windowSettings()}
-<div
-    class="option"
-    role="group"
-    use:hinted={"Releasing Shift while Alt or Ctrl is held switches Windows' input language unless another key came in between: the panel types one meaningless key."}
-    oncontextmenu={(event) =>
-        openSettingMenu(
-            event,
-            "resizeBlocksLanguageSwitch",
-            editor.settings.resizeBlocksLanguageSwitch,
-        )}
->
-    <input
-        type="checkbox"
-        aria-label="While a window corner is dragged, stop Shift with Alt or Ctrl from switching Windows' input language"
-        checked={editor.settings.resizeBlocksLanguageSwitch}
-        onchange={(event) =>
-            changeSetting(
+    <div
+        class="option"
+        role="group"
+        use:hinted={"Releasing Shift while Alt or Ctrl is held switches Windows' input language unless another key came in between: the panel types one meaningless key."}
+        oncontextmenu={(event) =>
+            openSettingMenu(
+                event,
                 "resizeBlocksLanguageSwitch",
-                event.currentTarget.checked,
+                editor.settings.resizeBlocksLanguageSwitch,
             )}
-    />
-    <span
-        >While a window corner is dragged, stop Shift with Alt or Ctrl from
-        switching Windows' input language (Windows only)</span
     >
-</div>
+        <input
+            type="checkbox"
+            aria-label="While a window corner is dragged, stop Shift with Alt or Ctrl from switching Windows' input language"
+            checked={editor.settings.resizeBlocksLanguageSwitch}
+            onchange={(event) =>
+                changeSetting(
+                    "resizeBlocksLanguageSwitch",
+                    event.currentTarget.checked,
+                )}
+        />
+        <span
+            >While a window corner is dragged, stop Shift with Alt or Ctrl from
+            switching Windows' input language (Windows only)</span
+        >
+    </div>
 
     <fieldset>
         <legend
@@ -828,202 +836,217 @@
 {/snippet}
 
 {#snippet doubleClick()}
-<fieldset>
-    <legend
-        class="h2"
-        use:hinted={"Two clicks within this time (and 6 page pixels) make a double-click, which resets a control to its default."}
-        oncontextmenu={(event) => openGroupMenu(event, groups.doubleClick)}
-        >Double-click on a control</legend
-    >
-    <div
-        class="option"
-        role="group"
-        use:hinted={range(doubleClickRange)}
-        oncontextmenu={(event) =>
-            openSettingMenu(
-                event,
-                "doubleClickMs",
-                typedNumber(
-                    event.currentTarget.querySelector("input"),
-                    "doubleClickMs",
-                ),
-            )}
-    >
-        <input
-            id="double-click-ms"
-            class="number"
-            type="number"
-            aria-label="Milliseconds at most between the clicks"
-            min={doubleClickRange.min}
-            max={doubleClickRange.max}
-            step="1"
-            value={editor.settings.doubleClickMs}
-            onchange={(event) =>
-                changeWhole(event, "doubleClickMs", doubleClickRange)}
-        />
-        <span>ms at most between the clicks</span>
-    </div>
-    <div
-        class="option"
-        role="group"
-        use:hinted={"Not built yet: still resets."}
-        oncontextmenu={(event) =>
-            openSettingMenu(
-                event,
-                "doubleClickSets",
-                editor.settings.doubleClickSets,
-            )}
-    >
-        <input
-            type="checkbox"
-            aria-label="Double-click sets a value instead of resetting to the default"
-            checked={editor.settings.doubleClickSets}
-            onchange={(event) =>
-                changeSetting("doubleClickSets", event.currentTarget.checked)}
-        />
-        <span
-            >Double-click sets a value instead of resetting to the default</span
+    <fieldset>
+        <legend
+            class="h2"
+            use:hinted={"Two clicks within this time (and 6 page pixels) make a double-click, which resets a control to its default."}
+            oncontextmenu={(event) => openGroupMenu(event, groups.doubleClick)}
+            >Double-click on a control</legend
         >
-    </div>
-</fieldset>
+        <div
+            class="option"
+            role="group"
+            use:hinted={range(doubleClickRange)}
+            oncontextmenu={(event) =>
+                openSettingMenu(
+                    event,
+                    "doubleClickMs",
+                    typedNumber(
+                        event.currentTarget.querySelector("input"),
+                        "doubleClickMs",
+                    ),
+                )}
+        >
+            <input
+                id="double-click-ms"
+                class="number"
+                type="number"
+                aria-label="Milliseconds at most between the clicks"
+                min={doubleClickRange.min}
+                max={doubleClickRange.max}
+                step="1"
+                value={editor.settings.doubleClickMs}
+                onchange={(event) =>
+                    changeWhole(event, "doubleClickMs", doubleClickRange)}
+            />
+            <span>ms at most between the clicks</span>
+        </div>
+        <div
+            class="option"
+            role="group"
+            use:hinted={"Not built yet: still resets."}
+            oncontextmenu={(event) =>
+                openSettingMenu(
+                    event,
+                    "doubleClickSets",
+                    editor.settings.doubleClickSets,
+                )}
+        >
+            <input
+                type="checkbox"
+                aria-label="Double-click sets a value instead of resetting to the default"
+                checked={editor.settings.doubleClickSets}
+                onchange={(event) =>
+                    changeSetting(
+                        "doubleClickSets",
+                        event.currentTarget.checked,
+                    )}
+            />
+            <span
+                >Double-click sets a value instead of resetting to the default</span
+            >
+        </div>
+    </fieldset>
 {/snippet}
 
 {#snippet hintScrolling()}
-<fieldset id="hint-scrolling">
-    <legend
-        class="h2"
-        use:hinted={"A hint too long for the pane waits, scrolls, waits at the bottom, then starts again from the top. Alt+wheel scrolls it by hand, which stops that for the hint."}
-        oncontextmenu={(event) => openGroupMenu(event, groups.hintScrolling)}
-        >Hints</legend
-    >
-    <div
-        class="option"
-        role="group"
-        oncontextmenu={(event) =>
-            openSettingMenu(
-                event,
-                "hintAutoScroll",
-                editor.settings.hintAutoScroll,
-            )}
-    >
-        <input
-            type="checkbox"
-            aria-label="Hints scroll automatically"
-            checked={editor.settings.hintAutoScroll}
-            onchange={(event) =>
-                changeSetting("hintAutoScroll", event.currentTarget.checked)}
-        />
-        <span>Hints scroll automatically</span>
-    </div>
-    <div
-        class="option"
-        role="group"
-        use:hinted={`1 s, plus 1 s per 400 page pixels of the window's width (Diagnostics left out), before scrolling and at the bottom: now ${smartHintDelay()} s.`}
-        oncontextmenu={(event) =>
-            openSettingMenu(
-                event,
-                "hintSmartDelay",
-                editor.settings.hintSmartDelay,
-            )}
-    >
-        <input
-            type="checkbox"
-            aria-label="Smart delay"
-            disabled={!editor.settings.hintAutoScroll}
-            checked={editor.settings.hintSmartDelay}
-            onchange={(event) =>
-                changeSetting("hintSmartDelay", event.currentTarget.checked)}
-        />
-        <span>Smart delay</span>
-    </div>
-    <div
-        class="option"
-        role="group"
-        use:hinted={`Seconds before scrolling starts ${range(hintDelayRange)}.`}
-        oncontextmenu={(event) =>
-            openSettingMenu(
-                event,
-                "hintScrollDelaySeconds",
-                typedNumber(
-                    event.currentTarget.querySelector("input"),
+    <fieldset id="hint-scrolling">
+        <legend
+            class="h2"
+            use:hinted={"A hint too long for the pane waits, scrolls, waits at the bottom, then starts again from the top. Alt+wheel scrolls it by hand, which stops that for the hint."}
+            oncontextmenu={(event) =>
+                openGroupMenu(event, groups.hintScrolling)}>Hints</legend
+        >
+        <div
+            class="option"
+            role="group"
+            oncontextmenu={(event) =>
+                openSettingMenu(
+                    event,
+                    "hintAutoScroll",
+                    editor.settings.hintAutoScroll,
+                )}
+        >
+            <input
+                type="checkbox"
+                aria-label="Hints scroll automatically"
+                checked={editor.settings.hintAutoScroll}
+                onchange={(event) =>
+                    changeSetting(
+                        "hintAutoScroll",
+                        event.currentTarget.checked,
+                    )}
+            />
+            <span>Hints scroll automatically</span>
+        </div>
+        <div
+            class="option"
+            role="group"
+            use:hinted={`1 s, plus 1 s per 400 page pixels of the window's width (Diagnostics left out), before scrolling and at the bottom: now ${smartHintDelay()} s.`}
+            oncontextmenu={(event) =>
+                openSettingMenu(
+                    event,
+                    "hintSmartDelay",
+                    editor.settings.hintSmartDelay,
+                )}
+        >
+            <input
+                type="checkbox"
+                aria-label="Smart delay"
+                disabled={!editor.settings.hintAutoScroll}
+                checked={editor.settings.hintSmartDelay}
+                onchange={(event) =>
+                    changeSetting(
+                        "hintSmartDelay",
+                        event.currentTarget.checked,
+                    )}
+            />
+            <span>Smart delay</span>
+        </div>
+        <div
+            class="option"
+            role="group"
+            use:hinted={`Seconds before scrolling starts ${range(hintDelayRange)}.`}
+            oncontextmenu={(event) =>
+                openSettingMenu(
+                    event,
                     "hintScrollDelaySeconds",
-                ),
-            )}
-    >
-        <input
-            id="hint-delay"
-            class="number"
-            type="number"
-            aria-label="Initial delay in seconds"
-            disabled={!editor.settings.hintAutoScroll || smartDelay !== null}
-            min={hintDelayRange.min}
-            max={hintDelayRange.max}
-            step="0.1"
-            value={smartDelay ?? editor.settings.hintScrollDelaySeconds}
-            onchange={(event) =>
-                changeTenths(event, "hintScrollDelaySeconds", hintDelayRange)}
-        />
-        <span>s initial delay</span>
-    </div>
-    <div
-        class="option"
-        role="group"
-        use:hinted={`Lines per second; 0: no scrolling ${range(hintSpeedRange)}.`}
-        oncontextmenu={(event) =>
-            openSettingMenu(
-                event,
-                "hintScrollSpeed",
-                typedNumber(
-                    event.currentTarget.querySelector("input"),
+                    typedNumber(
+                        event.currentTarget.querySelector("input"),
+                        "hintScrollDelaySeconds",
+                    ),
+                )}
+        >
+            <input
+                id="hint-delay"
+                class="number"
+                type="number"
+                aria-label="Initial delay in seconds"
+                disabled={!editor.settings.hintAutoScroll ||
+                    smartDelay !== null}
+                min={hintDelayRange.min}
+                max={hintDelayRange.max}
+                step="0.1"
+                value={smartDelay ?? editor.settings.hintScrollDelaySeconds}
+                onchange={(event) =>
+                    changeTenths(
+                        event,
+                        "hintScrollDelaySeconds",
+                        hintDelayRange,
+                    )}
+            />
+            <span>s initial delay</span>
+        </div>
+        <div
+            class="option"
+            role="group"
+            use:hinted={`Lines per second; 0: no scrolling ${range(hintSpeedRange)}.`}
+            oncontextmenu={(event) =>
+                openSettingMenu(
+                    event,
                     "hintScrollSpeed",
-                ),
-            )}
-    >
-        <input
-            id="hint-speed"
-            class="number"
-            type="number"
-            aria-label="Scroll speed in lines per second"
-            disabled={!editor.settings.hintAutoScroll}
-            min={hintSpeedRange.min}
-            max={hintSpeedRange.max}
-            step="0.1"
-            value={editor.settings.hintScrollSpeed}
-            onchange={(event) =>
-                changeTenths(event, "hintScrollSpeed", hintSpeedRange)}
-        />
-        <span>lines per second</span>
-    </div>
-    <div
-        class="option"
-        role="group"
-        use:hinted={`Seconds at the bottom before jumping back to the top to loop ${range(hintEndRange)}.`}
-        oncontextmenu={(event) =>
-            openSettingMenu(
-                event,
-                "hintScrollEndSeconds",
-                typedNumber(
-                    event.currentTarget.querySelector("input"),
+                    typedNumber(
+                        event.currentTarget.querySelector("input"),
+                        "hintScrollSpeed",
+                    ),
+                )}
+        >
+            <input
+                id="hint-speed"
+                class="number"
+                type="number"
+                aria-label="Scroll speed in lines per second"
+                disabled={!editor.settings.hintAutoScroll}
+                min={hintSpeedRange.min}
+                max={hintSpeedRange.max}
+                step="0.1"
+                value={editor.settings.hintScrollSpeed}
+                onchange={(event) =>
+                    changeTenths(event, "hintScrollSpeed", hintSpeedRange)}
+            />
+            <span>lines per second</span>
+        </div>
+        <div
+            class="option"
+            role="group"
+            use:hinted={`Seconds at the bottom before jumping back to the top to loop ${range(hintEndRange)}.`}
+            oncontextmenu={(event) =>
+                openSettingMenu(
+                    event,
                     "hintScrollEndSeconds",
-                ),
-            )}
-    >
-        <input
-            id="hint-end"
-            class="number"
-            type="number"
-            aria-label="Delay at the bottom in seconds"
-            disabled={!editor.settings.hintAutoScroll || smartDelay !== null}
-            min={hintEndRange.min}
-            max={hintEndRange.max}
-            step="0.1"
-            value={smartDelay ?? editor.settings.hintScrollEndSeconds}
-            onchange={(event) =>
-                changeTenths(event, "hintScrollEndSeconds", hintEndRange)}
-        />
-        <span>s at the bottom</span>
-    </div>
-</fieldset>
+                    typedNumber(
+                        event.currentTarget.querySelector("input"),
+                        "hintScrollEndSeconds",
+                    ),
+                )}
+        >
+            <input
+                id="hint-end"
+                class="number"
+                type="number"
+                aria-label="Delay at the bottom in seconds"
+                disabled={!editor.settings.hintAutoScroll ||
+                    smartDelay !== null}
+                min={hintEndRange.min}
+                max={hintEndRange.max}
+                step="0.1"
+                value={smartDelay ?? editor.settings.hintScrollEndSeconds}
+                onchange={(event) =>
+                    changeTenths(event, "hintScrollEndSeconds", hintEndRange)}
+            />
+            <span>s at the bottom</span>
+        </div>
+    </fieldset>
 {/snippet}
 
 {#snippet bays()}
@@ -1305,6 +1328,44 @@
             </div>
         {/each}
     </fieldset>
+
+    <fieldset id="state-fades">
+        <legend
+            class="h2"
+            use:hinted={`${fadesHint} The same for slots and the bay. A slot's OFF uses the fades above (it changes the graph).`}
+            oncontextmenu={(event) => openGroupMenu(event, groups.stateFades)}
+            >MUTE and BYPASS</legend
+        >
+        {#each stateFadeSettings as fade (fade.key)}
+            <div
+                class="option"
+                role="group"
+                use:hinted={`${sentence(fade.covers)} (0 to ${fade.max})`}
+                oncontextmenu={(event) =>
+                    openSettingMenu(
+                        event,
+                        fade.key,
+                        typedNumber(
+                            event.currentTarget.querySelector("input"),
+                            fade.key,
+                        ),
+                    )}
+            >
+                <input
+                    class="number"
+                    type="number"
+                    aria-label="{fade.label} in milliseconds"
+                    min="0"
+                    max={fade.max}
+                    step="1"
+                    value={editor.settings[fade.key]}
+                    onchange={(event) =>
+                        changeWhole(event, fade.key, { min: 0, max: fade.max })}
+                />
+                <span>{fade.label}</span>
+            </div>
+        {/each}
+    </fieldset>
 {/snippet}
 
 {#snippet bayEnd()}
@@ -1498,9 +1559,15 @@
 
     .size {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         justify-content: space-between;
+        gap: 6px;
         margin-top: 14px;
+    }
+
+    .size button {
+        white-space: nowrap;
     }
 
     .buttons {

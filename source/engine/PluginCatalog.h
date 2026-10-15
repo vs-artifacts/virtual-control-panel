@@ -9,11 +9,15 @@ inline constexpr auto serum2Path = R"(C:\Program Files\Common Files\VST3\Serum2.
 inline constexpr auto sylenth1Path = R"(C:\Program Files\Common Files\VST3\Sylenth1.vst3)";
 inline constexpr auto eqPath = R"(C:\Program Files\Common Files\VST3\Kilohearts\kHs 3-Band EQ.vst3)";
 inline constexpr auto nonlinearFilterPath = R"(C:\Program Files\Common Files\VST3\Kilohearts\kHs Nonlinear Filter.vst3)";
+inline constexpr auto compactorPath = R"(C:\Program Files\Common Files\VST3\Kilohearts\kHs Compactor.vst3)";
+inline constexpr auto reverbPath = R"(C:\Program Files\Common Files\VST3\Kilohearts\kHs Reverb.vst3)";
 #else
 inline constexpr auto serum2Path = "/Library/Audio/Plug-Ins/VST3/Serum2.vst3";
 inline constexpr auto sylenth1Path = "/Library/Audio/Plug-Ins/VST3/Sylenth1.vst3";
 inline constexpr auto eqPath = "/Library/Audio/Plug-Ins/VST3/Kilohearts/kHs 3-Band EQ.vst3";
 inline constexpr auto nonlinearFilterPath = "/Library/Audio/Plug-Ins/VST3/Kilohearts/kHs Nonlinear Filter.vst3";
+inline constexpr auto compactorPath = "/Library/Audio/Plug-Ins/VST3/Kilohearts/kHs Compactor.vst3";
+inline constexpr auto reverbPath = "/Library/Audio/Plug-Ins/VST3/Kilohearts/kHs Reverb.vst3";
 #endif
 
 struct PluginCatalog
@@ -41,6 +45,9 @@ struct PluginCatalog
             { "sylenth1", "Sylenth1", juce::File (sylenth1Path), true, false },
             { "khsEq", "kHs 3-Band EQ", juce::File (eqPath), false, true },
             { "khsNonlinearFilter", "kHs Nonlinear Filter", juce::File (nonlinearFilterPath), false, true },
+            // Test plugins for the slot states: latency (489 samples), and tails
+            { "khsCompactor", "kHs Compactor", juce::File (compactorPath), false, true },
+            { "khsReverb", "kHs Reverb", juce::File (reverbPath), false, true },
         } };
     }
 };

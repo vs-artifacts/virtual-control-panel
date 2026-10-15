@@ -71,8 +71,7 @@ public:
 
     // Settings only the page acts on (pixel text, hint scrolling, how the Settings tab opens, keyboard shortcuts): stored
     // and checked like any other, by key
-    static constexpr std::array pageOnlyKeys { "pixelTextAntialiasing", "fontFallback", "pixelTextSnap", "pixelStepAtPercent", "pixelStepAntialiasedPercent",
-        "hintAutoScroll", "hintSmartDelay", "hintScrollDelaySeconds", "hintScrollSpeed", "hintScrollEndSeconds", "settingsOpen", "shortcutFlipSettings" };
+    static constexpr std::array pageOnlyKeys { "pixelTextAntialiasing", "fontFallback", "pixelTextSnap", "pixelStepAtPercent", "pixelStepAntialiasedPercent", "hintAutoScroll", "hintSmartDelay", "hintScrollDelaySeconds", "hintScrollSpeed", "hintScrollEndSeconds", "settingsOpen", "shortcutFlipSettings" };
     static bool isPageOnly (const juce::String& key);
     juce::var getPageOnly (const juce::String& key) const;
     bool setPageOnly (const juce::String& key, const juce::var& value); // false if it doesn't fit

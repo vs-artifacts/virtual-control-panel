@@ -597,10 +597,10 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
     // between dry and the bay's sound takes the length of the state entered, or of the one left.
     if (state != lastSlotState)
     {
-        mixFade = fadeFor (state != SlotState::active ? state : lastSlotState);
+        mixFade = fadeFor (state != SlotState::on ? state : lastSlotState);
         shownFade.store (mixFade, std::memory_order_relaxed);
 
-        if (state == SlotState::active)
+        if (state == SlotState::on)
             awaiting = true;
     }
 
@@ -830,11 +830,11 @@ void BayLink::process (juce::AudioBuffer<float>& buffer)
     const auto holdFade = settling || transmitterHolding || (returned && stampedByReceiver) ? Fade::bayLatencyOut : Fade::dropoutOut;
 
     // The bay's sound is back once it plays positions sent after its latest faded or silent stretch
-    if (state == SlotState::active && playable && (!hadSilence || returnStart >= silentEnd))
+    if (state == SlotState::on && playable && (!hadSilence || returnStart >= silentEnd))
         awaiting = false;
 
     awaitingBay.store (awaiting, std::memory_order_relaxed);
-    const auto dry = state != SlotState::active || awaiting;
+    const auto dry = state != SlotState::on || awaiting;
 
     if (muted && outputGain <= 0.0f)
     {
@@ -1171,7 +1171,7 @@ BayLink::Fade BayLink::fadeFor (SlotState state) noexcept
             return Fade::bypass;
         case SlotState::off:
             return Fade::off;
-        case SlotState::active:
+        case SlotState::on:
             break;
     }
 
@@ -1401,7 +1401,7 @@ BayLink::Status BayLink::getStatus()
     status.stoppedShrink = stoppedShrink.load();
     status.sampleRate = sampleRate;
     status.slotState = slotState.load();
-    status.awaitingBay = status.slotState == SlotState::active && awaitingBay.load();
+    status.awaitingBay = status.slotState == SlotState::on && awaitingBay.load();
     status.tailCutReleaseMs = tailCutReleaseMs.load();
     status.delay = getDelaySamples();
     status.bayLatency = bayLatency.load();
@@ -1515,7 +1515,7 @@ void BayLink::updateEventLog()
         loggedReading = now;
     }
 
-    if (const auto now = slotState.load() == SlotState::active && awaitingBay.load(); loggedAwaiting != now)
+    if (const auto now = slotState.load() == SlotState::on && awaitingBay.load(); loggedAwaiting != now)
     {
         logEvent (now ? "Waiting for the bay's sound: the sent audio plays" : "The bay's sound plays");
         loggedAwaiting = now;
@@ -1710,28 +1710,12 @@ const char* BayLink::toName (AutoState value) noexcept
 
 const char* BayLink::toName (SlotState value) noexcept
 {
-    switch (value)
-    {
-        case SlotState::mute:
-            return "mute";
-        case SlotState::bypass:
-            return "bypass";
-        case SlotState::off:
-            return "off";
-        case SlotState::active:
-            break;
-    }
-
-    return "active";
+    return ::toName (value);
 }
 
 std::optional<BayLink::SlotState> BayLink::slotStateFromName (const juce::String& name)
 {
-    for (const auto state : { SlotState::active, SlotState::mute, SlotState::bypass, SlotState::off })
-        if (name == toName (state))
-            return state;
-
-    return std::nullopt;
+    return ::slotStateFromName (name);
 }
 
 const char* BayLink::toName (Reading value) noexcept

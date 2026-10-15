@@ -988,7 +988,7 @@ TEST_CASE ("Mute crossfades, and a return coming back after a dropout fades in",
         CHECK (patcher.countWrong (switchedAt + fade) == 0); // then exactly the sent audio
 
         switchedAt = patcher.played;
-        patcher.panel->setSlotState (Slot::active);
+        patcher.panel->setSlotState (Slot::on);
         patcher.run (4, Order::random);
         CHECK (countOffRamp (switchedAt, 0.0f, 1.0f) == 0);
 
@@ -1474,7 +1474,7 @@ TEST_CASE ("Slot states: Off plays the engine's sound at once; Bypass and Off se
         CHECK (juce::exactlyEqual (patcher.tailCut, 1.0f));
         CHECK (countNot (dropped + jumpFade, 0, 1.0f) == 0);
 
-        patcher.panel->setSlotState (Slot::active);
+        patcher.panel->setSlotState (Slot::on);
         CHECK (patcher.panel->getDelaySamples() == patcher.roundTrip);
         const auto back = patcher.played;
         patcher.run (30, Order::random);
@@ -1503,7 +1503,7 @@ TEST_CASE ("Slot states: Off plays the engine's sound at once; Bypass and Off se
 
         // Back to Active: exactly the sent audio until the return passes the silence, the release and the send's fade-in,
         // then a crossfade into the bay's sound
-        patcher.panel->setSlotState (Slot::active);
+        patcher.panel->setSlotState (Slot::on);
         const auto back = patcher.played;
         patcher.run (40, Order::random);
         CHECK (juce::exactlyEqual (patcher.tailCut, 0.0f));
@@ -1530,7 +1530,7 @@ TEST_CASE ("Slot states: Off plays the engine's sound at once; Bypass and Off se
         CHECK (juce::exactlyEqual (patcher.tailCut, 0.0f));
         CHECK (countNot (muted + jumpFade, patcher.roundTrip, 1.0f) == 0);
 
-        patcher.panel->setSlotState (Slot::active);
+        patcher.panel->setSlotState (Slot::on);
         patcher.run (10, Order::random);
         CHECK (countNot (patcher.played - 5 * rigBlock, patcher.roundTrip, 0.5f) == 0);
     }
@@ -1541,7 +1541,7 @@ TEST_CASE ("Slot states: Off plays the engine's sound at once; Bypass and Off se
         patcher.run (10, Order::random);
         patcher.transmitter.reset();
         patcher.maintain();
-        patcher.panel->setSlotState (Slot::active);
+        patcher.panel->setSlotState (Slot::on);
         const auto back = patcher.played;
         patcher.run (30, Order::random);
         patcher.maintain();
@@ -1652,7 +1652,7 @@ TEST_CASE ("Bypass fades the bay's send, cuts its tails only once it's silent, a
     const auto playedFrom = patcher.played;
     patcher.panel->setSlotState (Slot::bypass);
     patcher.run (10, Order::panelFirst);
-    patcher.panel->setSlotState (Slot::active);
+    patcher.panel->setSlotState (Slot::on);
     patcher.run (20, Order::panelFirst);
 
     // No step beyond the fade's own; the tail cut only while the bay gets silence
@@ -2355,7 +2355,7 @@ TEST_CASE ("Each fade has its own length: Mute, Bypass, a held-back bay latency 
         CHECK (patcher.countWrong (switchedAt + 10 * samplesPerMs) == 0);
         CHECK (patcher.countWrong (switchedAt + 5 * samplesPerMs) > 0);
 
-        patcher.panel->setSlotState (Slot::active);
+        patcher.panel->setSlotState (Slot::on);
         patcher.run (20, Order::panelFirst);
 
         switchedAt = patcher.played;
@@ -2495,7 +2495,7 @@ TEST_CASE ("The panel tells the host its delay as latency, and keeps its slot st
         processor.getBayLink().setSlotState (Slot::off);
         processor.applyLinkSettings();
         CHECK (processor.getLatencySamples() == engineLatency);
-        processor.getBayLink().setSlotState (Slot::active);
+        processor.getBayLink().setSlotState (Slot::on);
         processor.applyLinkSettings();
         CHECK (processor.getLatencySamples() == engineLatency + rigBlock);
 
@@ -2515,7 +2515,7 @@ TEST_CASE ("The panel tells the host its delay as latency, and keeps its slot st
         processor.getBayLink().getControl (15).setValue (0.1f);
         juce::MemoryBlock saved;
         processor.getStateInformation (saved);
-        processor.getBayLink().setSlotState (Slot::active);
+        processor.getBayLink().setSlotState (Slot::on);
         processor.getBayLink().getControl (2).setValue (0.0f);
         processor.getBayLink().getControl (15).setValue (0.0f);
         processor.setStateInformation (saved.getData(), static_cast<int> (saved.getSize()));
@@ -2541,7 +2541,7 @@ TEST_CASE ("The panel tells the host its delay as latency, and keeps its slot st
         CHECK (load (1, "bypass") == Slot::bypass);
         CHECK (load (0, "mute") == Slot::bypass);
         CHECK (load (2, "mute") == Slot::bypass);
-        CHECK (load (1, "sideways") == Slot::active);
+        CHECK (load (1, "sideways") == Slot::on);
 
         processor.releaseResources();
     }

@@ -1,7 +1,9 @@
 import factoryDefaults from '../../../source/SettingsDefaults.json'
-import { fetchEditorState, isResetKind, onProcessing, onSettings, sendAddBus, sendAddSlot, sendCollapse, sendDiagnostics, sendGeneratorBus, sendMoveSlot, sendMutePlugin, sendOpenPlugin, sendRemoveBus, sendRemoveSlot, sendResetSettings, sendResetSize, sendScroll, sendSetting, sendSettingDefault, sendSwapSize, sendTab, type ResetKind } from './bridge'
+import { fetchEditorState, isResetKind, onProcessing, onSettings, sendAddBus, sendAddSlot, sendCollapse, sendDiagnostics, sendGeneratorBus, sendMoveSlot, sendOpenPlugin, sendRemoveBus, sendRemoveSlot, sendResetSettings, sendResetSize, sendScroll, sendSetting, sendSettingDefault, sendSlotState, sendSwapSize, sendTab, type ResetKind, type SlotStateName } from './bridge'
 import { link, listenForLink, readLink } from './link.svelte'
-import { asRecord } from './read'
+import { asRecord, oneOf } from './read'
+
+const slotStateNames = ['on', 'mute', 'bypass', 'off'] as const
 
 export const tabNames = ['Panel', 'Settings'] as const
 const settingsTab = tabNames.indexOf('Settings')
@@ -56,8 +58,8 @@ export interface Settings {
     bayRoundTripFadeMs: number
     bayLatencyFadeOutMs: number
     bayLatencyFadeInMs: number
-    bayMuteFadeMs: number
-    bayBypassFadeMs: number
+    muteFadeMs: number
+    bypassFadeMs: number
     bayOffFadeMs: number
     bayDropoutFadeOutMs: number
     bayDropoutFadeInMs: number
@@ -117,8 +119,6 @@ export const fadeSettings = [
     { key: 'bayRoundTripFadeMs', max: rangeOf('bayRoundTripFadeMs').max, label: 'Round trip change', covers: 'the timing jump when the round trip changes (tempo, Automatic, Settings)' },
     { key: 'bayLatencyFadeOutMs', max: rangeOf('bayLatencyFadeOutMs').max, label: 'Bay latency change: fade out', covers: "into the bay's sound held back for a latency change (e.g. linear phase)" },
     { key: 'bayLatencyFadeInMs', max: rangeOf('bayLatencyFadeInMs').max, label: 'Bay latency change: fade in', covers: "the bay's sound coming back after a latency change, and the timing jump to the new latency" },
-    { key: 'bayMuteFadeMs', max: rangeOf('bayMuteFadeMs').max, label: 'Mute', covers: "between the dry sound and the bay's, entering and leaving Mute" },
-    { key: 'bayBypassFadeMs', max: rangeOf('bayBypassFadeMs').max, label: 'Bypass', covers: "between the dry sound and the bay's, and the bay's send, entering and leaving Bypass" },
     { key: 'bayOffFadeMs', max: rangeOf('bayOffFadeMs').max, label: 'Off', covers: "the timing jump, the bay's send and the fade back in, entering and leaving Off" },
     { key: 'bayDropoutFadeOutMs', max: rangeOf('bayDropoutFadeOutMs').max, label: 'Dropouts: fade out', covers: 'into a missing return' },
     { key: 'bayDropoutFadeInMs', max: rangeOf('bayDropoutFadeInMs').max, label: 'Dropouts: fade in', covers: "the return coming back after a dropout, and into the bay's first sound" },
@@ -130,7 +130,13 @@ export const slotChangeFadeSettings = [
     { key: 'slotChangeFadeInMs', max: rangeOf('slotChangeFadeInMs').max, label: 'Fade in', covers: 'the panel\'s sound, once the change is made' },
 ] as const
 
-export type FadeKey = (typeof fadeSettings)[number]['key'] | (typeof slotChangeFadeSettings)[number]['key']
+// MUTE and BYPASS, the same for slots and bays (whole milliseconds, 0 is off)
+export const stateFadeSettings = [
+    { key: 'muteFadeMs', max: rangeOf('muteFadeMs').max, label: 'MUTE', covers: "between the dry sound and the plugin's (or the bay's), entering and leaving MUTE" },
+    { key: 'bypassFadeMs', max: rangeOf('bypassFadeMs').max, label: 'BYPASS', covers: "between the dry sound and the plugin's (or the bay's, and the bay's send), entering and leaving BYPASS" },
+] as const
+
+export type FadeKey = (typeof fadeSettings)[number]['key'] | (typeof slotChangeFadeSettings)[number]['key'] | (typeof stateFadeSettings)[number]['key']
 
 // How long a new bay latency must hold before it's used: whole milliseconds
 export const settleRange = rangeOf('bayLatencySettleMs')
@@ -209,8 +215,13 @@ export interface SlotInfo {
     name: string
     status: string
     canOpen: boolean
-    canMute: boolean
-    muted: boolean
+    // A plugin's states (see SlotState in the plugin); an empty slot has none
+    hasStates: boolean
+    state: SlotStateName
+    mix: number
+    endsPath: boolean
+    // An earlier slot's end of the signal path cuts this one off
+    cutOff: boolean
 }
 
 export interface GeneratorInfo extends SlotInfo {
@@ -288,7 +299,21 @@ function readSlot(raw: unknown): SlotInfo | null {
 
     if (id === null || label === null || plugin === null || name === null || status === null) return null
 
-    return { id, label, plugin, name, status, canOpen: fields.canOpen === true, canMute: fields.canMute === true, muted: fields.muted === true }
+    const mix = typeof fields.mix === 'number' && Number.isFinite(fields.mix) ? Math.min(1, Math.max(0, fields.mix)) : 1
+
+    return {
+        id,
+        label,
+        plugin,
+        name,
+        status,
+        canOpen: fields.canOpen === true,
+        hasStates: fields.hasStates === true,
+        state: oneOf(slotStateNames, fields.state) ?? 'on',
+        mix,
+        endsPath: fields.endsPath === true,
+        cutOff: fields.cutOff === true,
+    }
 }
 
 function readBus(raw: unknown): BusInfo | null {
@@ -487,14 +512,36 @@ function findSlot(id: number): SlotInfo | undefined {
     return [...structure.generators, ...structure.buses.flatMap((bus) => bus.slots), ...structure.master.slots].find((slot) => slot.id === id)
 }
 
-export function mutePlugin(slot: number, muted: boolean): void {
+// A slot's state: the selected one again goes back to ON. Off (and back) rewires the plugin's graph, which then sends the
+// structure again.
+export function setSlotState(slot: number, state: SlotStateName): void {
     const plugin = findSlot(slot)
 
-    if (plugin === undefined || !plugin.canMute) return
+    if (plugin === undefined || !plugin.hasStates) return
 
-    plugin.muted = muted
+    plugin.state = state
 
-    if (connected) sendMutePlugin(slot, muted)
+    if (connected) sendSlotState(slot, { state })
+}
+
+export function setSlotMix(slot: number, mix: number): void {
+    const plugin = findSlot(slot)
+
+    if (plugin === undefined || !plugin.hasStates || !Number.isFinite(mix)) return
+
+    plugin.mix = Math.min(1, Math.max(0, mix))
+
+    if (connected) sendSlotState(slot, { mix: plugin.mix })
+}
+
+export function setEndsPath(slot: number, endsPath: boolean): void {
+    const plugin = findSlot(slot)
+
+    if (plugin === undefined || !plugin.hasStates) return
+
+    plugin.endsPath = endsPath
+
+    if (connected) sendSlotState(slot, { endsPath })
 }
 
 // Structure changes: the plugin answers each with the new structure (see onStructure)
