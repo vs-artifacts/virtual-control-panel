@@ -771,3 +771,68 @@ From the user's look at the second build: pixel text perfect at 100%; just above
 - **Page:** the slot header's two 20 px rows (label, name, × / M, B, OFF in p3 and a short MIX range); `slotState` messages `{ slot, state?, mix?, endsPath? }`, checked in C++; the structure carries `hasStates`, `state`, `mix`, `endsPath`, `cutOff`. Cut-off slots are greyed with a note.
 - **Plugin list:** kHs Compactor (`khsCompactor`, 489 samples of latency) and kHs Reverb (`khsReverb`).
 - **Tests (95 test cases, Debug and Release):** chords, the settings change message, Settings sections for new instances, settings from another instance and shortcuts on the page (warning, confirm, cancel), slot buttons and MIX on the page, a generator's MUTE and BYPASS, latency with BYPASS, OFF and the end of the signal path (Compactor).
+
+### Unit states: terms (user, 2026-11-19)
+The user's definitions; use exactly these words in code, UI, hints and docs. A **unit** is a generator or a slot with a plugin (empty slots, b.0 and b.X pass their input on and have no states).
+- **Computed** (the unit's box is in the graph; its latency counts):
+  - **fed and processed:** ON, MUTE or BYPASS, with input.
+  - **unfed and processed:** ON, MUTE or BYPASS, without input (and "conserve" off). An ON unit without input is treated as **mute-type** or **bypass-type** per a setting.
+  - Computed and MUTE or BYPASS: **silenced**. Computed and unfed: **on standby** (mute-type or bypass-type standby), and silenced too if its own state silences it.
+- **Stopped** (out of the graph, not run, its latency gone, like OFF):
+  - **disabled:** fed and not processed: OFF, or every path into it is ended by an "end signal path" upstream.
+  - **disconnected:** unfed and not processed: OFF without input; or ON, MUTE or BYPASS without input while the "conserve" setting is on.
+- **Unrouted:** a unit without a set target (for now only a generator feeding no bus): no effect yet; routing targets get more complex later.
+- **The user's own state comes first when a unit resumes.**
+
+The agent's reading of the gaps (2026-11-19, stated to the user; overrule here if wrong):
+- **"Fed" is structural:** a routing path from at least one generator reaches the unit (generator → its buses' slots in order → b.X → the parent's b.X or X.0 → the master's slots). A parent bus's own slots aren't fed by its sub-buses (those join at b.X). Whether the path carries sound doesn't matter: a MUTE or BYPASS generator still feeds; so does an OFF generator **without** "end signal path" (only the end option cuts a path, as with slots). This is why "disabled" can be fed.
+- **Generators** have MIDI input and count as fed; they're computed unless OFF (disabled).
+- **"Processed" means the unit's box,** not necessarily its plugin: the plugin runs for ON, MUTE and mute-type standby; not for BYPASS or bypass-type standby (reset, as BYPASS does); never while stopped.
+- **The standby type only matters while "conserve" is off** (with it on, unfed units are disconnected); it only applies to ON units (MUTE and BYPASS keep their own mechanics).
+- **Disabled and disconnected work the same** (out of the graph, plugin reset once idle, so a unit resumes clean); they differ in their note on the page.
+- **Mute-type vs bypass-type and the graph:** both are computed, so both stay connected and keep their latency (an unfed Compactor on standby still delays the panel by 489 samples). Only stopped units leave the graph. This answers the earlier question "should they stay connected".
+
+### Next build: decided with the user (2026-11-19)
+From the user's FL check of part A round 3 and part B. Built in a fresh session from these notes. Screenshots: `C:\dev\auxiliary materials\testing screenshots\` (1–8, 2026-11-19); cursors: `C:\dev\auxiliary materials\cursor--*.svg`.
+
+**Working agreement:** never edit project files through the terminal (added to `CLAUDE.md`).
+
+**Settings and instances**
+- **Settings sync between programs** (standalone apps are separate programs): save about 50 ms after a change (one write per group reset; the remembered size still at the end of a drag), under a cross-program lock; each program checks the file's modified time about twice a second and reloads when another program changed it (reload before writing too, so a newer change is never overwritten). Size cap before parsing. Negligible CPU; no new attack surface (same user account; values checked as always).
+- **Flashing values after resets:** each change from the page carries a sequence number; C++ includes the last one it handled in its `settings` messages; the page ignores messages older than its own latest change. The extra state fetch after resets goes.
+- **"Settings open":** every standalone launch (and every new standalone window) counts as a new instance.
+
+**Routing (see "Unit states: terms")**
+- **End signal path on generators:** a bus is cut off (its units disabled) when at least one generator feeds it and every generator feeding it is OFF with "end signal path". A bus no generator feeds is unaffected by this rule.
+- **New "Processing" section:** **"Conserve: stop unfed units"** (on by default): unfed units become disconnected. **"Standby"** (mute-type or bypass-type; default: the agent proposes bypass-type, user to confirm in the check): what an ON unit does while unfed and computed.
+- **Generators can route into BUS X** (a "BUS X" chip; `Structure::setGeneratorBus` and the saved-state check accept the master).
+- Stopped units show a note ("Disabled: …", "Disconnected: no input"); their own buttons stay usable.
+
+**UI**
+- **MORE cursor** (`cursor--context-menu`): controls with a non-obvious context menu (Reset all, Factory reset, slot OFF always); not ordinary settings. **`cursor--context-menu-active-item`** while a hidden option is on (OFF with end signal path). **`cursor--base`** is the default cursor; **`cursor--drag`** replaces the grabbing hand. Hotspots: (1, 1) for base and both context-menu cursors, (16, 16) for drag. System I-beam and resize arrows stay. Embedded with the page (Ui.cmake, UiFiles.cpp, the security policy's image sources). New General setting **"Use system cursors"** (off). A window can only set the cursor while the pointer is over it (or during its own drag), so "base even outside the window" isn't possible.
+- **Shortcut box:** the instructions hint on the box and ">"; live display of keys while pressed (modifiers too, e.g. "Ctrl+Shift+…"). Focus as for number fields: while listening, the same focus ring as a focused field (no separate orange border); Enter applies; Esc cancels (focus leaves the box if listening began with the mouse, stays if with the keyboard); Tab or Shift+Tab cancels and moves on. So plain Esc, Backspace, Delete, Enter and Tab can't be assigned.
+- **Settings section bars stack** like the Panel's (siblings in one scroll area, each pinned at its index × 30 px).
+- **Double-click hints follow "Double-click sets a value"** (MIX, parameter sliders, the Double-click heading): "set a value (not built yet; resets for now)". MIX uses our double-click detection (`doubleClickMs`), not the system's.
+- **Scrollbars never shift content:** our own scrollbar styles; vertical areas reserve the scrollbar's room (`scrollbar-gutter: stable`); sideways rows keep a (transparent) track; the reserved room is the scaled size, an unscaled scrollbar is drawn thinner inside it (more room below 100%). Areas: Panel, generator and bus rows, Settings, Diagnostics, hint pane, menus.
+- **New Window setting "Scale scrollbars and corner grips with the window"** (on), for both renderings (check in WebView2 that the scrollbar styles follow Sharp's zoom).
+- **Window size → scale:** the layout area gets a whole-pixel page size from its width and height shares; the scale is the rounded window width (without Diagnostics) divided by it, so one window size always gives one scale (portrait, swapped and Shift-resized alike). No magnet at 100% (Ctrl+drag steps exist; the resize interface is revisited soon).
+
+**Pixel text** (the mask stays as it is: no change without the user's yes)
+- **Findings from the screenshots:**
+  - "dB" mangled at every scale: m5x7 lacks U+2009, U+202F (thin spaces), U+2026 (…) and U+2212 (−); a missing character comes from a fallback font with fractional widths, pushing everything after it off the pixel grid (vertical strokes split and drop). "Choose plugin…" and cut-off names' "…" too. Tiny5 lacks the thin spaces (has … and −).
+  - Smooth below 100%: all pixel text mangled. Hypothesis: Chromium keeps the page image at 100% and shrinks it instead of redrawing it smaller, resampling thresholded text.
+  - Sharp, missing first column (bay "Control 1" at 100.25% and 113%): the "…" box's clip edge is rounded to a whole pixel before our nudge moves the box, so the nudge carries the clip past the text's first column when the box sat more than half a pixel off.
+  - Same window size, shifted contents (7, 8): the scale is continuous while the window size is rounded, so one size comes from slightly different scales.
+  - Already-aligned text pushed almost a pixel: snapping's 0.01 px tolerance is below layout's 1/64 px steps.
+- **Fixes:** plugin text shown in pixel fonts gets clean equivalents (special spaces → space, − → -, … → ...) and "?" for any other character the font lacks (a coverage list generated from the font files at build time); clipping boxes stay put and only the text inside is nudged, with 1 px spare room on the right; snapping tolerance 0.1 px (within it, move back left); in Smooth below 100%, once resizing settles, draw directly instead of stretching the page image, **only while pixel fonts are in use** (the Barlow fallback keeps today's default rendering, respecting Smooth/Sharp); the window size → scale fix above.
+- **Rendering rules:**
+  - **Sharp:** never anti-aliased; 1× below 100%.
+  - **Smooth: "Smart anti-aliasing"** (on by default; in Slot text, mirrored under Resizing > Smooth): anti-aliased steps, with the threshold at whole multiples (1×, 2×) and anti-aliasing at fractional ones; it disables "Anti-alias pixel text".
+  - **Smooth below 100%:** p2 anti-aliased at 6/7 (capitals 6 px) from 70% to just under 100%, at 5/7 (5 px) below 70%; **p3 (Tiny5) stays at 1×** (6/7 looked like anti-aliased 100% anyway; 5/7 was illegible).
+  - **100% is always exactly 1×** (a test).
+  - Defaults: **60%** past each step, **50%** anti-aliased step; "Snap pixel text" stays, on (behaviour on high-density displays unknown).
+  - New hints for the two percentages (e.g. "50 gives 1×, 1.5×, 2×, 2.5× screen pixels per font pixel; 25 gives 1×, 1.25×, 1.5×…; 100: whole sizes only"; label "Anti-aliased size step (% of a screen pixel)").
+- **Temporary Diagnostics line "Pixel text":** elements snapped, the largest leftover offset in screen pixels, the last pass's time, a "Re-snap" button (until the user drops it).
+- **Document the pipeline** in `docs/style/pixel-text.md` once built (the user's request: every setting, the mask, both percentages, all metrics), and list it in `CLAUDE.md`.
+
+**Then:** the user's FL check (write it in `fl-checks.md`), with screenshots of "dB", the bay and sub-100% Smooth.

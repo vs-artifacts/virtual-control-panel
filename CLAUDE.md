@@ -13,6 +13,8 @@ The template provides the build system, CI/CD, and project structure. The plugin
 ## Working Agreement (read first)
 
 - **Never make code or file changes without explicit confirmation from the user.** For discussion questions, answer and propose a plan (files touched, approach, rough size), then wait for a go-ahead.
+- **Never edit, create or rewrite project files through the terminal** (Set-Content, Out-File, `-replace` pipelines, redirection, scripts that write files), not even a one-line fix: only the editor's edit tools. If an edit fails or shows stale content, re-read the file and use the edit tools again. Temporary scripts may only read data, and live outside the workspace.
+- **Use the user's terms for unit states** ("Unit states: terms" in `docs/decisions.md`): computed (fed or unfed), silenced, on standby, stopped (disabled or disconnected), unrouted. Don't coin new ones.
 - **Ask clarifying questions whenever anything is ambiguous.** A cheap extra turn beats a wrong large implementation.
 - Work in small vertical slices. Each slice ends with: warning-free build, passing tests, and a visual check (see Visual Verification).
 - One chat session per feature. Keep this file and `docs/` current so a fresh session can pick up without the chat history: record decisions in `docs/decisions.md`, keep the index below accurate, and at the end of every session rewrite `docs/current.md` (status, next step, which `decisions.md` sections to read for it).
@@ -52,6 +54,7 @@ Read only the files relevant to the task at hand. At the start of every session:
 - `docs/fl-checks.md` - The user's FL Studio checklists: the latest slice's and earlier ones for regression runs. Read only when preparing or running a check.
 - `docs/architecture.md` - *(not yet written)* Signal flow, modules, parameter table (ID, range, default, visual mapping).
 - `docs/style/glass.md` - *(not yet written)* Glass material system: layering, blur modes, blend modes, light scatter model.
+- `docs/style/pixel-text.md` - *(to be written with the next build)* The pixel-font pipeline: every setting, the mask, the two percentages, all metrics.
 - `docs/style/tokens.md` - *(not yet written)* Named visual constants; may be superseded by the live-reloading JSON token file.
 - `docs/components/<name>.md` - *(not yet written)* One file per UI component: geometry source, states, value-to-visual behaviour.
 
